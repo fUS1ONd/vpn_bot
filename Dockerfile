@@ -1,25 +1,37 @@
-FROM python:3.12-slim
+# Build stage
+FROM golang:1.25-alpine AS builder
+
+# Install build dependencies (gcc for CGO/sqlite3)
+RUN apk add --no-cache gcc musl-dev
+
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN CGO_ENABLED=1 GOOS=linux go build -a -ldflags '-linkmode external -extldflags "-static"' -o vpn-bot ./cmd/bot
+
+# Runtime stage
+FROM alpine:latest
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+# Install ca-certificates for HTTPS requests
+RUN apk --no-cache add ca-certificates
 
-# Copy requirements first for better caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy binary from builder
+COPY --from=builder /build/vpn-bot /app/vpn-bot
 
-# Copy application files
-COPY bot.py .
-
-# Create directory for database
+# Create data directory
 RUN mkdir -p /app/data
 
 # Expose subscription port
 EXPOSE 8000
 
-# Run bot
-CMD ["python", "-u", "bot.py"]
+# Run the bot
+CMD ["/app/vpn-bot"]
