@@ -218,3 +218,70 @@ func (c *Client) GetClientTraffic(inboundID int, email string) (int64, error) {
 	slog.Warn("Inbound not found", "id", inboundID)
 	return 0, nil
 }
+
+// ClientInfo represents client information from the panel
+type ClientInfo struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+}
+
+// GetAllClients retrieves all clients from a specific inbound
+func (c *Client) GetAllClients(inboundID int) ([]ClientInfo, error) {
+	apiURL := fmt.Sprintf("%s%s/panel/api/inbounds/list", c.baseURL, c.webPath)
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create list request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var result struct {
+		Success bool `json:"success"`
+		Obj     []struct {
+			ID       int    `json:"id"`
+			Settings string `json:"settings"`
+		} `json:"obj"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if !result.Success {
+		return nil, fmt.Errorf("API returned failure")
+	}
+
+	// Find the target inbound and parse settings
+	for _, inbound := range result.Obj {
+		if inbound.ID == inboundID {
+			var settings struct {
+				Clients []ClientInfo `json:"clients"`
+			}
+			if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
+				return nil, fmt.Errorf("failed to parse settings: %w", err)
+			}
+			return settings.Clients, nil
+		}
+	}
+
+	return nil, fmt.Errorf("inbound not found")
+}

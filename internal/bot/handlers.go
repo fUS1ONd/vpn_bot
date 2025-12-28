@@ -44,6 +44,7 @@ func New(token string, db *database.DB, clientA, clientB *threexui.Client, cfg *
 	// Register handlers
 	b.Handle("/start", bot.handleStart)
 	b.Handle("/create", bot.handleCreate)
+	b.Handle("/list", bot.handleList)
 
 	return bot, nil
 }
@@ -61,7 +62,14 @@ func (b *Bot) handleStart(c tele.Context) error {
 		return nil
 	}
 
-	return c.Send("🚀 Бот + Подписка активны.\n/create <name>")
+	helpMsg := "🚀 <b>Бот + Подписка активны</b>\n\n"
+	helpMsg += "<b>Команды:</b>\n"
+	helpMsg += "/create &lt;name&gt; - Создать нового клиента\n"
+	helpMsg += "/list - Показать всех клиентов"
+
+	return c.Send(helpMsg, &tele.SendOptions{
+		ParseMode: tele.ModeHTML,
+	})
 }
 
 // handleCreate handles the /create command
@@ -143,6 +151,89 @@ func (b *Bot) handleCreate(c tele.Context) error {
 		ParseMode: tele.ModeHTML,
 	})
 	return editErr
+}
+
+// handleList handles the /list command
+func (b *Bot) handleList(c tele.Context) error {
+	// Check if user is admin
+	if c.Sender().ID != b.config.AdminID {
+		return nil
+	}
+
+	// First, sync clients from panel
+	if err := b.syncClients(); err != nil {
+		slog.Error("Failed to sync clients", "error", err)
+		// Continue anyway to show what's in DB
+	}
+
+	// Get all users from database
+	users, err := b.db.GetAllUsers()
+	if err != nil {
+		slog.Error("Failed to get users from database", "error", err)
+		return c.Send("❌ Ошибка получения списка клиентов")
+	}
+
+	if len(users) == 0 {
+		return c.Send("📋 Список клиентов пуст")
+	}
+
+	// Build message
+	msg := fmt.Sprintf("📋 <b>Всего клиентов: %d</b>\n\n", len(users))
+	for i, user := range users {
+		// Generate subscription link
+		myIP := extractIP(b.config.ServerA.BaseURL)
+		subLink := fmt.Sprintf("http://%s:%d/sub/%s", myIP, b.config.SubPort, user.UUID)
+
+		msg += fmt.Sprintf("<b>%d. %s</b>\n", i+1, user.Email)
+		msg += fmt.Sprintf("└ UUID: <code>%s</code>\n", user.UUID)
+		msg += fmt.Sprintf("└ Подписка: <code>%s</code>\n\n", subLink)
+	}
+
+	return c.Send(msg, &tele.SendOptions{
+		ParseMode: tele.ModeHTML,
+	})
+}
+
+// syncClients synchronizes clients from 3X-UI panel to database
+func (b *Bot) syncClients() error {
+	// Login to Server A
+	if err := b.clientA.Login(); err != nil {
+		return fmt.Errorf("failed to login to Server A: %w", err)
+	}
+
+	// Get clients from Server A
+	clientsA, err := b.clientA.GetAllClients(b.config.ServerA.InboundID)
+	if err != nil {
+		return fmt.Errorf("failed to get clients from Server A: %w", err)
+	}
+
+	added := 0
+	// Add clients to database (using Server A as source of truth)
+	for _, client := range clientsA {
+		// Check if user already exists
+		existingUUID, err := b.db.GetUserUUID(client.Email)
+		if err != nil {
+			slog.Error("Error checking user", "email", client.Email, "error", err)
+			continue
+		}
+
+		if existingUUID != "" {
+			continue // Skip existing users
+		}
+
+		// Add user to database
+		if err := b.db.AddUser(client.Email, client.ID); err != nil {
+			slog.Error("Failed to add user to database", "email", client.Email, "error", err)
+			continue
+		}
+		added++
+	}
+
+	if added > 0 {
+		slog.Info("Synced clients from panel", "added", added, "total", len(clientsA))
+	}
+
+	return nil
 }
 
 // extractIP extracts IP address from base URL

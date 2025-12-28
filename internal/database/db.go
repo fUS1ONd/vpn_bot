@@ -73,6 +73,36 @@ func (db *DB) GetUserEmail(uuid string) (string, error) {
 	return email, nil
 }
 
+// User represents a user record
+type User struct {
+	Email string
+	UUID  string
+}
+
+// GetAllUsers retrieves all users from the database
+func (db *DB) GetAllUsers() ([]User, error) {
+	rows, err := db.conn.Query("SELECT email, uuid FROM users")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var user User
+		if err := rows.Scan(&user.Email, &user.UUID); err != nil {
+			return nil, fmt.Errorf("failed to scan user: %w", err)
+		}
+		users = append(users, user)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return users, nil
+}
+
 // Close closes the database connection
 func (db *DB) Close() error {
 	return db.conn.Close()
