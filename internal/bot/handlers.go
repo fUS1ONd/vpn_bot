@@ -129,13 +129,20 @@ func (b *Bot) handleStart(c tele.Context) error {
 		return c.Send("Произошла ошибка. Попробуйте позже.")
 	}
 
-	// New user - show warning and welcome with trial offer
+	// New user - show warnings and welcome with trial offer
 	if user == nil {
 		// Send torrent warning first
 		if err := c.Send(MsgTorrentWarning, &tele.SendOptions{
 			ParseMode: tele.ModeHTML,
 		}); err != nil {
 			slog.Error("Failed to send torrent warning", "error", err)
+		}
+
+		// Send refund policy
+		if err := c.Send(MsgRefundPolicy, &tele.SendOptions{
+			ParseMode: tele.ModeHTML,
+		}); err != nil {
+			slog.Error("Failed to send refund policy", "error", err)
 		}
 
 		// Then send welcome message
