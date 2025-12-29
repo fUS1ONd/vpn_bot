@@ -6,7 +6,7 @@ services:
     ports:
       - "${SUB_PORT:-8000}:8000"
     volumes:
-      - vpn_data:/app/data
+      - ./data:/app/data
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - ADMIN_ID=${ADMIN_ID}
@@ -49,7 +49,7 @@ services:
     ports:
       - "${SQLITE_WEB_PORT:-8080}:8080"
     volumes:
-      - vpn_data:/data
+      - ./data:/data
     environment:
       - SQLITE_DATABASE=/data/users.db
     networks:
@@ -62,7 +62,3 @@ services:
 networks:
   vpn-network:
     driver: bridge
-
-volumes:
-  vpn_data:
-    driver: local
