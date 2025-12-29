@@ -70,19 +70,28 @@ func (s *Server) handleSubscription(w http.ResponseWriter, r *http.Request) {
 		slog.Error("Failed to login to Server A", "error", err)
 	}
 
-	usedTraffic, err := s.clientA.GetClientTraffic(s.config.ServerA.InboundID, clientName)
-	if err != nil {
-		slog.Error("Failed to get client traffic", "error", err)
-		usedTraffic = 0
-	}
+	var usedTraffic int64
+	var limit int64 = s.config.ServerA.LimitBytes
+	var expire int64
 
-	limit := s.config.ServerA.LimitBytes
+	status, err := s.clientA.GetClientStatus(s.config.ServerA.InboundID, clientName)
+	if err != nil {
+		slog.Error("Failed to get client status", "error", err)
+	} else {
+		usedTraffic = status.UsedTraffic
+		if status.TotalGB > 0 {
+			limit = status.TotalGB
+		}
+		if status.ExpiryTime > 0 {
+			expire = status.ExpiryTime / 1000
+		}
+	}
 
 	// Set response headers
 	w.Header().Set("Content-Disposition", `attachment; filename="fus1ond-VPN"`)
 	w.Header().Set("Profile-Title", "fus1ond-VPN")
 	w.Header().Set("Profile-Update-Interval", "1")
-	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=0; download=%d; total=%d; expire=0", usedTraffic, limit))
+	w.Header().Set("Subscription-Userinfo", fmt.Sprintf("upload=0; download=%d; total=%d; expire=%d", usedTraffic, limit, expire))
 	w.Header().Set("Content-Type", "text/plain")
 
 	slog.Info("Sending subscription", "client", clientName, "traffic_mb", usedTraffic/1024/1024)
