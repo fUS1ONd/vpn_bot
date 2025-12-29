@@ -451,6 +451,15 @@ func (b *Bot) handleSupport(c tele.Context) error {
 	})
 }
 
+// handleSeller handles seller info button
+func (b *Bot) handleSeller(c tele.Context) error {
+	user, _ := b.db.GetUserByTelegramID(c.Sender().ID)
+	return c.Send(MsgSeller, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: MenuKeyboard(user),
+	})
+}
+
 // handleBack handles back button to return to main menu
 func (b *Bot) handleBack(c tele.Context) error {
 	// Clear user state
@@ -565,6 +574,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		return b.handlePromo(c)
 	case BtnSupport:
 		return b.handleSupport(c)
+	case BtnSeller:
+		return b.handleSeller(c)
 	case BtnBack:
 		return b.handleBack(c)
 	// Sub-menu handlers

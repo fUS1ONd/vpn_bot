@@ -23,6 +23,7 @@ const (
 	BtnPayment      = "💳 Оплата доступа"
 	BtnPromo        = "🎁 Промокод"
 	BtnSupport      = "🆘 Написать админу"
+	BtnSeller       = "ℹ️ Реквизиты продавца"
 	BtnBack         = "🔙 Назад"
 	BtnCancel       = "🚫 Отмена"
 
@@ -80,6 +81,7 @@ func MenuKeyboard(user *database.User) *tele.ReplyMarkup {
 		menu.Row(menu.Text(BtnPayment), menu.Text(BtnConnect)),
 		menu.Row(menu.Text(BtnStatus), menu.Text(BtnPromo)),
 		menu.Row(menu.Text(BtnSupport), menu.Text(BtnInstructions)),
+		menu.Row(menu.Text(BtnSeller)),
 	)
 	return menu
 }
