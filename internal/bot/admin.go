@@ -445,9 +445,9 @@ func (b *Bot) getStatusIcon(status string) string {
 
 // generateSubLink generates subscription link for a user
 func (b *Bot) generateSubLink(clientUUID string) string {
-	// Use configured subscription host if available (supports domain with HTTPS)
+	// Use configured subscription host if available
 	if b.config.SubscriptionHost != "" {
-		return fmt.Sprintf("https://%s/sub/%s", b.config.SubscriptionHost, clientUUID)
+		return fmt.Sprintf("http://%s:%d/sub/%s", b.config.SubscriptionHost, b.config.SubPort, clientUUID)
 	}
 	// Fallback to old behavior (IP from ServerA)
 	myIP := extractIP(b.config.ServerA.BaseURL)
