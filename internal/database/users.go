@@ -6,12 +6,25 @@ import (
 	"time"
 )
 
-// CreateUser creates a new user
+// CreateUser creates a new user (telegramID = 0 means NULL / admin-created)
 func (db *DB) CreateUser(telegramID int64, email, uuid string) (*User, error) {
-	result, err := db.conn.Exec(
-		`INSERT INTO users (telegram_id, email, uuid) VALUES (?, ?, ?)`,
-		telegramID, email, uuid,
-	)
+	var result sql.Result
+	var err error
+
+	if telegramID == 0 {
+		// Admin-created user - telegram_id is NULL
+		result, err = db.conn.Exec(
+			`INSERT INTO users (telegram_id, email, uuid) VALUES (NULL, ?, ?)`,
+			email, uuid,
+		)
+	} else {
+		// Real Telegram user
+		result, err = db.conn.Exec(
+			`INSERT INTO users (telegram_id, email, uuid) VALUES (?, ?, ?)`,
+			telegramID, email, uuid,
+		)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
@@ -63,10 +76,11 @@ func (db *DB) GetUserByUUID(uuid string) (*User, error) {
 // scanUser scans a single user row
 func (db *DB) scanUser(row *sql.Row) (*User, error) {
 	var user User
+	var telegramID sql.NullInt64
 	var subscriptionEndAt sql.NullTime
 
 	err := row.Scan(
-		&user.ID, &user.TelegramID, &user.Email, &user.UUID, &user.CreatedAt,
+		&user.ID, &telegramID, &user.Email, &user.UUID, &user.CreatedAt,
 		&user.SubscriptionStatus, &subscriptionEndAt, &user.TrialUsed, &user.RuExtraTraffic,
 	)
 	if err == sql.ErrNoRows {
@@ -74,6 +88,10 @@ func (db *DB) scanUser(row *sql.Row) (*User, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan user: %w", err)
+	}
+
+	if telegramID.Valid {
+		user.TelegramID = telegramID.Int64
 	}
 
 	if subscriptionEndAt.Valid {
@@ -139,13 +157,18 @@ func (db *DB) scanUsers(rows *sql.Rows) ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var user User
+		var telegramID sql.NullInt64
 		var subscriptionEndAt sql.NullTime
 
 		if err := rows.Scan(
-			&user.ID, &user.TelegramID, &user.Email, &user.UUID, &user.CreatedAt,
+			&user.ID, &telegramID, &user.Email, &user.UUID, &user.CreatedAt,
 			&user.SubscriptionStatus, &subscriptionEndAt, &user.TrialUsed, &user.RuExtraTraffic,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
+		}
+
+		if telegramID.Valid {
+			user.TelegramID = telegramID.Int64
 		}
 
 		if subscriptionEndAt.Valid {
