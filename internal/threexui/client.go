@@ -221,8 +221,33 @@ func (c *Client) GetClientTraffic(inboundID int, email string) (int64, error) {
 
 // ClientInfo represents client information from the panel
 type ClientInfo struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
+	ID         string `json:"id"`
+	Email      string `json:"email"`
+	LimitIP    int    `json:"limitIp"`
+	TotalGB    int64  `json:"totalGB"`
+	ExpiryTime int64  `json:"expiryTime"`
+	Enable     bool   `json:"enable"`
+}
+
+// ClientStatus represents the full status of a client
+type ClientStatus struct {
+	Email       string
+	UUID        string
+	Enable      bool
+	LimitIP     int
+	TotalGB     int64
+	ExpiryTime  int64
+	UsedTraffic int64 // up + down in bytes
+}
+
+// ClientSettings holds settings for creating/updating a client
+type ClientSettings struct {
+	UUID       string
+	Email      string
+	LimitIP    int
+	TotalGB    int64  // in bytes
+	ExpiryTime int64  // Unix timestamp in milliseconds
+	Enable     bool
 }
 
 // GetAllClients retrieves all clients from a specific inbound
@@ -284,4 +309,329 @@ func (c *Client) GetAllClients(inboundID int) ([]ClientInfo, error) {
 	}
 
 	return nil, fmt.Errorf("inbound not found")
+}
+
+// GetClientStatus retrieves the full status of a client
+func (c *Client) GetClientStatus(inboundID int, email string) (*ClientStatus, error) {
+	apiURL := fmt.Sprintf("%s%s/panel/api/inbounds/list", c.baseURL, c.webPath)
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create list request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var result struct {
+		Success bool `json:"success"`
+		Obj     []struct {
+			ID          int    `json:"id"`
+			Settings    string `json:"settings"`
+			ClientStats []struct {
+				Email string `json:"email"`
+				Up    int64  `json:"up"`
+				Down  int64  `json:"down"`
+			} `json:"clientStats"`
+		} `json:"obj"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if !result.Success {
+		return nil, fmt.Errorf("API returned failure")
+	}
+
+	// Find the target inbound
+	for _, inbound := range result.Obj {
+		if inbound.ID == inboundID {
+			// Parse settings to find client
+			var settings struct {
+				Clients []ClientInfo `json:"clients"`
+			}
+			if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
+				return nil, fmt.Errorf("failed to parse settings: %w", err)
+			}
+
+			// Find client by email
+			for _, client := range settings.Clients {
+				if client.Email == email {
+					status := &ClientStatus{
+						Email:      client.Email,
+						UUID:       client.ID,
+						Enable:     client.Enable,
+						LimitIP:    client.LimitIP,
+						TotalGB:    client.TotalGB,
+						ExpiryTime: client.ExpiryTime,
+					}
+
+					// Find traffic stats
+					for _, stats := range inbound.ClientStats {
+						if stats.Email == email {
+							status.UsedTraffic = stats.Up + stats.Down
+							break
+						}
+					}
+
+					return status, nil
+				}
+			}
+			return nil, fmt.Errorf("client not found: %s", email)
+		}
+	}
+
+	return nil, fmt.Errorf("inbound not found: %d", inboundID)
+}
+
+// UpdateClient updates client settings in the panel
+func (c *Client) UpdateClient(inboundID int, clientUUID string, settings ClientSettings) error {
+	apiURL := fmt.Sprintf("%s%s/panel/api/inbounds/updateClient/%s", c.baseURL, c.webPath, clientUUID)
+
+	clientData := map[string]interface{}{
+		"clients": []map[string]interface{}{
+			{
+				"id":         settings.UUID,
+				"email":      settings.Email,
+				"flow":       "xtls-rprx-vision",
+				"limitIp":    settings.LimitIP,
+				"totalGB":    settings.TotalGB,
+				"expiryTime": settings.ExpiryTime,
+				"enable":     settings.Enable,
+				"tgId":       "",
+				"subId":      "",
+			},
+		},
+	}
+
+	settingsJSON, err := json.Marshal(clientData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal client settings: %w", err)
+	}
+
+	payload := map[string]interface{}{
+		"id":       inboundID,
+		"settings": string(settingsJSON),
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadJSON))
+	if err != nil {
+		return fmt.Errorf("failed to create update client request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("update client request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("update client failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if success, ok := result["success"].(bool); !ok || !success {
+		msg := result["msg"]
+		return fmt.Errorf("API returned failure: %v", msg)
+	}
+
+	slog.Info("Updated client", "email", settings.Email)
+	return nil
+}
+
+// ResetClientTraffic resets traffic counters for a client
+func (c *Client) ResetClientTraffic(inboundID int, email string) error {
+	apiURL := fmt.Sprintf("%s%s/panel/api/inbounds/%d/resetClientTraffic/%s",
+		c.baseURL, c.webPath, inboundID, email)
+
+	req, err := http.NewRequest("POST", apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create reset traffic request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("reset traffic request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("reset traffic failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if success, ok := result["success"].(bool); !ok || !success {
+		msg := result["msg"]
+		return fmt.Errorf("API returned failure: %v", msg)
+	}
+
+	slog.Info("Reset client traffic", "email", email)
+	return nil
+}
+
+// DeleteClient deletes a client from the panel
+func (c *Client) DeleteClient(inboundID int, clientUUID string) error {
+	apiURL := fmt.Sprintf("%s%s/panel/api/inbounds/%d/delClient/%s",
+		c.baseURL, c.webPath, inboundID, clientUUID)
+
+	req, err := http.NewRequest("POST", apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create delete client request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete client request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("delete client failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if success, ok := result["success"].(bool); !ok || !success {
+		msg := result["msg"]
+		return fmt.Errorf("API returned failure: %v", msg)
+	}
+
+	slog.Info("Deleted client", "uuid", clientUUID)
+	return nil
+}
+
+// AddClientWithSettings adds a new client with full settings
+func (c *Client) AddClientWithSettings(inboundID int, settings ClientSettings) error {
+	apiURL := fmt.Sprintf("%s%s/panel/api/inbounds/addClient", c.baseURL, c.webPath)
+
+	clientData := map[string]interface{}{
+		"clients": []map[string]interface{}{
+			{
+				"id":         settings.UUID,
+				"email":      settings.Email,
+				"flow":       "xtls-rprx-vision",
+				"limitIp":    settings.LimitIP,
+				"totalGB":    settings.TotalGB,
+				"expiryTime": settings.ExpiryTime,
+				"enable":     settings.Enable,
+				"tgId":       "",
+				"subId":      "",
+			},
+		},
+	}
+
+	settingsJSON, err := json.Marshal(clientData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal client settings: %w", err)
+	}
+
+	payload := map[string]interface{}{
+		"id":       inboundID,
+		"settings": string(settingsJSON),
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadJSON))
+	if err != nil {
+		return fmt.Errorf("failed to create add client request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("add client request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("add client failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if success, ok := result["success"].(bool); !ok || !success {
+		msg := result["msg"]
+		return fmt.Errorf("API returned failure: %v", msg)
+	}
+
+	slog.Info("Added client with settings", "email", settings.Email)
+	return nil
 }

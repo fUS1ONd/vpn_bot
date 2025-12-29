@@ -128,9 +128,9 @@ func (b *Bot) handleCreate(c tele.Context) error {
 	}
 
 	// Save to database
-	if err := b.db.AddUser(email, clientUUID); err != nil {
-		slog.Error("Failed to add user to database", "error", err)
-		_, editErr := c.Bot().Edit(status, fmt.Sprintf("❌ Ошибка сохранения в БД: %v", err))
+	if _, dbErr := b.db.CreateUser(c.Sender().ID, email, clientUUID); dbErr != nil {
+		slog.Error("Failed to add user to database", "error", dbErr)
+		_, editErr := c.Bot().Edit(status, fmt.Sprintf("❌ Ошибка сохранения в БД: %v", dbErr))
 		return editErr
 	}
 
@@ -211,18 +211,18 @@ func (b *Bot) syncClients() error {
 	// Add clients to database (using Server A as source of truth)
 	for _, client := range clientsA {
 		// Check if user already exists
-		existingUUID, err := b.db.GetUserUUID(client.Email)
+		existingUser, err := b.db.GetUserByEmail(client.Email)
 		if err != nil {
 			slog.Error("Error checking user", "email", client.Email, "error", err)
 			continue
 		}
 
-		if existingUUID != "" {
+		if existingUser != nil {
 			continue // Skip existing users
 		}
 
-		// Add user to database
-		if err := b.db.AddUser(client.Email, client.ID); err != nil {
+		// Add user to database (use 0 for telegram_id for synced users)
+		if _, err := b.db.CreateUser(0, client.Email, client.ID); err != nil {
 			slog.Error("Failed to add user to database", "email", client.Email, "error", err)
 			continue
 		}

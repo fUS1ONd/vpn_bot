@@ -46,13 +46,18 @@ func (s *Server) handleSubscription(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("Subscription request", "uuid", clientUUID)
 
-	// Get client email from database
-	clientName, err := s.db.GetUserEmail(clientUUID)
+	// Get user from database by UUID
+	user, err := s.db.GetUserByUUID(clientUUID)
 	if err != nil {
-		slog.Error("Failed to get client email", "error", err)
+		slog.Error("Failed to get user", "error", err)
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
+	if user == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	clientName := user.Email
 
 	// Generate VLESS links
 	linkA, linkB := vless.GenerateLinks(clientUUID, clientName, s.config.ServerA, s.config.ServerB)
