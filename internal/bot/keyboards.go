@@ -1,6 +1,11 @@
 package bot
 
-import tele "gopkg.in/telebot.v3"
+import (
+	"fmt"
+
+	"github.com/fus1ond/vpn_bot/internal/database"
+	tele "gopkg.in/telebot.v3"
+)
 
 // Callback data constants
 const (
@@ -32,10 +37,23 @@ const (
 	BtnBuyTraffic = "⚡ Доп. трафик (100р)"
 
 	// Admin buttons
-	BtnAdminList   = "👥 Клиенты"
-	BtnAdminCreate = "➕ Создать"
-	BtnAdminPromos = "🎫 Промокоды"
+	BtnAdminClients     = "👥 Клиенты"
+	BtnAdminPromos      = "🎫 Промокоды"
+	BtnAdminUserMode    = "👤 Режим пользователя"
+	BtnAdminBack        = "🔙 В меню админа"
+
+	BtnAdminClientsList   = "📋 Список клиентов"
+	BtnAdminClientsCreate = "➕ Создать клиента"
+	BtnAdminClientsDelete = "➖ Удалить клиента"
+
+	BtnAdminPromosList   = "📋 Список промо"
+	BtnAdminPromosCreate = "➕ Создать промо"
+	BtnAdminPromosDelete = "➖ Удалить промо"
 )
+
+// Status icons for dynamic buttons
+const StatusActiveIcon = "🟢"
+const StatusInactiveIcon = "🔵"
 
 // inlineBtn creates an inline button with callback data
 func inlineBtn(text, data string) tele.InlineButton {
@@ -46,9 +64,19 @@ func inlineBtn(text, data string) tele.InlineButton {
 }
 
 // MenuKeyboard returns the main menu reply keyboard
-func MenuKeyboard() *tele.ReplyMarkup {
+func MenuKeyboard(user *database.User) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+
+	infoText := fmt.Sprintf("%s Неактивна %s", StatusInactiveIcon, StatusInactiveIcon)
+	if user != nil && (user.SubscriptionStatus == database.StatusActive || user.SubscriptionStatus == database.StatusTrial) {
+		if user.SubscriptionEndAt != nil {
+			infoText = fmt.Sprintf("%s до %s %s", StatusActiveIcon, user.SubscriptionEndAt.Format("02.01 15:04"), StatusActiveIcon)
+		}
+	}
+	btnInfo := menu.Text(infoText)
+
 	menu.Reply(
+		menu.Row(btnInfo),
 		menu.Row(menu.Text(BtnPayment), menu.Text(BtnConnect)),
 		menu.Row(menu.Text(BtnStatus), menu.Text(BtnPromo)),
 		menu.Row(menu.Text(BtnSupport), menu.Text(BtnInstructions)),
@@ -101,8 +129,28 @@ func BackKeyboard() *tele.ReplyMarkup {
 func AdminKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
-		menu.Row(menu.Text(BtnAdminList), menu.Text(BtnAdminPromos)),
-		menu.Row(menu.Text(BtnAdminCreate), menu.Text(BtnBack)),
+		menu.Row(menu.Text(BtnAdminClients), menu.Text(BtnAdminPromos)),
+		menu.Row(menu.Text(BtnAdminUserMode)),
+	)
+	return menu
+}
+
+// AdminClientsKeyboard returns keyboard for admin clients menu
+func AdminClientsKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnAdminClientsList), menu.Text(BtnAdminClientsCreate), menu.Text(BtnAdminClientsDelete)),
+		menu.Row(menu.Text(BtnAdminBack)),
+	)
+	return menu
+}
+
+// AdminPromosKeyboard returns keyboard for admin promos menu
+func AdminPromosKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnAdminPromosList), menu.Text(BtnAdminPromosCreate), menu.Text(BtnAdminPromosDelete)),
+		menu.Row(menu.Text(BtnAdminBack)),
 	)
 	return menu
 }

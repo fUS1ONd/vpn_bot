@@ -15,9 +15,12 @@ import (
 
 // User states for conversation
 const (
-	StateNone       = ""
-	StateWaitPromo  = "wait_promo"
-	StateWaitClient = "wait_client"
+	StateNone             = ""
+	StateWaitPromo        = "wait_promo"
+	StateWaitClient       = "wait_client"
+	StateWaitClientDelete = "wait_client_delete"
+	StateWaitPromoAdd     = "wait_promo_add"
+	StateWaitPromoDel     = "wait_promo_del"
 )
 
 // Bot represents the Telegram bot
@@ -76,12 +79,6 @@ func New(token string, db *database.DB, clientA, clientB *threexui.Client, cfg *
 	// Register command handlers
 	b.Handle("/start", bot.handleStart)
 	// Admin commands
-	b.Handle("/create", bot.handleAdminCreate)
-	b.Handle("/delete", bot.handleAdminDelete)
-	b.Handle("/list", bot.handleAdminList)
-	b.Handle("/promo_add", bot.handlePromoAdd)
-	b.Handle("/promo_del", bot.handlePromoDel)
-	b.Handle("/promos", bot.handlePromoList)
 
 	// Register callback handler (single handler for all callbacks)
 	// Kept primarily for Admin Inline Keyboards
@@ -136,14 +133,14 @@ func (b *Bot) handleStart(c tele.Context) error {
 	if user == nil {
 		return c.Send(MsgWelcome, &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: MenuKeyboard(),
+			ReplyMarkup: MenuKeyboard(nil),
 		})
 	}
 
 	// Existing user - show welcome back
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: MenuKeyboard(),
+		ReplyMarkup: MenuKeyboard(user),
 	})
 }
 
@@ -161,7 +158,7 @@ func (b *Bot) handleConnect(c tele.Context) error {
 		subLink := b.generateSubLink(user.UUID)
 		return c.Send(fmt.Sprintf(MsgTrialActivated, user.SubscriptionEndAt.Format("02.01.2006 15:04"), subLink), &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: MenuKeyboard(),
+			ReplyMarkup: MenuKeyboard(user),
 		})
 	}
 
@@ -334,7 +331,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	if user == nil {
 		return c.Send(MsgNoSubscription, &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: MenuKeyboard(),
+			ReplyMarkup: MenuKeyboard(nil),
 		})
 	}
 
@@ -357,7 +354,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: MenuKeyboard(),
+		ReplyMarkup: MenuKeyboard(user),
 	})
 }
 
@@ -431,9 +428,10 @@ func (b *Bot) handlePromo(c tele.Context) error {
 
 // handleSupport handles support button
 func (b *Bot) handleSupport(c tele.Context) error {
+	user, _ := b.db.GetUserByTelegramID(c.Sender().ID)
 	return c.Send(MsgSupport, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: MenuKeyboard(),
+		ReplyMarkup: MenuKeyboard(user),
 	})
 }
 
@@ -441,9 +439,10 @@ func (b *Bot) handleSupport(c tele.Context) error {
 func (b *Bot) handleBack(c tele.Context) error {
 	// Clear user state
 	delete(b.userStates, c.Sender().ID)
+	user, _ := b.db.GetUserByTelegramID(c.Sender().ID)
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: MenuKeyboard(),
+		ReplyMarkup: MenuKeyboard(user),
 	})
 }
 
@@ -462,6 +461,11 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	state := b.userStates[telegramID]
 	text := c.Text()
 
+	// Handle dynamic status button
+	if strings.HasPrefix(text, StatusActiveIcon) || strings.HasPrefix(text, StatusInactiveIcon) {
+		return b.handleStatus(c)
+	}
+
 	// 1. Handle States
 	switch state {
 	case StateWaitPromo:
@@ -472,10 +476,62 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitClient:
 		if text == BtnCancel {
 			delete(b.userStates, c.Sender().ID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminClientsKeyboard()})
 		}
 		if b.isAdmin(c) {
 			return b.processCreateClient(c, c.Text())
+		}
+	case StateWaitClientDelete:
+		if text == BtnCancel {
+			delete(b.userStates, c.Sender().ID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminClientsKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processAdminDeleteClient(c, c.Text())
+		}
+	case StateWaitPromoAdd:
+		if text == BtnCancel {
+			delete(b.userStates, c.Sender().ID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processPromoAdd(c, c.Text())
+		}
+	case StateWaitPromoDel:
+		if text == BtnCancel {
+			delete(b.userStates, c.Sender().ID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processPromoDel(c, c.Text())
+		}
+	}
+
+	// Admin specific buttons routing
+	if b.isAdmin(c) {
+		switch text {
+		case BtnAdminClients:
+			return b.handleAdminClientsMenu(c)
+		case BtnAdminPromos:
+			return b.handleAdminPromosMenu(c)
+		case BtnAdminUserMode:
+			return b.handleBack(c) // Go to User Menu
+		case BtnAdminBack:
+			return b.handleAdminStart(c) // Go to Admin Main
+		// Client Submenu
+		case BtnAdminClientsList:
+			return b.handleAdminList(c)
+		case BtnAdminClientsCreate:
+			return b.handleAdminCreateRequest(c)
+		case BtnAdminClientsDelete:
+			return b.handleAdminDeleteRequest(c)
+		// Promo Submenu
+		case BtnAdminPromosList:
+			return b.handlePromoList(c)
+		case BtnAdminPromosCreate:
+			return b.handlePromoAddRequest(c)
+		case BtnAdminPromosDelete:
+			return b.handlePromoDelRequest(c)
 		}
 	}
 
@@ -502,13 +558,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case BtnInstMac: return b.handleInstructionMac(c)
 	case BtnPaySub: return b.handlePay(c)
 	case BtnBuyTraffic: return b.handleBuyTraffic(c)
-	// Admin buttons
-	case BtnAdminList:
-		return b.handleAdminList(c)
-	case BtnAdminCreate:
-		return b.handleAdminCreateRequest(c)
-	case BtnAdminPromos:
-		return b.handlePromoList(c)
 	}
 
 	// Unknown message - show main menu
@@ -588,7 +637,7 @@ func (b *Bot) processCreateClient(c tele.Context, email string) error {
 
 	return c.Send(fmt.Sprintf(MsgAdminClientCreated, email, clientUUID, subLink), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminKeyboard(),
+		ReplyMarkup: AdminClientsKeyboard(),
 	})
 }
 
@@ -602,14 +651,14 @@ func (b *Bot) processPromoCode(c tele.Context, code string) error {
 		slog.Error("Failed to get user", "error", err)
 		return c.Send("Произошла ошибка.", &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: MenuKeyboard(),
+			ReplyMarkup: MenuKeyboard(nil),
 		})
 	}
 
 	if user == nil {
 		return c.Send("Сначала активируйте триал или подписку", &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: MenuKeyboard(),
+			ReplyMarkup: MenuKeyboard(nil),
 		})
 	}
 
@@ -618,7 +667,7 @@ func (b *Bot) processPromoCode(c tele.Context, code string) error {
 	if err != nil {
 		return c.Send(fmt.Sprintf(MsgPromoError, err.Error()), &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: MenuKeyboard(),
+			ReplyMarkup: MenuKeyboard(user),
 		})
 	}
 
@@ -627,7 +676,7 @@ func (b *Bot) processPromoCode(c tele.Context, code string) error {
 		slog.Error("Failed to apply promo code", "error", err)
 		return c.Send("Ошибка применения промокода", &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: MenuKeyboard(),
+			ReplyMarkup: MenuKeyboard(user),
 		})
 	}
 
@@ -639,7 +688,7 @@ func (b *Bot) processPromoCode(c tele.Context, code string) error {
 	result := FormatPromoResult(promo)
 	return c.Send(fmt.Sprintf(MsgPromoSuccess, result), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: MenuKeyboard(),
+		ReplyMarkup: MenuKeyboard(user),
 	})
 }
 

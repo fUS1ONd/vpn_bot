@@ -301,14 +301,20 @@ const (
 
 Отправьте имя (email) для нового клиента:`
 
+	MsgAdminEnterPromoData = `<b>Создание промокода</b>
+
+Введите данные через пробел:
+<code>Code Type Value MaxUses [Days]</code>
+
+Типы: <i>discount, free_days, extra_traffic</i>
+Пример: <code>FREE3DAYS free_days 3 100 30</code>`
+
+	MsgAdminEnterPromoCode = `<b>Удаление промокода</b>
+
+Отправьте код для удаления:`
+
 	MsgAdminPromoList = `<b>Управление промокодами</b>
 
 Активные промокоды:
-%s
-
-Команды:
-/promo_add &lt;code&gt; &lt;type&gt; &lt;value&gt; &lt;max_uses&gt;
-/promo_del &lt;code&gt;
-
-Типы: discount, free_days, extra_traffic`
+%s`
 )

@@ -26,6 +26,28 @@ func (b *Bot) handleAdminStart(c tele.Context) error {
 	})
 }
 
+// handleAdminClientsMenu handles clients submenu
+func (b *Bot) handleAdminClientsMenu(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+	return c.Send("<b>Управление клиентами</b>\n\nВыберите действие:", &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminClientsKeyboard(),
+	})
+}
+
+// handleAdminPromosMenu handles promos submenu
+func (b *Bot) handleAdminPromosMenu(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+	return c.Send("<b>Управление промокодами</b>\n\nВыберите действие:", &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminPromosKeyboard(),
+	})
+}
+
 // handleAdminCreateRequest handles admin create button request
 func (b *Bot) handleAdminCreateRequest(c tele.Context) error {
 	if !b.isAdmin(c) {
@@ -177,47 +199,59 @@ func (b *Bot) handleAdminList(c tele.Context) error {
 
 	msg := fmt.Sprintf(MsgAdminClientList, len(users), sb.String())
 
-	return c.Send(msg, &tele.SendOptions{
+	// Send long message, splitting if necessary (simplified here)
+	return c.Send(msg, &tele.SendOptions{ // Logic relies on msg fit, usually ok for small userbase
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminKeyboard(),
+		ReplyMarkup: AdminClientsKeyboard(),
 	})
 }
 
-// handlePromoAdd handles adding a promo code (admin only)
-func (b *Bot) handlePromoAdd(c tele.Context) error {
+// handlePromoAddRequest handles promo add button request
+func (b *Bot) handlePromoAddRequest(c tele.Context) error {
 	if !b.isAdmin(c) {
 		return nil
 	}
+	b.userStates[c.Sender().ID] = StateWaitPromoAdd
+	return c.Send(MsgAdminEnterPromoData, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: CancelReplyKeyboard(),
+	})
+}
 
-	// /promo_add <code> <type> <value> <max_uses> [valid_days]
-	args := strings.Fields(c.Text())
-	if len(args) < 5 {
-		return c.Send("Использование: /promo_add &lt;code&gt; &lt;type&gt; &lt;value&gt; &lt;max_uses&gt; [valid_days]\n\nТипы: discount, free_days, extra_traffic", &tele.SendOptions{
-			ParseMode: tele.ModeHTML,
-		})
+// processPromoAdd handles adding a promo code
+func (b *Bot) processPromoAdd(c tele.Context, text string) error {
+	delete(b.userStates, c.Sender().ID)
+
+	// Reuse logic from old handlePromoAdd, but with text argument
+	// Format: <code> <type> <value> <max_uses> [valid_days]
+	// We add fake command prefix to reuse parsing logic or just parse directly
+	// Parsing directly:
+	args := strings.Fields(text)
+	if len(args) < 4 { // code type value max_uses
+		return c.Send("Ошибка формата. Попробуйте еще раз:\nCode Type Value MaxUses [Days]", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
 	}
 
-	code := args[1]
-	promoType := args[2]
-	value, err := strconv.Atoi(args[3])
+	code := args[0]
+	promoType := args[1]
+	value, err := strconv.Atoi(args[2])
 	if err != nil {
-		return c.Send("Неверное значение value")
+		return c.Send("Неверное значение value", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
 	}
-	maxUses, err := strconv.Atoi(args[4])
+	maxUses, err := strconv.Atoi(args[3])
 	if err != nil {
-		return c.Send("Неверное значение max_uses")
+		return c.Send("Неверное значение max_uses", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
 	}
 
 	// Validate promo type
 	if promoType != database.PromoTypeDiscount &&
 		promoType != database.PromoTypeFreeDays &&
 		promoType != database.PromoTypeExtraTraffic {
-		return c.Send("Неверный тип промокода. Допустимые: discount, free_days, extra_traffic")
+		return c.Send("Неверный тип промокода. Допустимые: discount, free_days, extra_traffic", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
 	}
 
 	var validUntil *time.Time
-	if len(args) > 5 {
-		days, err := strconv.Atoi(args[5])
+	if len(args) > 4 {
+		days, err := strconv.Atoi(args[4])
 		if err == nil && days > 0 {
 			t := time.Now().AddDate(0, 0, days)
 			validUntil = &t
@@ -238,27 +272,32 @@ func (b *Bot) handlePromoAdd(c tele.Context) error {
 	}
 
 	return c.Send(msg, &tele.SendOptions{
-		ParseMode: tele.ModeHTML,
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminPromosKeyboard(),
 	})
 }
 
-// handlePromoDel handles deleting a promo code (admin only)
-func (b *Bot) handlePromoDel(c tele.Context) error {
+// handlePromoDelRequest handles promo delete button request
+func (b *Bot) handlePromoDelRequest(c tele.Context) error {
 	if !b.isAdmin(c) {
 		return nil
 	}
+	b.userStates[c.Sender().ID] = StateWaitPromoDel
+	return c.Send(MsgAdminEnterPromoCode, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: CancelReplyKeyboard(),
+	})
+}
 
-	args := strings.Fields(c.Text())
-	if len(args) < 2 {
-		return c.Send("Использование: /promo_del &lt;code&gt;", &tele.SendOptions{
-			ParseMode: tele.ModeHTML,
-		})
-	}
+// processPromoDel handles deleting a promo code
+func (b *Bot) processPromoDel(c tele.Context, code string) error {
+	delete(b.userStates, c.Sender().ID)
 
-	code := args[1]
+	code = strings.TrimSpace(code)
+
 	promo, err := b.db.GetPromoCodeByCode(code)
 	if err != nil || promo == nil {
-		return c.Send("Промокод не найден")
+		return c.Send("Промокод не найден", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
 	}
 
 	if err := b.db.DeletePromoCode(promo.ID); err != nil {
@@ -267,7 +306,8 @@ func (b *Bot) handlePromoDel(c tele.Context) error {
 	}
 
 	return c.Send(fmt.Sprintf("Промокод <code>%s</code> удален", code), &tele.SendOptions{
-		ParseMode: tele.ModeHTML,
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminPromosKeyboard(),
 	})
 }
 
@@ -303,41 +343,45 @@ func (b *Bot) handlePromoList(c tele.Context) error {
 
 	msg := fmt.Sprintf(MsgAdminPromoList, sb.String())
 	return c.Send(msg, &tele.SendOptions{
-		ParseMode: tele.ModeHTML,
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminPromosKeyboard(),
 	})
 }
 
-// handleAdminDelete handles deleting a client (admin only)
-func (b *Bot) handleAdminDelete(c tele.Context) error {
+// handleAdminDeleteRequest handles deleting a client request
+func (b *Bot) handleAdminDeleteRequest(c tele.Context) error {
 	if !b.isAdmin(c) {
 		return nil
 	}
+	b.userStates[c.Sender().ID] = StateWaitClientDelete
+	return c.Send("<b>Удаление клиента</b>\n\nОтправьте email клиента для удаления:", &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: CancelReplyKeyboard(),
+	})
+}
 
-	args := strings.Fields(c.Text())
-	if len(args) < 2 {
-		return c.Send("Использование: /delete &lt;email&gt;", &tele.SendOptions{
-			ParseMode: tele.ModeHTML,
-		})
-	}
-
-	email := args[1]
+// processAdminDeleteClient handles deleting a client logic
+func (b *Bot) processAdminDeleteClient(c tele.Context, email string) error {
+	delete(b.userStates, c.Sender().ID)
+	email = strings.TrimSpace(email)
 
 	// Find user in database
 	user, err := b.db.GetUserByEmail(email)
 	if err != nil {
 		slog.Error("Failed to get user", "error", err)
-		return c.Send("Ошибка поиска пользователя")
+		return c.Send("Ошибка поиска пользователя", &tele.SendOptions{ReplyMarkup: AdminClientsKeyboard()})
 	}
 	if user == nil {
 		return c.Send(fmt.Sprintf("Пользователь <code>%s</code> не найден", email), &tele.SendOptions{
-			ParseMode: tele.ModeHTML,
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: AdminClientsKeyboard(),
 		})
 	}
 
 	// Login to servers
 	if err := b.clientA.Login(); err != nil {
 		slog.Error("Failed to login to Server A", "error", err)
-		return c.Send(fmt.Sprintf("Ошибка подключения к Server A: %v", err))
+		return c.Send(fmt.Sprintf("Ошибка подключения к Server A: %v", err)) // Keep keyboard?
 	}
 	if err := b.clientB.Login(); err != nil {
 		slog.Error("Failed to login to Server B", "error", err)
@@ -369,7 +413,7 @@ func (b *Bot) handleAdminDelete(c tele.Context) error {
 
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminKeyboard(),
+		ReplyMarkup: AdminClientsKeyboard(),
 	})
 }
 
