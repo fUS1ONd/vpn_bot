@@ -4,26 +4,37 @@ import tele "gopkg.in/telebot.v3"
 
 // Callback data constants
 const (
-	// Main menu
-	CallbackConnect      = "connect"
-	CallbackStatus       = "status"
-	CallbackInstructions = "instructions"
-	CallbackBuyTraffic   = "buy_traffic"
-	CallbackPromo        = "promo"
-	CallbackSupport      = "support"
-	CallbackPay          = "pay"
-	CallbackBack         = "back"
-
-	// Instructions
-	CallbackInstructionIOS     = "instruction_ios"
-	CallbackInstructionAndroid = "instruction_android"
-	CallbackInstructionWindows = "instruction_windows"
-	CallbackInstructionMac     = "instruction_mac"
-
 	// Admin
 	CallbackAdminList   = "admin_list"
 	CallbackAdminCreate = "admin_create"
 	CallbackAdminPromo  = "admin_promo"
+)
+
+// Text Constants for Reply Keyboards
+const (
+	BtnConnect      = "🌐 Подключить VPN"
+	BtnStatus       = "👤 Мой статус"
+	BtnInstructions = "📚 Инструкции"
+	BtnPayment      = "💳 Оплата доступа"
+	BtnPromo        = "🎁 Промокод"
+	BtnSupport      = "🆘 Написать админу"
+	BtnBack         = "🔙 Назад"
+	BtnCancel       = "🚫 Отмена"
+
+	// Instructions sub-menu
+	BtnInstIOS     = "🍎 iOS"
+	BtnInstAndroid = "🤖 Android"
+	BtnInstWindows = "💻 Windows"
+	BtnInstMac     = "🍏 macOS"
+
+	// Payment sub-menu
+	BtnPaySub     = "💎 Подписка (200р)"
+	BtnBuyTraffic = "⚡ Доп. трафик (100р)"
+
+	// Admin buttons
+	BtnAdminList   = "👥 Клиенты"
+	BtnAdminCreate = "➕ Создать"
+	BtnAdminPromos = "🎫 Промокоды"
 )
 
 // inlineBtn creates an inline button with callback data
@@ -34,99 +45,64 @@ func inlineBtn(text, data string) tele.InlineButton {
 	}
 }
 
-// MainMenuKeyboard returns the main menu inline keyboard
-func MainMenuKeyboard() *tele.ReplyMarkup {
-	return &tele.ReplyMarkup{
-		InlineKeyboard: [][]tele.InlineButton{
-			{inlineBtn("Подключить VPN", CallbackConnect)},
-			{inlineBtn("Мой статус", CallbackStatus)},
-			{inlineBtn("Инструкции", CallbackInstructions)},
-			{inlineBtn("Докупить трафик", CallbackBuyTraffic), inlineBtn("Промокод", CallbackPromo)},
-			{inlineBtn("Поддержка", CallbackSupport)},
-		},
-	}
+// MenuKeyboard returns the main menu reply keyboard
+func MenuKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnPayment), menu.Text(BtnConnect)),
+		menu.Row(menu.Text(BtnStatus), menu.Text(BtnPromo)),
+		menu.Row(menu.Text(BtnSupport), menu.Text(BtnInstructions)),
+	)
+	return menu
 }
 
-// ActiveUserKeyboard returns keyboard for users with active subscription
-func ActiveUserKeyboard() *tele.ReplyMarkup {
-	return &tele.ReplyMarkup{
-		InlineKeyboard: [][]tele.InlineButton{
-			{inlineBtn("Мой статус", CallbackStatus)},
-			{inlineBtn("Инструкции", CallbackInstructions)},
-			{inlineBtn("Докупить трафик", CallbackBuyTraffic), inlineBtn("Промокод", CallbackPromo)},
-			{inlineBtn("Поддержка", CallbackSupport)},
-		},
-	}
+// InstructionsReplyKeyboard returns keyboard with instruction options
+func InstructionsReplyKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnInstIOS), menu.Text(BtnInstAndroid)),
+		menu.Row(menu.Text(BtnInstWindows), menu.Text(BtnInstMac)),
+		menu.Row(menu.Text(BtnBack)),
+	)
+	return menu
 }
 
-// PaymentKeyboard returns keyboard with payment options
-func PaymentKeyboard() *tele.ReplyMarkup {
-	return &tele.ReplyMarkup{
-		InlineKeyboard: [][]tele.InlineButton{
-			{inlineBtn("Оплатить 200 руб/мес", CallbackPay)},
-			{inlineBtn("Назад", CallbackBack)},
-		},
-	}
+// PaymentReplyKeyboard returns keyboard with payment options
+func PaymentReplyKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnPaySub)),
+		menu.Row(menu.Text(BtnBuyTraffic)),
+		menu.Row(menu.Text(BtnBack)),
+	)
+	return menu
 }
 
-// TrialKeyboard returns keyboard for trial activation
-func TrialKeyboard() *tele.ReplyMarkup {
-	return &tele.ReplyMarkup{
-		InlineKeyboard: [][]tele.InlineButton{
-			{inlineBtn("Активировать триал (3 дня)", CallbackConnect)},
-			{inlineBtn("Назад", CallbackBack)},
-		},
-	}
-}
-
-// InstructionsKeyboard returns keyboard with instruction options
-func InstructionsKeyboard() *tele.ReplyMarkup {
-	return &tele.ReplyMarkup{
-		InlineKeyboard: [][]tele.InlineButton{
-			{inlineBtn("iOS (iPhone/iPad)", CallbackInstructionIOS)},
-			{inlineBtn("Android", CallbackInstructionAndroid)},
-			{inlineBtn("Windows", CallbackInstructionWindows)},
-			{inlineBtn("macOS", CallbackInstructionMac)},
-			{inlineBtn("Назад", CallbackBack)},
-		},
-	}
+// CancelReplyKeyboard returns keyboard with only Cancel button (for states)
+func CancelReplyKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnCancel)),
+	)
+	return menu
 }
 
 // BackKeyboard returns keyboard with only back button
+// Kept for Admin interactions if needed
 func BackKeyboard() *tele.ReplyMarkup {
 	return &tele.ReplyMarkup{
 		InlineKeyboard: [][]tele.InlineButton{
-			{inlineBtn("Назад", CallbackBack)},
-		},
-	}
-}
-
-// BuyTrafficKeyboard returns keyboard for buying extra traffic
-func BuyTrafficKeyboard() *tele.ReplyMarkup {
-	return &tele.ReplyMarkup{
-		InlineKeyboard: [][]tele.InlineButton{
-			{inlineBtn("Купить +10GB за 100 руб", CallbackBuyTraffic)},
-			{inlineBtn("Назад", CallbackBack)},
+			{inlineBtn("Назад", "back")},
 		},
 	}
 }
 
 // AdminKeyboard returns keyboard for admin menu
 func AdminKeyboard() *tele.ReplyMarkup {
-	return &tele.ReplyMarkup{
-		InlineKeyboard: [][]tele.InlineButton{
-			{inlineBtn("Список клиентов", CallbackAdminList)},
-			{inlineBtn("Создать клиента", CallbackAdminCreate)},
-			{inlineBtn("Управление промокодами", CallbackAdminPromo)},
-		},
-	}
-}
-
-// PromoInputKeyboard returns keyboard when waiting for promo input
-func PromoInputKeyboard() *tele.ReplyMarkup {
-	return &tele.ReplyMarkup{
-		InlineKeyboard: [][]tele.InlineButton{
-			{inlineBtn("Отмена", CallbackBack)},
-		},
-	}
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnAdminList), menu.Text(BtnAdminPromos)),
+		menu.Row(menu.Text(BtnAdminCreate), menu.Text(BtnBack)),
+	)
+	return menu
 }

@@ -75,6 +75,7 @@ func New(token string, db *database.DB, clientA, clientB *threexui.Client, cfg *
 
 	// Register command handlers
 	b.Handle("/start", bot.handleStart)
+	// Admin commands
 	b.Handle("/create", bot.handleAdminCreate)
 	b.Handle("/delete", bot.handleAdminDelete)
 	b.Handle("/list", bot.handleAdminList)
@@ -83,9 +84,10 @@ func New(token string, db *database.DB, clientA, clientB *threexui.Client, cfg *
 	b.Handle("/promos", bot.handlePromoList)
 
 	// Register callback handler (single handler for all callbacks)
+	// Kept primarily for Admin Inline Keyboards
 	b.Handle(tele.OnCallback, bot.handleCallback)
 
-	// Handle text messages for promo codes
+	// Handle text messages (Main interaction router)
 	b.Handle(tele.OnText, bot.handleTextMessage)
 
 	return bot, nil
@@ -108,37 +110,6 @@ func (b *Bot) handleCallback(c tele.Context) error {
 	slog.Info("Callback routing", "data", data, "from", c.Sender().ID)
 
 	switch data {
-	case CallbackConnect:
-		return b.handleConnectCallback(c)
-	case CallbackStatus:
-		return b.handleStatusCallback(c)
-	case CallbackInstructions:
-		return b.handleInstructionsCallback(c)
-	case CallbackBuyTraffic:
-		return b.handleBuyTrafficCallback(c)
-	case CallbackPromo:
-		return b.handlePromoCallback(c)
-	case CallbackSupport:
-		return b.handleSupportCallback(c)
-	case CallbackBack:
-		return b.handleBackCallback(c)
-	case CallbackPay:
-		return b.handlePayCallback(c)
-	case CallbackInstructionIOS:
-		return b.handleInstructionIOSCallback(c)
-	case CallbackInstructionAndroid:
-		return b.handleInstructionAndroidCallback(c)
-	case CallbackInstructionWindows:
-		return b.handleInstructionWindowsCallback(c)
-	case CallbackInstructionMac:
-		return b.handleInstructionMacCallback(c)
-	// Admin callbacks
-	case CallbackAdminList:
-		return b.handleAdminList(c)
-	case CallbackAdminCreate:
-		return b.handleAdminCreateCallback(c)
-	case CallbackAdminPromo:
-		return b.handlePromoList(c)
 	default:
 		slog.Warn("Unknown callback", "data", data)
 		return c.Respond()
@@ -165,28 +136,19 @@ func (b *Bot) handleStart(c tele.Context) error {
 	if user == nil {
 		return c.Send(MsgWelcome, &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: MainMenuKeyboard(),
+			ReplyMarkup: MenuKeyboard(),
 		})
 	}
 
 	// Existing user - show welcome back
-	keyboard := MainMenuKeyboard()
-	if user.SubscriptionStatus == database.StatusActive || user.SubscriptionStatus == database.StatusTrial {
-		keyboard = ActiveUserKeyboard()
-	}
-
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: keyboard,
+		ReplyMarkup: MenuKeyboard(),
 	})
 }
 
-// handleConnectCallback handles the connect button
-func (b *Bot) handleConnectCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
+// handleConnect handles the connect button request
+func (b *Bot) handleConnect(c tele.Context) error {
 	telegramID := c.Sender().ID
 	user, err := b.db.GetUserByTelegramID(telegramID)
 	if err != nil {
@@ -197,18 +159,18 @@ func (b *Bot) handleConnectCallback(c tele.Context) error {
 	// User already has active subscription
 	if user != nil && (user.SubscriptionStatus == database.StatusActive || user.SubscriptionStatus == database.StatusTrial) {
 		subLink := b.generateSubLink(user.UUID)
-		return c.Edit(fmt.Sprintf(MsgTrialActivated, user.SubscriptionEndAt.Format("02.01.2006 15:04"), subLink), &tele.SendOptions{
+		return c.Send(fmt.Sprintf(MsgTrialActivated, user.SubscriptionEndAt.Format("02.01.2006 15:04"), subLink), &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: BackKeyboard(),
+			ReplyMarkup: MenuKeyboard(),
 		})
 	}
 
 	// User exists but subscription expired or none
 	if user != nil {
 		if user.TrialUsed {
-			return c.Edit(MsgTrialUsed, &tele.SendOptions{
+			return c.Send(MsgTrialUsed, &tele.SendOptions{
 				ParseMode:   tele.ModeHTML,
-				ReplyMarkup: PaymentKeyboard(),
+				ReplyMarkup: PaymentReplyKeyboard(),
 			})
 		}
 		// Activate trial for existing user
@@ -235,11 +197,11 @@ func (b *Bot) activateTrialNewUser(c tele.Context) error {
 	// Login to both servers
 	if err := b.clientA.Login(); err != nil {
 		slog.Error("Failed to login to Server A", "error", err)
-		return c.Edit("Ошибка подключения к серверу. Попробуйте позже.")
+		return c.Send("Ошибка подключения к серверу. Попробуйте позже.")
 	}
 	if err := b.clientB.Login(); err != nil {
 		slog.Error("Failed to login to Server B", "error", err)
-		return c.Edit("Ошибка подключения к серверу. Попробуйте позже.")
+		return c.Send("Ошибка подключения к серверу. Попробуйте позже.")
 	}
 
 	// Create settings for both servers
@@ -264,21 +226,21 @@ func (b *Bot) activateTrialNewUser(c tele.Context) error {
 	// Add to servers
 	if err := b.clientA.AddClientWithSettings(b.config.ServerA.InboundID, settingsRU); err != nil {
 		slog.Error("Failed to add client to Server A", "error", err)
-		return c.Edit("Ошибка создания аккаунта. Попробуйте позже.")
+		return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
 	}
 
 	if err := b.clientB.AddClientWithSettings(b.config.ServerB.InboundID, settingsEU); err != nil {
 		slog.Error("Failed to add client to Server B", "error", err)
 		// Rollback Server A
 		_ = b.clientA.DeleteClient(b.config.ServerA.InboundID, clientUUID)
-		return c.Edit("Ошибка создания аккаунта. Попробуйте позже.")
+		return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
 	}
 
 	// Save to database
 	user, err := b.db.CreateUser(telegramID, email, clientUUID)
 	if err != nil {
 		slog.Error("Failed to create user in DB", "error", err)
-		return c.Edit("Ошибка создания аккаунта. Попробуйте позже.")
+		return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
 	}
 
 	// Update subscription status
@@ -293,9 +255,9 @@ func (b *Bot) activateTrialNewUser(c tele.Context) error {
 
 	subLink := b.generateSubLink(clientUUID)
 
-	return c.Edit(fmt.Sprintf(MsgTrialActivated, expiryTime.Format("02.01.2006 15:04"), subLink), &tele.SendOptions{
+	return c.Send(fmt.Sprintf(MsgTrialActivated, expiryTime.Format("02.01.2006 15:04"), subLink), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: InstructionsKeyboard(),
+		ReplyMarkup: InstructionsReplyKeyboard(),
 	})
 }
 
@@ -308,11 +270,11 @@ func (b *Bot) activateTrial(c tele.Context, user *database.User) error {
 	// Login to servers
 	if err := b.clientA.Login(); err != nil {
 		slog.Error("Failed to login to Server A", "error", err)
-		return c.Edit("Ошибка подключения к серверу. Попробуйте позже.")
+		return c.Send("Ошибка подключения к серверу. Попробуйте позже.")
 	}
 	if err := b.clientB.Login(); err != nil {
 		slog.Error("Failed to login to Server B", "error", err)
-		return c.Edit("Ошибка подключения к серверу. Попробуйте позже.")
+		return c.Send("Ошибка подключения к серверу. Попробуйте позже.")
 	}
 
 	// Update client settings
@@ -336,12 +298,12 @@ func (b *Bot) activateTrial(c tele.Context, user *database.User) error {
 
 	if err := b.clientA.UpdateClient(b.config.ServerA.InboundID, user.UUID, settingsRU); err != nil {
 		slog.Error("Failed to update client on Server A", "error", err)
-		return c.Edit("Ошибка активации. Попробуйте позже.")
+		return c.Send("Ошибка активации. Попробуйте позже.")
 	}
 
 	if err := b.clientB.UpdateClient(b.config.ServerB.InboundID, user.UUID, settingsEU); err != nil {
 		slog.Error("Failed to update client on Server B", "error", err)
-		return c.Edit("Ошибка активации. Попробуйте позже.")
+		return c.Send("Ошибка активации. Попробуйте позже.")
 	}
 
 	// Update database
@@ -355,28 +317,24 @@ func (b *Bot) activateTrial(c tele.Context, user *database.User) error {
 
 	subLink := b.generateSubLink(user.UUID)
 
-	return c.Edit(fmt.Sprintf(MsgTrialActivated, expiryTime.Format("02.01.2006 15:04"), subLink), &tele.SendOptions{
+	return c.Send(fmt.Sprintf(MsgTrialActivated, expiryTime.Format("02.01.2006 15:04"), subLink), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: InstructionsKeyboard(),
+		ReplyMarkup: InstructionsReplyKeyboard(),
 	})
 }
 
-// handleStatusCallback handles the status button
-func (b *Bot) handleStatusCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
+// handleStatus handles the status button
+func (b *Bot) handleStatus(c tele.Context) error {
 	user, err := b.db.GetUserByTelegramID(c.Sender().ID)
 	if err != nil {
 		slog.Error("Failed to get user", "error", err)
-		return c.Edit("Произошла ошибка. Попробуйте позже.")
+		return c.Send("Произошла ошибка. Попробуйте позже.")
 	}
 
 	if user == nil {
-		return c.Edit(MsgNoSubscription, &tele.SendOptions{
+		return c.Send(MsgNoSubscription, &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: MainMenuKeyboard(),
+			ReplyMarkup: MenuKeyboard(),
 		})
 	}
 
@@ -397,160 +355,160 @@ func (b *Bot) handleStatusCallback(c tele.Context) error {
 	subLink := b.generateSubLink(user.UUID)
 	msg := FormatStatus(user, subLink, trafficUsed, trafficLimit)
 
-	return c.Edit(msg, &tele.SendOptions{
+	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: BackKeyboard(),
+		ReplyMarkup: MenuKeyboard(),
 	})
 }
 
-// handleInstructionsCallback handles the instructions button
-func (b *Bot) handleInstructionsCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
-	return c.Edit(MsgInstructions, &tele.SendOptions{
+// handleInstructionsMenu handles the instructions menu button
+func (b *Bot) handleInstructionsMenu(c tele.Context) error {
+	return c.Send(MsgInstructions, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: InstructionsKeyboard(),
+		ReplyMarkup: InstructionsReplyKeyboard(),
 	})
 }
 
-// handleInstructionIOSCallback handles iOS instruction button
-func (b *Bot) handleInstructionIOSCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
+// handleInstructionIOS handles iOS instruction button
+func (b *Bot) handleInstructionIOS(c tele.Context) error {
 	subLink := b.getSubLinkForUser(c.Sender().ID)
-	return c.Edit(fmt.Sprintf(MsgInstructionIOS, subLink), &tele.SendOptions{
+	return c.Send(fmt.Sprintf(MsgInstructionIOS, subLink), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: BackKeyboard(),
+		ReplyMarkup: InstructionsReplyKeyboard(),
 	})
 }
 
-// handleInstructionAndroidCallback handles Android instruction button
-func (b *Bot) handleInstructionAndroidCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
+// handleInstructionAndroid handles Android instruction button
+func (b *Bot) handleInstructionAndroid(c tele.Context) error {
 	subLink := b.getSubLinkForUser(c.Sender().ID)
-	return c.Edit(fmt.Sprintf(MsgInstructionAndroid, subLink), &tele.SendOptions{
+	return c.Send(fmt.Sprintf(MsgInstructionAndroid, subLink), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: BackKeyboard(),
+		ReplyMarkup: InstructionsReplyKeyboard(),
 	})
 }
 
-// handleInstructionWindowsCallback handles Windows instruction button
-func (b *Bot) handleInstructionWindowsCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
+// handleInstructionWindows handles Windows instruction button
+func (b *Bot) handleInstructionWindows(c tele.Context) error {
 	subLink := b.getSubLinkForUser(c.Sender().ID)
-	return c.Edit(fmt.Sprintf(MsgInstructionWindows, subLink), &tele.SendOptions{
+	return c.Send(fmt.Sprintf(MsgInstructionWindows, subLink), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: BackKeyboard(),
+		ReplyMarkup: InstructionsReplyKeyboard(),
 	})
 }
 
-// handleInstructionMacCallback handles Mac instruction button
-func (b *Bot) handleInstructionMacCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
+// handleInstructionMac handles Mac instruction button
+func (b *Bot) handleInstructionMac(c tele.Context) error {
 	subLink := b.getSubLinkForUser(c.Sender().ID)
-	return c.Edit(fmt.Sprintf(MsgInstructionMac, subLink), &tele.SendOptions{
+	return c.Send(fmt.Sprintf(MsgInstructionMac, subLink), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: BackKeyboard(),
+		ReplyMarkup: InstructionsReplyKeyboard(),
 	})
 }
 
-// handleBuyTrafficCallback handles buy traffic button
-func (b *Bot) handleBuyTrafficCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
-	return c.Edit(MsgBuyTraffic, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: BackKeyboard(), // TODO: Add payment button when Robokassa is integrated
+// handlePaymentMenu opens the payment menu
+func (b *Bot) handlePaymentMenu(c tele.Context) error {
+	return c.Send("Выберите опцию:", &tele.SendOptions{
+		ReplyMarkup: PaymentReplyKeyboard(),
 	})
 }
 
-// handlePromoCallback handles promo button
-func (b *Bot) handlePromoCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
+// handleBuyTraffic handles buy traffic button
+func (b *Bot) handleBuyTraffic(c tele.Context) error {
+	return c.Send(MsgBuyTraffic, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: PaymentReplyKeyboard(),
+	})
+}
 
+// handlePromo handles promo button
+func (b *Bot) handlePromo(c tele.Context) error {
 	b.userStates[c.Sender().ID] = StateWaitPromo
-
-	return c.Edit(MsgEnterPromo, &tele.SendOptions{
+	return c.Send(MsgEnterPromo, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: PromoInputKeyboard(),
+		ReplyMarkup: CancelReplyKeyboard(),
 	})
 }
 
-// handleSupportCallback handles support button
-func (b *Bot) handleSupportCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
-	return c.Edit(MsgSupport, &tele.SendOptions{
+// handleSupport handles support button
+func (b *Bot) handleSupport(c tele.Context) error {
+	return c.Send(MsgSupport, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: BackKeyboard(),
+		ReplyMarkup: MenuKeyboard(),
 	})
 }
 
-// handleBackCallback handles back button
-func (b *Bot) handleBackCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
+// handleBack handles back button to return to main menu
+func (b *Bot) handleBack(c tele.Context) error {
 	// Clear user state
 	delete(b.userStates, c.Sender().ID)
-
-	user, _ := b.db.GetUserByTelegramID(c.Sender().ID)
-	keyboard := MainMenuKeyboard()
-	if user != nil && (user.SubscriptionStatus == database.StatusActive || user.SubscriptionStatus == database.StatusTrial) {
-		keyboard = ActiveUserKeyboard()
-	}
-
-	return c.Edit(MsgWelcomeBack, &tele.SendOptions{
+	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: keyboard,
+		ReplyMarkup: MenuKeyboard(),
 	})
 }
 
-// handlePayCallback handles pay button
-func (b *Bot) handlePayCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
+// handlePay handles pay button
+func (b *Bot) handlePay(c tele.Context) error {
 	// TODO: Integrate with Robokassa
-	return c.Edit("Оплата будет доступна в ближайшее время.\n\nОбратитесь в поддержку для ручной активации.", &tele.SendOptions{
+	return c.Send("Оплата будет доступна в ближайшее время.\n\nОбратитесь в поддержку для ручной активации.", &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: BackKeyboard(),
+		ReplyMarkup: PaymentReplyKeyboard(),
 	})
 }
 
-// handleTextMessage handles text messages (for promo codes and admin input)
+// handleTextMessage handles text messages (router)
 func (b *Bot) handleTextMessage(c tele.Context) error {
 	telegramID := c.Sender().ID
 	state := b.userStates[telegramID]
+	text := c.Text()
 
+	// 1. Handle States
 	switch state {
 	case StateWaitPromo:
+		if text == BtnCancel {
+			return b.handleBack(c)
+		}
 		return b.processPromoCode(c, c.Text())
 	case StateWaitClient:
+		if text == BtnCancel {
+			delete(b.userStates, c.Sender().ID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+		}
 		if b.isAdmin(c) {
 			return b.processCreateClient(c, c.Text())
 		}
+	}
+
+	// 2. Handle Menu Buttons
+	switch text {
+	case BtnConnect:
+		return b.handleConnect(c)
+	case BtnStatus:
+		return b.handleStatus(c)
+	case BtnInstructions:
+		return b.handleInstructionsMenu(c)
+	case BtnPayment:
+		return b.handlePaymentMenu(c)
+	case BtnPromo:
+		return b.handlePromo(c)
+	case BtnSupport:
+		return b.handleSupport(c)
+	case BtnBack:
+		return b.handleBack(c)
+	// Sub-menu handlers
+	case BtnInstIOS: return b.handleInstructionIOS(c)
+	case BtnInstAndroid: return b.handleInstructionAndroid(c)
+	case BtnInstWindows: return b.handleInstructionWindows(c)
+	case BtnInstMac: return b.handleInstructionMac(c)
+	case BtnPaySub: return b.handlePay(c)
+	case BtnBuyTraffic: return b.handleBuyTraffic(c)
+	// Admin buttons
+	case BtnAdminList:
+		return b.handleAdminList(c)
+	case BtnAdminCreate:
+		return b.handleAdminCreateRequest(c)
+	case BtnAdminPromos:
+		return b.handlePromoList(c)
 	}
 
 	// Unknown message - show main menu
@@ -642,16 +600,16 @@ func (b *Bot) processPromoCode(c tele.Context, code string) error {
 	user, err := b.db.GetUserByTelegramID(telegramID)
 	if err != nil {
 		slog.Error("Failed to get user", "error", err)
-		return c.Send(fmt.Sprintf(MsgPromoError, "Произошла ошибка"), &tele.SendOptions{
+		return c.Send("Произошла ошибка.", &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: BackKeyboard(),
+			ReplyMarkup: MenuKeyboard(),
 		})
 	}
 
 	if user == nil {
-		return c.Send(fmt.Sprintf(MsgPromoError, "Сначала активируйте триал или подписку"), &tele.SendOptions{
+		return c.Send("Сначала активируйте триал или подписку", &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: MainMenuKeyboard(),
+			ReplyMarkup: MenuKeyboard(),
 		})
 	}
 
@@ -660,16 +618,16 @@ func (b *Bot) processPromoCode(c tele.Context, code string) error {
 	if err != nil {
 		return c.Send(fmt.Sprintf(MsgPromoError, err.Error()), &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: BackKeyboard(),
+			ReplyMarkup: MenuKeyboard(),
 		})
 	}
 
 	// Apply promo code
 	if err := b.applyPromoCode(user, promo); err != nil {
 		slog.Error("Failed to apply promo code", "error", err)
-		return c.Send(fmt.Sprintf(MsgPromoError, "Ошибка применения промокода"), &tele.SendOptions{
+		return c.Send("Ошибка применения промокода", &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: BackKeyboard(),
+			ReplyMarkup: MenuKeyboard(),
 		})
 	}
 
@@ -681,7 +639,7 @@ func (b *Bot) processPromoCode(c tele.Context, code string) error {
 	result := FormatPromoResult(promo)
 	return c.Send(fmt.Sprintf(MsgPromoSuccess, result), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: BackKeyboard(),
+		ReplyMarkup: MenuKeyboard(),
 	})
 }
 

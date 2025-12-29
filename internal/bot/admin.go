@@ -26,21 +26,17 @@ func (b *Bot) handleAdminStart(c tele.Context) error {
 	})
 }
 
-// handleAdminCreateCallback handles admin create button callback
-func (b *Bot) handleAdminCreateCallback(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Error("Failed to respond to callback", "error", err)
-	}
-
+// handleAdminCreateRequest handles admin create button request
+func (b *Bot) handleAdminCreateRequest(c tele.Context) error {
 	if !b.isAdmin(c) {
 		return nil
 	}
 
 	b.userStates[c.Sender().ID] = StateWaitClient
 
-	return c.Edit(MsgAdminEnterClientName, &tele.SendOptions{
+	return c.Send(MsgAdminEnterClientName, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: BackKeyboard(),
+		ReplyMarkup: CancelReplyKeyboard(),
 	})
 }
 
@@ -140,7 +136,8 @@ func (b *Bot) handleAdminCreate(c tele.Context) error {
 	successMsg := fmt.Sprintf(MsgAdminClientCreated, email, clientUUID, subLink)
 
 	_, editErr := c.Bot().Edit(status, successMsg, &tele.SendOptions{
-		ParseMode: tele.ModeHTML,
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminKeyboard(),
 	})
 	return editErr
 }
@@ -181,7 +178,8 @@ func (b *Bot) handleAdminList(c tele.Context) error {
 	msg := fmt.Sprintf(MsgAdminClientList, len(users), sb.String())
 
 	return c.Send(msg, &tele.SendOptions{
-		ParseMode: tele.ModeHTML,
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminKeyboard(),
 	})
 }
 
@@ -370,7 +368,8 @@ func (b *Bot) handleAdminDelete(c tele.Context) error {
 	}
 
 	return c.Send(msg, &tele.SendOptions{
-		ParseMode: tele.ModeHTML,
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminKeyboard(),
 	})
 }
 
