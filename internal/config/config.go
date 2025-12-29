@@ -23,12 +23,13 @@ type ServerConfig struct {
 
 // Config holds all application configuration
 type Config struct {
-	BotToken string
-	AdminID  int64
-	SubPort  int
-	DBPath   string
-	ServerA  ServerConfig
-	ServerB  ServerConfig
+	BotToken         string
+	AdminID          int64
+	SubPort          int
+	SubscriptionHost string // Host for subscription links (domain or IP)
+	DBPath           string
+	ServerA          ServerConfig
+	ServerB          ServerConfig
 }
 
 // Load reads configuration from environment variables
@@ -37,8 +38,9 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		BotToken: os.Getenv("BOT_TOKEN"),
-		DBPath:   getEnvOrDefault("DB_PATH", "/app/data/users.db"),
+		BotToken:         os.Getenv("BOT_TOKEN"),
+		SubscriptionHost: os.Getenv("SUBSCRIPTION_HOST"),
+		DBPath:           getEnvOrDefault("DB_PATH", "/app/data/users.db"),
 	}
 
 	// Parse AdminID

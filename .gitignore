@@ -17,6 +17,8 @@ backups/
 # Docker
 *.log
 
+bot
+
 # IDE
 .vscode/
 .idea/
