@@ -20,13 +20,14 @@ func setupTestDB(t *testing.T) *DB {
 func TestCreateUser(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, err := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, err := db.CreateUser(123456, "test@example.com", "uuid-123", "testuser")
 	require.NoError(t, err)
 	require.NotNil(t, user)
 
 	assert.Equal(t, int64(123456), user.TelegramID)
 	assert.Equal(t, "test@example.com", user.Email)
 	assert.Equal(t, "uuid-123", user.UUID)
+	assert.Equal(t, "testuser", user.Username.String)
 	assert.Equal(t, StatusNone, user.SubscriptionStatus)
 	assert.False(t, user.TrialUsed)
 	assert.Equal(t, int64(0), user.RuExtraTraffic)
@@ -35,22 +36,22 @@ func TestCreateUser(t *testing.T) {
 func TestCreateUserDuplicate(t *testing.T) {
 	db := setupTestDB(t)
 
-	_, err := db.CreateUser(123456, "test@example.com", "uuid-123")
+	_, err := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 	require.NoError(t, err)
 
 	// Duplicate telegram_id
-	_, err = db.CreateUser(123456, "other@example.com", "uuid-456")
+	_, err = db.CreateUser(123456, "other@example.com", "uuid-456", "")
 	assert.Error(t, err)
 
 	// Duplicate email
-	_, err = db.CreateUser(789, "test@example.com", "uuid-789")
+	_, err = db.CreateUser(789, "test@example.com", "uuid-789", "")
 	assert.Error(t, err)
 }
 
 func TestGetUserByTelegramID(t *testing.T) {
 	db := setupTestDB(t)
 
-	created, err := db.CreateUser(123456, "test@example.com", "uuid-123")
+	created, err := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 	require.NoError(t, err)
 
 	user, err := db.GetUserByTelegramID(123456)
@@ -67,7 +68,7 @@ func TestGetUserByTelegramID(t *testing.T) {
 func TestGetUserByEmail(t *testing.T) {
 	db := setupTestDB(t)
 
-	_, err := db.CreateUser(123456, "test@example.com", "uuid-123")
+	_, err := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 	require.NoError(t, err)
 
 	user, err := db.GetUserByEmail("test@example.com")
@@ -79,7 +80,7 @@ func TestGetUserByEmail(t *testing.T) {
 func TestGetUserByUUID(t *testing.T) {
 	db := setupTestDB(t)
 
-	_, err := db.CreateUser(123456, "test@example.com", "uuid-123")
+	_, err := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 	require.NoError(t, err)
 
 	user, err := db.GetUserByUUID("uuid-123")
@@ -91,7 +92,7 @@ func TestGetUserByUUID(t *testing.T) {
 func TestUpdateUserSubscription(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, err := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, err := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 	require.NoError(t, err)
 
 	endTime := time.Now().Add(30 * 24 * time.Hour)
@@ -107,7 +108,7 @@ func TestUpdateUserSubscription(t *testing.T) {
 func TestMarkTrialUsed(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, err := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, err := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 	require.NoError(t, err)
 	assert.False(t, user.TrialUsed)
 
@@ -122,7 +123,7 @@ func TestMarkTrialUsed(t *testing.T) {
 func TestAddRuExtraTraffic(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, err := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, err := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 	require.NoError(t, err)
 
 	// Add 10GB
@@ -146,16 +147,16 @@ func TestGetActiveUsers(t *testing.T) {
 	db := setupTestDB(t)
 
 	// Create users with different statuses
-	user1, _ := db.CreateUser(1, "user1@test.com", "uuid-1")
+	user1, _ := db.CreateUser(1, "user1@test.com", "uuid-1", "")
 	db.UpdateUserSubscription(user1.ID, StatusActive, nil)
 
-	user2, _ := db.CreateUser(2, "user2@test.com", "uuid-2")
+	user2, _ := db.CreateUser(2, "user2@test.com", "uuid-2", "")
 	db.UpdateUserSubscription(user2.ID, StatusTrial, nil)
 
-	user3, _ := db.CreateUser(3, "user3@test.com", "uuid-3")
+	user3, _ := db.CreateUser(3, "user3@test.com", "uuid-3", "")
 	db.UpdateUserSubscription(user3.ID, StatusExpired, nil)
 
-	db.CreateUser(4, "user4@test.com", "uuid-4") // status = none
+	db.CreateUser(4, "user4@test.com", "uuid-4", "") // status = none
 
 	users, err := db.GetActiveUsers()
 	require.NoError(t, err)
@@ -169,7 +170,7 @@ func TestUserExists(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, exists)
 
-	_, err = db.CreateUser(123456, "test@example.com", "uuid-123")
+	_, err = db.CreateUser(123456, "test@example.com", "uuid-123", "")
 	require.NoError(t, err)
 
 	exists, err = db.UserExists(123456)
@@ -180,7 +181,7 @@ func TestUserExists(t *testing.T) {
 func TestDeleteUser(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, err := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, err := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 	require.NoError(t, err)
 
 	err = db.DeleteUser(user.ID)
@@ -196,7 +197,7 @@ func TestDeleteUser(t *testing.T) {
 func TestCreatePayment(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 
 	payment, err := db.CreatePayment(user.ID, "pay-123", "robokassa", 200, PaymentTypeMonthly, nil)
 	require.NoError(t, err)
@@ -213,7 +214,7 @@ func TestCreatePayment(t *testing.T) {
 func TestConfirmPayment(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 	_, err := db.CreatePayment(user.ID, "pay-123", "robokassa", 200, PaymentTypeMonthly, nil)
 	require.NoError(t, err)
 
@@ -229,7 +230,7 @@ func TestConfirmPayment(t *testing.T) {
 func TestFailPayment(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 	_, err := db.CreatePayment(user.ID, "pay-123", "robokassa", 200, PaymentTypeMonthly, nil)
 	require.NoError(t, err)
 
@@ -244,7 +245,7 @@ func TestFailPayment(t *testing.T) {
 func TestGetPaymentsByUserID(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 
 	db.CreatePayment(user.ID, "pay-1", "robokassa", 200, PaymentTypeMonthly, nil)
 	db.CreatePayment(user.ID, "pay-2", "robokassa", 100, PaymentTypeTraffic10G, nil)
@@ -257,7 +258,7 @@ func TestGetPaymentsByUserID(t *testing.T) {
 func TestGetUserTotalPaid(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 
 	db.CreatePayment(user.ID, "pay-1", "robokassa", 200, PaymentTypeMonthly, nil)
 	db.ConfirmPayment("pay-1")
@@ -293,7 +294,7 @@ func TestCreatePromoCode(t *testing.T) {
 func TestValidatePromoCode(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 
 	// Valid promo
 	validUntil := time.Now().Add(24 * time.Hour)
@@ -320,7 +321,7 @@ func TestValidatePromoCode(t *testing.T) {
 func TestUsePromoCode(t *testing.T) {
 	db := setupTestDB(t)
 
-	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123")
+	user, _ := db.CreateUser(123456, "test@example.com", "uuid-123", "")
 
 	promo, _ := db.CreatePromoCode("TEST", PromoTypeDiscount, 10, 2, nil)
 
@@ -337,7 +338,7 @@ func TestUsePromoCode(t *testing.T) {
 	assert.Contains(t, err.Error(), "already used")
 
 	// Different user can use
-	user2, _ := db.CreateUser(789, "user2@test.com", "uuid-789")
+	user2, _ := db.CreateUser(789, "user2@test.com", "uuid-789", "")
 	err = db.UsePromoCode(user2.ID, promo.ID)
 	require.NoError(t, err)
 
@@ -345,7 +346,7 @@ func TestUsePromoCode(t *testing.T) {
 	assert.Equal(t, 2, updated.UsedCount)
 
 	// Max uses reached
-	user3, _ := db.CreateUser(111, "user3@test.com", "uuid-111")
+	user3, _ := db.CreateUser(111, "user3@test.com", "uuid-111", "")
 	_, err = db.ValidatePromoCode("TEST", user3.ID)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "limit reached")
@@ -363,7 +364,7 @@ func TestGetActivePromoCodes(t *testing.T) {
 
 	// Create exhausted promo
 	exhausted, _ := db.CreatePromoCode("EXHAUSTED", PromoTypeDiscount, 10, 1, nil)
-	user, _ := db.CreateUser(123, "test@test.com", "uuid-test")
+	user, _ := db.CreateUser(123, "test@test.com", "uuid-test", "")
 	db.UsePromoCode(user.ID, exhausted.ID)
 
 	active, err := db.GetActivePromoCodes()
@@ -376,7 +377,7 @@ func TestDeletePromoCode(t *testing.T) {
 
 	promo, _ := db.CreatePromoCode("DELETE", PromoTypeDiscount, 10, 10, nil)
 
-	user, _ := db.CreateUser(123, "test@test.com", "uuid-test")
+	user, _ := db.CreateUser(123, "test@test.com", "uuid-test", "")
 	db.UsePromoCode(user.ID, promo.ID)
 
 	err := db.DeletePromoCode(promo.ID)

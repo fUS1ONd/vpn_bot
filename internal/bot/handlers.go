@@ -138,6 +138,14 @@ func (b *Bot) handleStart(c tele.Context) error {
 	}
 
 	// Existing user - show welcome back
+	// Update username if changed
+	currentUsername := c.Sender().Username
+	if user.Username.String != currentUsername {
+		if err := b.db.UpdateUserUsername(user.ID, currentUsername); err != nil {
+			slog.Error("Failed to update username", "error", err)
+		}
+	}
+
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: MenuKeyboard(user),
@@ -234,7 +242,7 @@ func (b *Bot) activateTrialNewUser(c tele.Context) error {
 	}
 
 	// Save to database
-	user, err := b.db.CreateUser(telegramID, email, clientUUID)
+	user, err := b.db.CreateUser(telegramID, email, clientUUID, c.Sender().Username)
 	if err != nil {
 		slog.Error("Failed to create user in DB", "error", err)
 		return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
@@ -621,7 +629,7 @@ func (b *Bot) processCreateClient(c tele.Context, email string) error {
 	}
 
 	// Save to database with telegram_id = 0 (NULL, admin-created user)
-	user, dbErr := b.db.CreateUser(0, email, clientUUID)
+	user, dbErr := b.db.CreateUser(0, email, clientUUID, "")
 	if dbErr != nil {
 		slog.Error("Failed to add user to database", "error", dbErr)
 		return c.Send(fmt.Sprintf("Ошибка сохранения в БД: %v", dbErr))
@@ -835,7 +843,7 @@ func (b *Bot) syncClients() error {
 
 		if existingUser == nil {
 			// New client from panel - add to database with telegram_id = 0 (NULL)
-			if _, err := b.db.CreateUser(0, client.Email, client.ID); err != nil {
+			if _, err := b.db.CreateUser(0, client.Email, client.ID, ""); err != nil {
 				slog.Error("Failed to add user to database", "email", client.Email, "error", err)
 				continue
 			}
@@ -887,6 +895,7 @@ func (b *Bot) syncUserStatus(user *database.User, client *threexui.ClientInfo) e
 		if err := b.db.UpdateUserSubscription(user.ID, newStatus, expiryTime); err != nil {
 			return err
 		}
+		slog.Info("Synced user status from panel", "email", user.Email, "new_status", newStatus, "expiry", expiryTime)
 	}
 
 	return nil

@@ -217,7 +217,8 @@ func FormatStatus(user *database.User, subLink string, trafficUsedRU, trafficLim
 	msg += fmt.Sprintf("<b>Статус:</b> %s %s\n", statusEmoji, statusText)
 
 	if user.SubscriptionEndAt != nil {
-		msg += fmt.Sprintf("<b>Действует до:</b> %s\n", user.SubscriptionEndAt.Format("02.01.2006 15:04"))
+		daysLeft := FormatDaysLeft(user.SubscriptionEndAt)
+		msg += fmt.Sprintf("<b>Действует до:</b> %s (%s)\n", user.SubscriptionEndAt.Format("02.01.2006 15:04"), daysLeft)
 	}
 
 	msg += "\n<b>Трафик RU сервер:</b>\n"

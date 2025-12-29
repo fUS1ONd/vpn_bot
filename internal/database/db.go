@@ -67,6 +67,7 @@ func migrate(conn *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			telegram_id INTEGER UNIQUE,
+			username TEXT,
 			email TEXT UNIQUE NOT NULL,
 			uuid TEXT UNIQUE NOT NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -128,6 +129,10 @@ func migrate(conn *sql.DB) error {
 		if _, err := conn.Exec(m); err != nil {
 			return fmt.Errorf("migration failed: %w\nSQL: %s", err, m)
 		}
+	}
+
+	if err := migrateAddUsername(conn); err != nil {
+		return fmt.Errorf("failed to migrate username column: %w", err)
 	}
 
 	return nil
@@ -205,10 +210,42 @@ func migrateOldSchema(conn *sql.DB) error {
 	return nil
 }
 
+// migrateAddUsername adds username column if it doesn't exist
+func migrateAddUsername(conn *sql.DB) error {
+	rows, err := conn.Query("PRAGMA table_info(users)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasUsername := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue interface{}
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if name == "username" {
+			hasUsername = true
+			break
+		}
+	}
+
+	if !hasUsername {
+		if _, err := conn.Exec("ALTER TABLE users ADD COLUMN username TEXT"); err != nil {
+			return fmt.Errorf("failed to add username column: %w", err)
+		}
+	}
+	return nil
+}
+
 // User represents a user record
 type User struct {
 	ID                 int64
 	TelegramID         int64
+	Username           sql.NullString
 	Email              string
 	UUID               string
 	CreatedAt          time.Time

@@ -140,7 +140,7 @@ func (b *Bot) handleAdminCreate(c tele.Context) error {
 
 	// Save to database
 	endTime := time.Now().AddDate(0, 1, 0)
-	user, dbErr := b.db.CreateUser(0, email, clientUUID)
+	user, dbErr := b.db.CreateUser(0, email, clientUUID, "")
 	if dbErr != nil {
 		slog.Error("Failed to add user to database", "error", dbErr)
 		_, editErr := c.Bot().Edit(status, fmt.Sprintf("Ошибка сохранения в БД: %v", dbErr))
@@ -192,7 +192,19 @@ func (b *Bot) handleAdminList(c tele.Context) error {
 		subLink := b.generateSubLink(user.UUID)
 		statusIcon := b.getStatusIcon(user.SubscriptionStatus)
 
-		sb.WriteString(fmt.Sprintf("<b>%d. %s</b> %s\n", i+1, user.Email, statusIcon))
+		username := ""
+		if user.Username.Valid && user.Username.String != "" {
+			username = fmt.Sprintf(" (@%s)", user.Username.String)
+		}
+
+		expiryInfo := "Бессрочно"
+		if user.SubscriptionEndAt != nil {
+			daysLeft := FormatDaysLeft(user.SubscriptionEndAt)
+			expiryInfo = fmt.Sprintf("%s (%s)", user.SubscriptionEndAt.Format("02.01.2006"), daysLeft)
+		}
+
+		sb.WriteString(fmt.Sprintf("<b>%d. %s</b>%s %s\n", i+1, user.Email, username, statusIcon))
+		sb.WriteString(fmt.Sprintf("   Активен до: %s\n", expiryInfo))
 		sb.WriteString(fmt.Sprintf("   UUID: <code>%s</code>\n", user.UUID))
 		sb.WriteString(fmt.Sprintf("   Ссылка: <code>%s</code>\n\n", subLink))
 	}

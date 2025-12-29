@@ -7,21 +7,21 @@ import (
 )
 
 // CreateUser creates a new user (telegramID = 0 means NULL / admin-created)
-func (db *DB) CreateUser(telegramID int64, email, uuid string) (*User, error) {
+func (db *DB) CreateUser(telegramID int64, email, uuid, username string) (*User, error) {
 	var result sql.Result
 	var err error
 
 	if telegramID == 0 {
 		// Admin-created user - telegram_id is NULL
 		result, err = db.conn.Exec(
-			`INSERT INTO users (telegram_id, email, uuid) VALUES (NULL, ?, ?)`,
-			email, uuid,
+			`INSERT INTO users (telegram_id, email, uuid, username) VALUES (NULL, ?, ?, ?)`,
+			email, uuid, sql.NullString{String: username, Valid: username != ""},
 		)
 	} else {
 		// Real Telegram user
 		result, err = db.conn.Exec(
-			`INSERT INTO users (telegram_id, email, uuid) VALUES (?, ?, ?)`,
-			telegramID, email, uuid,
+			`INSERT INTO users (telegram_id, email, uuid, username) VALUES (?, ?, ?, ?)`,
+			telegramID, email, uuid, sql.NullString{String: username, Valid: username != ""},
 		)
 	}
 
@@ -40,7 +40,7 @@ func (db *DB) CreateUser(telegramID int64, email, uuid string) (*User, error) {
 // GetUserByID retrieves a user by ID
 func (db *DB) GetUserByID(id int64) (*User, error) {
 	return db.scanUser(db.conn.QueryRow(
-		`SELECT id, telegram_id, email, uuid, created_at, subscription_status,
+		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
 		        subscription_end_at, trial_used, ru_extra_traffic
 		 FROM users WHERE id = ?`, id,
 	))
@@ -49,7 +49,7 @@ func (db *DB) GetUserByID(id int64) (*User, error) {
 // GetUserByTelegramID retrieves a user by Telegram ID
 func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 	return db.scanUser(db.conn.QueryRow(
-		`SELECT id, telegram_id, email, uuid, created_at, subscription_status,
+		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
 		        subscription_end_at, trial_used, ru_extra_traffic
 		 FROM users WHERE telegram_id = ?`, telegramID,
 	))
@@ -58,7 +58,7 @@ func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 // GetUserByEmail retrieves a user by email
 func (db *DB) GetUserByEmail(email string) (*User, error) {
 	return db.scanUser(db.conn.QueryRow(
-		`SELECT id, telegram_id, email, uuid, created_at, subscription_status,
+		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
 		        subscription_end_at, trial_used, ru_extra_traffic
 		 FROM users WHERE email = ?`, email,
 	))
@@ -67,7 +67,7 @@ func (db *DB) GetUserByEmail(email string) (*User, error) {
 // GetUserByUUID retrieves a user by UUID
 func (db *DB) GetUserByUUID(uuid string) (*User, error) {
 	return db.scanUser(db.conn.QueryRow(
-		`SELECT id, telegram_id, email, uuid, created_at, subscription_status,
+		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
 		        subscription_end_at, trial_used, ru_extra_traffic
 		 FROM users WHERE uuid = ?`, uuid,
 	))
@@ -80,7 +80,7 @@ func (db *DB) scanUser(row *sql.Row) (*User, error) {
 	var subscriptionEndAt sql.NullTime
 
 	err := row.Scan(
-		&user.ID, &telegramID, &user.Email, &user.UUID, &user.CreatedAt,
+		&user.ID, &telegramID, &user.Username, &user.Email, &user.UUID, &user.CreatedAt,
 		&user.SubscriptionStatus, &subscriptionEndAt, &user.TrialUsed, &user.RuExtraTraffic,
 	)
 	if err == sql.ErrNoRows {
@@ -104,7 +104,7 @@ func (db *DB) scanUser(row *sql.Row) (*User, error) {
 // GetAllUsers retrieves all users
 func (db *DB) GetAllUsers() ([]User, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, telegram_id, email, uuid, created_at, subscription_status,
+		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
 		        subscription_end_at, trial_used, ru_extra_traffic
 		 FROM users ORDER BY id`,
 	)
@@ -119,7 +119,7 @@ func (db *DB) GetAllUsers() ([]User, error) {
 // GetActiveUsers retrieves users with active or trial subscriptions
 func (db *DB) GetActiveUsers() ([]User, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, telegram_id, email, uuid, created_at, subscription_status,
+		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
 		        subscription_end_at, trial_used, ru_extra_traffic
 		 FROM users WHERE subscription_status IN (?, ?) ORDER BY id`,
 		StatusActive, StatusTrial,
@@ -135,7 +135,7 @@ func (db *DB) GetActiveUsers() ([]User, error) {
 // GetExpiredUsers retrieves users whose subscription has expired
 func (db *DB) GetExpiredUsers() ([]User, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, telegram_id, email, uuid, created_at, subscription_status,
+		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
 		        subscription_end_at, trial_used, ru_extra_traffic
 		 FROM users
 		 WHERE subscription_status IN (?, ?)
@@ -161,7 +161,7 @@ func (db *DB) scanUsers(rows *sql.Rows) ([]User, error) {
 		var subscriptionEndAt sql.NullTime
 
 		if err := rows.Scan(
-			&user.ID, &telegramID, &user.Email, &user.UUID, &user.CreatedAt,
+			&user.ID, &telegramID, &user.Username, &user.Email, &user.UUID, &user.CreatedAt,
 			&user.SubscriptionStatus, &subscriptionEndAt, &user.TrialUsed, &user.RuExtraTraffic,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
@@ -193,6 +193,18 @@ func (db *DB) UpdateUserSubscription(userID int64, status string, endAt *time.Ti
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
+	}
+	return nil
+}
+
+// UpdateUserUsername updates user's telegram username
+func (db *DB) UpdateUserUsername(userID int64, username string) error {
+	_, err := db.conn.Exec(
+		`UPDATE users SET username = ? WHERE id = ?`,
+		sql.NullString{String: username, Valid: username != ""}, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update username: %w", err)
 	}
 	return nil
 }
