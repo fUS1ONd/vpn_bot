@@ -261,6 +261,11 @@ func (b *Bot) processPromoAdd(c tele.Context, text string) error {
 		return c.Send("Неверный тип промокода. Допустимые: discount, free_days, extra_traffic", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
 	}
 
+	// For extra_traffic type, convert GB to bytes
+	if promoType == database.PromoTypeExtraTraffic {
+		value = value * 1024 * 1024 * 1024 // GB to bytes
+	}
+
 	var validUntil *time.Time
 	if len(args) > 4 {
 		days, err := strconv.Atoi(args[4])
@@ -276,8 +281,14 @@ func (b *Bot) processPromoAdd(c tele.Context, text string) error {
 		return c.Send(fmt.Sprintf("Ошибка создания промокода: %v", err))
 	}
 
-	msg := fmt.Sprintf("<b>Промокод создан!</b>\n\nКод: <code>%s</code>\nТип: %s\nЗначение: %d\nМакс. использований: %d",
-		promo.Code, promo.Type, promo.Value, promo.MaxUses)
+	// Display value: for extra_traffic show in GB, otherwise show raw value
+	displayValue := fmt.Sprintf("%d", promo.Value)
+	if promo.Type == database.PromoTypeExtraTraffic {
+		displayValue = fmt.Sprintf("%d GB", promo.Value/(1024*1024*1024))
+	}
+
+	msg := fmt.Sprintf("<b>Промокод создан!</b>\n\nКод: <code>%s</code>\nТип: %s\nЗначение: %s\nМакс. использований: %d",
+		promo.Code, promo.Type, displayValue, promo.MaxUses)
 
 	if validUntil != nil {
 		msg += fmt.Sprintf("\nДействует до: %s", validUntil.Format("02.01.2006"))
@@ -349,8 +360,14 @@ func (b *Bot) handlePromoList(c tele.Context) error {
 			statusIcon = "X"
 		}
 
-		sb.WriteString(fmt.Sprintf("%s <code>%s</code> (%s: %d) — %d/%d\n",
-			statusIcon, p.Code, p.Type, p.Value, p.UsedCount, p.MaxUses))
+		// Display value: for extra_traffic show in GB
+		displayValue := fmt.Sprintf("%d", p.Value)
+		if p.Type == database.PromoTypeExtraTraffic {
+			displayValue = fmt.Sprintf("%d GB", p.Value/(1024*1024*1024))
+		}
+
+		sb.WriteString(fmt.Sprintf("%s <code>%s</code> (%s: %s) — %d/%d\n",
+			statusIcon, p.Code, p.Type, displayValue, p.UsedCount, p.MaxUses))
 	}
 
 	msg := fmt.Sprintf(MsgAdminPromoList, sb.String())

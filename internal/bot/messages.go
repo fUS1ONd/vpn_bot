@@ -340,7 +340,8 @@ const (
 <code>Code Type Value MaxUses [Days]</code>
 
 Типы: <i>discount, free_days, extra_traffic</i>
-Пример: <code>FREE3DAYS free_days 3 100 30</code>`
+Value для extra_traffic указывается в GB
+Пример: <code>EXTRA10 extra_traffic 10 100 30</code>`
 
 	MsgAdminEnterPromoCode = `<b>Удаление промокода</b>
 
