@@ -783,6 +783,11 @@ func (b *Bot) applyPromoCode(user *database.User, promo *database.PromoCode) err
 		return b.updatePanelExpiry(user, newEnd.UnixMilli())
 
 	case database.PromoTypeExtraTraffic:
+		// Check if subscription is active
+		if user.SubscriptionStatus != database.StatusActive && user.SubscriptionStatus != database.StatusTrial {
+			return fmt.Errorf("промокод на трафик можно применить только при активной подписке")
+		}
+
 		// Add extra traffic
 		if err := b.db.AddRuExtraTraffic(user.ID, int64(promo.Value)); err != nil {
 			return err

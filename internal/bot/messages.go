@@ -120,12 +120,14 @@ const (
 
 	MsgBuyTraffic = `<b>Докупить трафик</b>
 
-На RU сервере действует лимит 30GB/мес.
+На 🇷🇺→🇩🇪 сервере действует лимит 30GB/мес.
 Вы можете докупить дополнительный трафик.
 
 <b>Стоимость:</b> 100 руб за 10GB
 
-<i>На EU сервере трафик безлимитный.</i>`
+⚠️ <b>Важно:</b> При истечении подписки неиспользованный трафик сгорает.
+
+<i>На 🇩🇪 и 🇳🇱 серверах трафик безлимитный.</i>`
 
 	MsgInstructions = `<b>Инструкции по настройке</b>
 
@@ -133,8 +135,8 @@ const (
 
 	MsgInstructionIOS = `<b>Настройка на iOS (iPhone/iPad)</b>
 
-1. Скачайте приложение <b>Streisand</b> из App Store:
-   https://apps.apple.com/app/streisand/id6450534064
+1. Скачайте приложение <b>v2raytun</b> из App Store:
+   https://apps.apple.com/app/v2raytun/id6476628951
 
 2. Откройте приложение
 
@@ -142,45 +144,44 @@ const (
 
 4. Выберите "Добавить из буфера обмена"
 
-5. Вставьте вашу ссылку подписки
-
-6. Включите VPN переключателем
+5. Выберите сервер и включите VPN переключателем
 
 <b>Ваша ссылка подписки:</b>
 <code>%s</code>`
 
 	MsgInstructionAndroid = `<b>Настройка на Android</b>
 
-1. Скачайте приложение <b>v2rayNG</b>:
-   https://play.google.com/store/apps/details?id=com.v2ray.ang
+1. Скачайте приложение <b>v2raytun</b> из play market:
+   https://play.google.com/store/apps/details?id=com.v2raytun.android&hl=en_GB
 
-   Или APK: https://github.com/2dust/v2rayNG/releases
+   Или APK: https://github.com/DigneZzZ/v2raytun/releases/
 
 2. Откройте приложение
 
 3. Нажмите "+" в правом верхнем углу
 
-4. Выберите "Импорт из буфера обмена"
+4. Выберите "Добавить из буфера обмена"
 
-5. Вставьте вашу ссылку подписки
+5. Включите VPN переключателем
 
-6. Выберите сервер и нажмите кнопку подключения
+<b>Ваша ссылка подписки:</b>
+<code>%s</code>
 
 <b>Ваша ссылка подписки:</b>
 <code>%s</code>`
 
-	MsgInstructionWindows = `<b>Настройка на Windows</b>
+	MsgInstructionWindows = `<b>Настройка на Windows/linux</b>
 
-1. Скачайте <b>Hiddify</b>:
-   https://github.com/hiddify/hiddify-next/releases
+1. Скачайте <b>Nekobox</b>:
+   https://github.com/MatsuriDayo/nekoray/releases/
 
 2. Установите и откройте программу
 
-3. Нажмите "+" и выберите "Добавить из буфера"
+3. Нажмите "Программа" -> "Добавить профиль из буфера обмена"
 
-4. Вставьте вашу ссылку подписки
+4. Выберите нужный сервер из списка, правой кнопкой мыши "Запустить"
 
-5. Выберите сервер и нажмите "Подключить"
+5. Активируйте чекбоксы "Режим tun" и "Режим системного прокси"
 
 <b>Ваша ссылка подписки:</b>
 <code>%s</code>`
@@ -264,7 +265,7 @@ func FormatStatus(user *database.User, subLink string, trafficUsedRU, trafficLim
 		msg += fmt.Sprintf("%.2f GB использовано\n", usedGB)
 	}
 
-	msg += "\n<b>EU сервер:</b> Безлимит\n"
+	msg += "\n<b>EU сервера:</b> Безлимит\n"
 
 	if user.SubscriptionStatus == database.StatusActive || user.SubscriptionStatus == database.StatusTrial {
 		msg += fmt.Sprintf("\n<b>Ссылка подписки:</b>\n<code>%s</code>", subLink)
