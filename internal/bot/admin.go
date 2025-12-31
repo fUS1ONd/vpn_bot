@@ -493,3 +493,112 @@ func (b *Bot) generateSubLink(clientUUID string) string {
 	myIP := extractIP(b.config.ServerA.BaseURL)
 	return fmt.Sprintf("http://%s:%d/sub/%s", myIP, b.config.SubPort, clientUUID)
 }
+
+// handleAdminBroadcastMenu handles broadcast submenu
+func (b *Bot) handleAdminBroadcastMenu(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	// Get counts for display
+	allUsers, _ := b.db.GetAllUsersWithTelegram()
+	activeUsers, _ := b.db.GetActiveUsersWithTelegram()
+
+	msg := fmt.Sprintf(MsgAdminBroadcastMenu, len(allUsers), len(activeUsers))
+
+	return c.Send(msg, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminBroadcastKeyboard(),
+	})
+}
+
+// handleBroadcastAllRequest handles request to broadcast to all users
+func (b *Bot) handleBroadcastAllRequest(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	users, _ := b.db.GetAllUsersWithTelegram()
+	b.userStates[c.Sender().ID] = StateWaitBroadcastAll
+
+	return c.Send(fmt.Sprintf(MsgAdminEnterBroadcast, len(users), "всем пользователям"), &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: CancelReplyKeyboard(),
+	})
+}
+
+// handleBroadcastActiveRequest handles request to broadcast to active users only
+func (b *Bot) handleBroadcastActiveRequest(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	users, _ := b.db.GetActiveUsersWithTelegram()
+	b.userStates[c.Sender().ID] = StateWaitBroadcastActive
+
+	return c.Send(fmt.Sprintf(MsgAdminEnterBroadcast, len(users), "активным пользователям"), &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: CancelReplyKeyboard(),
+	})
+}
+
+// processBroadcast sends broadcast message to users
+func (b *Bot) processBroadcast(c tele.Context, message string, activeOnly bool) error {
+	delete(b.userStates, c.Sender().ID)
+
+	var users []database.User
+	var err error
+
+	if activeOnly {
+		users, err = b.db.GetActiveUsersWithTelegram()
+	} else {
+		users, err = b.db.GetAllUsersWithTelegram()
+	}
+
+	if err != nil {
+		slog.Error("Failed to get users for broadcast", "error", err)
+		return c.Send("Ошибка получения списка пользователей", &tele.SendOptions{ReplyMarkup: AdminBroadcastKeyboard()})
+	}
+
+	if len(users) == 0 {
+		return c.Send("Нет пользователей для рассылки", &tele.SendOptions{ReplyMarkup: AdminBroadcastKeyboard()})
+	}
+
+	// Send status message
+	statusMsg, err := c.Bot().Send(c.Sender(), fmt.Sprintf("Начинаю рассылку %d пользователям...", len(users)))
+	if err != nil {
+		return err
+	}
+
+	successCount := 0
+	failCount := 0
+
+	for _, user := range users {
+		if user.TelegramID == 0 {
+			continue
+		}
+
+		recipient := &tele.User{ID: user.TelegramID}
+		_, err := c.Bot().Send(recipient, message, &tele.SendOptions{
+			ParseMode: tele.ModeHTML,
+		})
+
+		if err != nil {
+			slog.Error("Failed to send broadcast to user", "telegram_id", user.TelegramID, "error", err)
+			failCount++
+		} else {
+			successCount++
+		}
+
+		// Small delay to avoid rate limiting
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	resultMsg := fmt.Sprintf(MsgAdminBroadcastResult, successCount, failCount)
+	_, _ = c.Bot().Edit(statusMsg, resultMsg, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminBroadcastKeyboard(),
+	})
+
+	return nil
+}

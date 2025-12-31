@@ -310,3 +310,39 @@ func (db *DB) NeedsTrafficReset(user *User) bool {
 	}
 	return time.Since(*user.TrafficResetAt) > 30*24*time.Hour
 }
+
+// GetActiveUsersWithTelegram retrieves users with active subscriptions who have telegram_id
+func (db *DB) GetActiveUsersWithTelegram() ([]User, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
+		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
+		 FROM users
+		 WHERE subscription_status IN (?, ?)
+		   AND telegram_id IS NOT NULL
+		 ORDER BY id`,
+		StatusActive, StatusTrial,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query active users with telegram: %w", err)
+	}
+	defer rows.Close()
+
+	return db.scanUsers(rows)
+}
+
+// GetAllUsersWithTelegram retrieves all users who have telegram_id (ever activated bot)
+func (db *DB) GetAllUsersWithTelegram() ([]User, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
+		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
+		 FROM users
+		 WHERE telegram_id IS NOT NULL
+		 ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all users with telegram: %w", err)
+	}
+	defer rows.Close()
+
+	return db.scanUsers(rows)
+}

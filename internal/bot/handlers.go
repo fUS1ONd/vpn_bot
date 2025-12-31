@@ -15,12 +15,14 @@ import (
 
 // User states for conversation
 const (
-	StateNone             = ""
-	StateWaitPromo        = "wait_promo"
-	StateWaitClient       = "wait_client"
-	StateWaitClientDelete = "wait_client_delete"
-	StateWaitPromoAdd     = "wait_promo_add"
-	StateWaitPromoDel     = "wait_promo_del"
+	StateNone              = ""
+	StateWaitPromo         = "wait_promo"
+	StateWaitClient        = "wait_client"
+	StateWaitClientDelete  = "wait_client_delete"
+	StateWaitPromoAdd      = "wait_promo_add"
+	StateWaitPromoDel      = "wait_promo_del"
+	StateWaitBroadcastAll  = "wait_broadcast_all"
+	StateWaitBroadcastActive = "wait_broadcast_active"
 )
 
 // Bot represents the Telegram bot
@@ -563,6 +565,22 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		if b.isAdmin(c) {
 			return b.processPromoDel(c, c.Text())
 		}
+	case StateWaitBroadcastAll:
+		if text == BtnCancel {
+			delete(b.userStates, c.Sender().ID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminBroadcastKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processBroadcast(c, c.Text(), false)
+		}
+	case StateWaitBroadcastActive:
+		if text == BtnCancel {
+			delete(b.userStates, c.Sender().ID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminBroadcastKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processBroadcast(c, c.Text(), true)
+		}
 	}
 
 	// Admin specific buttons routing
@@ -572,6 +590,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleAdminClientsMenu(c)
 		case BtnAdminPromos:
 			return b.handleAdminPromosMenu(c)
+		case BtnAdminBroadcast:
+			return b.handleAdminBroadcastMenu(c)
 		case BtnAdminUserMode:
 			return b.handleBack(c) // Go to User Menu
 		case BtnAdminBack:
@@ -590,6 +610,11 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handlePromoAddRequest(c)
 		case BtnAdminPromosDelete:
 			return b.handlePromoDelRequest(c)
+		// Broadcast Submenu
+		case BtnBroadcastAll:
+			return b.handleBroadcastAllRequest(c)
+		case BtnBroadcastActive:
+			return b.handleBroadcastActiveRequest(c)
 		}
 	}
 

@@ -40,6 +40,7 @@ const (
 	// Admin buttons
 	BtnAdminClients     = "👥 Клиенты"
 	BtnAdminPromos      = "🎫 Промокоды"
+	BtnAdminBroadcast   = "📢 Рассылка"
 	BtnAdminUserMode    = "👤 Режим пользователя"
 	BtnAdminBack        = "🔙 В меню админа"
 
@@ -50,6 +51,9 @@ const (
 	BtnAdminPromosList   = "📋 Список промо"
 	BtnAdminPromosCreate = "➕ Создать промо"
 	BtnAdminPromosDelete = "➖ Удалить промо"
+
+	BtnBroadcastAll    = "📢 Всем пользователям"
+	BtnBroadcastActive = "📢 Только активным"
 )
 
 // Status icons for dynamic buttons
@@ -132,6 +136,7 @@ func AdminKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnAdminClients), menu.Text(BtnAdminPromos)),
+		menu.Row(menu.Text(BtnAdminBroadcast)),
 		menu.Row(menu.Text(BtnAdminUserMode)),
 	)
 	return menu
@@ -152,6 +157,17 @@ func AdminPromosKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnAdminPromosList), menu.Text(BtnAdminPromosCreate), menu.Text(BtnAdminPromosDelete)),
+		menu.Row(menu.Text(BtnAdminBack)),
+	)
+	return menu
+}
+
+// AdminBroadcastKeyboard returns keyboard for admin broadcast menu
+func AdminBroadcastKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnBroadcastAll)),
+		menu.Row(menu.Text(BtnBroadcastActive)),
 		menu.Row(menu.Text(BtnAdminBack)),
 	)
 	return menu
