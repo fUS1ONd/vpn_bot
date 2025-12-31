@@ -41,7 +41,7 @@ func (db *DB) CreateUser(telegramID int64, email, uuid, username string) (*User,
 func (db *DB) GetUserByID(id int64) (*User, error) {
 	return db.scanUser(db.conn.QueryRow(
 		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic
+		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
 		 FROM users WHERE id = ?`, id,
 	))
 }
@@ -50,7 +50,7 @@ func (db *DB) GetUserByID(id int64) (*User, error) {
 func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 	return db.scanUser(db.conn.QueryRow(
 		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic
+		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
 		 FROM users WHERE telegram_id = ?`, telegramID,
 	))
 }
@@ -59,7 +59,7 @@ func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 func (db *DB) GetUserByEmail(email string) (*User, error) {
 	return db.scanUser(db.conn.QueryRow(
 		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic
+		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
 		 FROM users WHERE email = ?`, email,
 	))
 }
@@ -68,7 +68,7 @@ func (db *DB) GetUserByEmail(email string) (*User, error) {
 func (db *DB) GetUserByUUID(uuid string) (*User, error) {
 	return db.scanUser(db.conn.QueryRow(
 		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic
+		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
 		 FROM users WHERE uuid = ?`, uuid,
 	))
 }
@@ -78,10 +78,12 @@ func (db *DB) scanUser(row *sql.Row) (*User, error) {
 	var user User
 	var telegramID sql.NullInt64
 	var subscriptionEndAt sql.NullTime
+	var trafficResetAt sql.NullTime
 
 	err := row.Scan(
 		&user.ID, &telegramID, &user.Username, &user.Email, &user.UUID, &user.CreatedAt,
 		&user.SubscriptionStatus, &subscriptionEndAt, &user.TrialUsed, &user.RuExtraTraffic,
+		&trafficResetAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -98,6 +100,10 @@ func (db *DB) scanUser(row *sql.Row) (*User, error) {
 		user.SubscriptionEndAt = &subscriptionEndAt.Time
 	}
 
+	if trafficResetAt.Valid {
+		user.TrafficResetAt = &trafficResetAt.Time
+	}
+
 	return &user, nil
 }
 
@@ -105,7 +111,7 @@ func (db *DB) scanUser(row *sql.Row) (*User, error) {
 func (db *DB) GetAllUsers() ([]User, error) {
 	rows, err := db.conn.Query(
 		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic
+		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
 		 FROM users ORDER BY id`,
 	)
 	if err != nil {
@@ -120,7 +126,7 @@ func (db *DB) GetAllUsers() ([]User, error) {
 func (db *DB) GetActiveUsers() ([]User, error) {
 	rows, err := db.conn.Query(
 		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic
+		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
 		 FROM users WHERE subscription_status IN (?, ?) ORDER BY id`,
 		StatusActive, StatusTrial,
 	)
@@ -136,7 +142,7 @@ func (db *DB) GetActiveUsers() ([]User, error) {
 func (db *DB) GetExpiredUsers() ([]User, error) {
 	rows, err := db.conn.Query(
 		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic
+		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
 		 FROM users
 		 WHERE subscription_status IN (?, ?)
 		   AND subscription_end_at IS NOT NULL
@@ -159,10 +165,12 @@ func (db *DB) scanUsers(rows *sql.Rows) ([]User, error) {
 		var user User
 		var telegramID sql.NullInt64
 		var subscriptionEndAt sql.NullTime
+		var trafficResetAt sql.NullTime
 
 		if err := rows.Scan(
 			&user.ID, &telegramID, &user.Username, &user.Email, &user.UUID, &user.CreatedAt,
 			&user.SubscriptionStatus, &subscriptionEndAt, &user.TrialUsed, &user.RuExtraTraffic,
+			&trafficResetAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
 		}
@@ -173,6 +181,10 @@ func (db *DB) scanUsers(rows *sql.Rows) ([]User, error) {
 
 		if subscriptionEndAt.Valid {
 			user.SubscriptionEndAt = &subscriptionEndAt.Time
+		}
+
+		if trafficResetAt.Valid {
+			user.TrafficResetAt = &trafficResetAt.Time
 		}
 
 		users = append(users, user)
@@ -259,4 +271,42 @@ func (db *DB) UserExists(telegramID int64) (bool, error) {
 		return false, fmt.Errorf("failed to check user existence: %w", err)
 	}
 	return exists, nil
+}
+
+// SetUnlimitedSubscription sets user to unlimited subscription (no expiry, with traffic reset tracking)
+func (db *DB) SetUnlimitedSubscription(userID int64) error {
+	now := time.Now()
+	_, err := db.conn.Exec(
+		`UPDATE users SET subscription_status = ?, subscription_end_at = NULL, traffic_reset_at = ? WHERE id = ?`,
+		StatusActive, now, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set unlimited subscription: %w", err)
+	}
+	return nil
+}
+
+// UpdateTrafficResetAt updates the traffic reset timestamp
+func (db *DB) UpdateTrafficResetAt(userID int64, resetAt time.Time) error {
+	_, err := db.conn.Exec(
+		`UPDATE users SET traffic_reset_at = ? WHERE id = ?`,
+		resetAt, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update traffic reset time: %w", err)
+	}
+	return nil
+}
+
+// IsUnlimitedSubscription checks if user has unlimited subscription (no end date but active)
+func (db *DB) IsUnlimitedSubscription(user *User) bool {
+	return user.SubscriptionStatus == StatusActive && user.SubscriptionEndAt == nil
+}
+
+// NeedsTrafficReset checks if user needs monthly traffic reset (more than 30 days since last reset)
+func (db *DB) NeedsTrafficReset(user *User) bool {
+	if user.TrafficResetAt == nil {
+		return false
+	}
+	return time.Since(*user.TrafficResetAt) > 30*24*time.Hour
 }

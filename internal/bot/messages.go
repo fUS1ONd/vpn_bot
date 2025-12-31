@@ -305,7 +305,9 @@ func FormatPromoResult(promo *database.PromoCode) string {
 		return fmt.Sprintf("Добавлено %d дней к подписке!", promo.Value)
 	case database.PromoTypeExtraTraffic:
 		gb := float64(promo.Value) / (1024 * 1024 * 1024)
-		return fmt.Sprintf("Добавлено %.0f GB трафика на RU сервер!", gb)
+		return fmt.Sprintf("Добавлено %.0f GB трафика на 🇷🇺→🇩🇪 сервер!", gb)
+	case database.PromoTypeUnlimited:
+		return "Активирована бессрочная подписка! Трафик 🇷🇺→🇩🇪 сервера (30GB) будет обновляться каждые 30 дней."
 	default:
 		return "Промокод применен!"
 	}
@@ -340,9 +342,15 @@ const (
 Введите данные через пробел:
 <code>Code Type Value MaxUses [Days]</code>
 
-Типы: <i>discount, free_days, extra_traffic</i>
-Value для extra_traffic указывается в GB
-Пример: <code>EXTRA10 extra_traffic 10 100 30</code>`
+Типы:
+• <i>discount</i> — скидка (value = %)
+• <i>free_days</i> — дни подписки (value = дней)
+• <i>extra_traffic</i> — трафик RU (value = GB)
+• <i>unlimited</i> — бессрочная подписка (value = 0)
+
+Примеры:
+<code>EXTRA10 extra_traffic 10 100 30</code>
+<code>VIP unlimited 0 1</code>`
 
 	MsgAdminEnterPromoCode = `<b>Удаление промокода</b>
 

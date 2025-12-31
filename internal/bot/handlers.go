@@ -379,6 +379,11 @@ func (b *Bot) handleStatus(c tele.Context) error {
 		})
 	}
 
+	// Check and reset traffic for unlimited subscriptions if needed
+	if err := b.checkAndResetTrafficIfNeeded(user); err != nil {
+		slog.Error("Failed to check/reset traffic", "error", err)
+	}
+
 	// Get traffic from panel
 	var trafficUsed int64
 	var trafficLimit int64 = b.config.ServerA.LimitBytes + user.RuExtraTraffic
@@ -799,6 +804,15 @@ func (b *Bot) applyPromoCode(user *database.User, promo *database.PromoCode) err
 	case database.PromoTypeDiscount:
 		// Discount is applied during payment - nothing to do here
 		return nil
+
+	case database.PromoTypeUnlimited:
+		// Set unlimited subscription
+		if err := b.db.SetUnlimitedSubscription(user.ID); err != nil {
+			return err
+		}
+
+		// Reset traffic in panel and set no expiry
+		return b.resetPanelForUnlimited(user)
 	}
 
 	return nil
@@ -893,6 +907,91 @@ func (b *Bot) updatePanelTrafficLimit(user *database.User, extraBytes int64) err
 	}
 
 	return b.clientA.UpdateClient(b.config.ServerA.InboundID, user.UUID, settings)
+}
+
+// resetPanelForUnlimited resets traffic and removes expiry for unlimited subscription
+func (b *Bot) resetPanelForUnlimited(user *database.User) error {
+	if err := b.clientA.Login(); err != nil {
+		return err
+	}
+	if err := b.clientB.Login(); err != nil {
+		return err
+	}
+	if err := b.clientC.Login(); err != nil {
+		return err
+	}
+
+	// Reset Server A with base limit and no expiry
+	settingsA := threexui.ClientSettings{
+		UUID:       user.UUID,
+		Email:      user.Email,
+		LimitIP:    2,
+		TotalGB:    b.config.ServerA.LimitBytes, // 30GB
+		ExpiryTime: 0,                           // No expiry
+		Enable:     true,
+	}
+	if err := b.clientA.ResetClientTraffic(b.config.ServerA.InboundID, user.Email); err != nil {
+		slog.Error("Failed to reset traffic on Server A", "error", err)
+	}
+	if err := b.clientA.UpdateClient(b.config.ServerA.InboundID, user.UUID, settingsA); err != nil {
+		return err
+	}
+
+	// Reset Server B with no limit and no expiry
+	settingsEU := threexui.ClientSettings{
+		UUID:       user.UUID,
+		Email:      user.Email,
+		LimitIP:    2,
+		TotalGB:    0, // Unlimited
+		ExpiryTime: 0, // No expiry
+		Enable:     true,
+	}
+	if err := b.clientB.UpdateClient(b.config.ServerB.InboundID, user.UUID, settingsEU); err != nil {
+		return err
+	}
+
+	// Reset Server C with no limit and no expiry
+	if err := b.clientC.UpdateClient(b.config.ServerC.InboundID, user.UUID, settingsEU); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// checkAndResetTrafficIfNeeded checks if user needs monthly traffic reset and performs it
+func (b *Bot) checkAndResetTrafficIfNeeded(user *database.User) error {
+	// Only for unlimited subscriptions
+	if !b.db.IsUnlimitedSubscription(user) {
+		return nil
+	}
+
+	// Check if 30 days passed since last reset
+	if !b.db.NeedsTrafficReset(user) {
+		return nil
+	}
+
+	slog.Info("Resetting monthly traffic for unlimited user", "email", user.Email)
+
+	// Reset traffic in panel
+	if err := b.clientA.Login(); err != nil {
+		return err
+	}
+	if err := b.clientA.ResetClientTraffic(b.config.ServerA.InboundID, user.Email); err != nil {
+		return err
+	}
+
+	// Update reset timestamp
+	now := time.Now()
+	if err := b.db.UpdateTrafficResetAt(user.ID, now); err != nil {
+		return err
+	}
+
+	// Reset extra traffic in DB
+	if err := b.db.ResetRuExtraTraffic(user.ID); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // getSubLinkForUser returns subscription link for user

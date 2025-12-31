@@ -135,6 +135,10 @@ func migrate(conn *sql.DB) error {
 		return fmt.Errorf("failed to migrate username column: %w", err)
 	}
 
+	if err := migrateAddTrafficResetAt(conn); err != nil {
+		return fmt.Errorf("failed to migrate traffic_reset_at column: %w", err)
+	}
+
 	return nil
 }
 
@@ -241,6 +245,37 @@ func migrateAddUsername(conn *sql.DB) error {
 	return nil
 }
 
+// migrateAddTrafficResetAt adds traffic_reset_at column if it doesn't exist
+func migrateAddTrafficResetAt(conn *sql.DB) error {
+	rows, err := conn.Query("PRAGMA table_info(users)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasColumn := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue interface{}
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if name == "traffic_reset_at" {
+			hasColumn = true
+			break
+		}
+	}
+
+	if !hasColumn {
+		if _, err := conn.Exec("ALTER TABLE users ADD COLUMN traffic_reset_at TIMESTAMP"); err != nil {
+			return fmt.Errorf("failed to add traffic_reset_at column: %w", err)
+		}
+	}
+	return nil
+}
+
 // User represents a user record
 type User struct {
 	ID                 int64
@@ -253,6 +288,7 @@ type User struct {
 	SubscriptionEndAt  *time.Time
 	TrialUsed          bool
 	RuExtraTraffic     int64
+	TrafficResetAt     *time.Time // For unlimited subscriptions - when traffic was last reset
 }
 
 // Payment represents a payment record

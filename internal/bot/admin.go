@@ -269,8 +269,9 @@ func (b *Bot) processPromoAdd(c tele.Context, text string) error {
 	// Validate promo type
 	if promoType != database.PromoTypeDiscount &&
 		promoType != database.PromoTypeFreeDays &&
-		promoType != database.PromoTypeExtraTraffic {
-		return c.Send("Неверный тип промокода. Допустимые: discount, free_days, extra_traffic", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
+		promoType != database.PromoTypeExtraTraffic &&
+		promoType != database.PromoTypeUnlimited {
+		return c.Send("Неверный тип промокода. Допустимые: discount, free_days, extra_traffic, unlimited", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
 	}
 
 	// For extra_traffic type, convert GB to bytes

@@ -11,6 +11,7 @@ const (
 	PromoTypeDiscount     = "discount"      // value = discount percentage
 	PromoTypeFreeDays     = "free_days"     // value = number of free days
 	PromoTypeExtraTraffic = "extra_traffic" // value = bytes of extra traffic
+	PromoTypeUnlimited    = "unlimited"     // value = ignored, grants unlimited subscription with monthly traffic reset
 )
 
 // CreatePromoCode creates a new promo code
