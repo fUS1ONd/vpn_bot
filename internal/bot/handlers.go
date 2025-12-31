@@ -91,6 +91,11 @@ func New(token string, db *database.DB, clientA, clientB, clientC *threexui.Clie
 	// Handle text messages (Main interaction router)
 	b.Handle(tele.OnText, bot.handleTextMessage)
 
+	// Handle media messages for broadcast
+	b.Handle(tele.OnPhoto, bot.handleMediaMessage)
+	b.Handle(tele.OnVideo, bot.handleMediaMessage)
+	b.Handle(tele.OnDocument, bot.handleMediaMessage)
+
 	return bot, nil
 }
 
@@ -115,6 +120,27 @@ func (b *Bot) handleCallback(c tele.Context) error {
 		slog.Warn("Unknown callback", "data", data)
 		return c.Respond()
 	}
+}
+
+// handleMediaMessage handles photo/video/document messages (for broadcast)
+func (b *Bot) handleMediaMessage(c tele.Context) error {
+	telegramID := c.Sender().ID
+	state := b.userStates[telegramID]
+
+	// Only handle media in broadcast states
+	switch state {
+	case StateWaitBroadcastAll:
+		if b.isAdmin(c) {
+			return b.processBroadcastMessage(c, false)
+		}
+	case StateWaitBroadcastActive:
+		if b.isAdmin(c) {
+			return b.processBroadcastMessage(c, true)
+		}
+	}
+
+	// Ignore media in other states
+	return nil
 }
 
 // handleStart handles the /start command
@@ -571,7 +597,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminBroadcastKeyboard()})
 		}
 		if b.isAdmin(c) {
-			return b.processBroadcast(c, c.Text(), false)
+			return b.processBroadcastMessage(c, false)
 		}
 	case StateWaitBroadcastActive:
 		if text == BtnCancel {
@@ -579,7 +605,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminBroadcastKeyboard()})
 		}
 		if b.isAdmin(c) {
-			return b.processBroadcast(c, c.Text(), true)
+			return b.processBroadcastMessage(c, true)
 		}
 	}
 

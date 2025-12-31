@@ -542,8 +542,8 @@ func (b *Bot) handleBroadcastActiveRequest(c tele.Context) error {
 	})
 }
 
-// processBroadcast sends broadcast message to users
-func (b *Bot) processBroadcast(c tele.Context, message string, activeOnly bool) error {
+// processBroadcastMessage sends broadcast message (text, photo, video, document) to users
+func (b *Bot) processBroadcastMessage(c tele.Context, activeOnly bool) error {
 	delete(b.userStates, c.Sender().ID)
 
 	var users []database.User
@@ -572,6 +572,7 @@ func (b *Bot) processBroadcast(c tele.Context, message string, activeOnly bool) 
 
 	successCount := 0
 	failCount := 0
+	msg := c.Message()
 
 	for _, user := range users {
 		if user.TelegramID == 0 {
@@ -579,7 +580,9 @@ func (b *Bot) processBroadcast(c tele.Context, message string, activeOnly bool) 
 		}
 
 		recipient := &tele.User{ID: user.TelegramID}
-		_, err := c.Bot().Send(recipient, message, &tele.SendOptions{
+
+		// Copy the original message (works for text, photo, video, document, etc.)
+		_, err := c.Bot().Copy(recipient, msg, &tele.SendOptions{
 			ParseMode: tele.ModeHTML,
 		})
 
