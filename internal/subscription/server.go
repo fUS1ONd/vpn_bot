@@ -15,17 +15,19 @@ import (
 
 // Server handles VPN subscription requests
 type Server struct {
-	db       *database.DB
-	clientA  *threexui.Client
-	config   *config.Config
+	db      *database.DB
+	clientA *threexui.Client
+	clientC *threexui.Client
+	config  *config.Config
 }
 
 // New creates a new subscription server
-func New(db *database.DB, clientA *threexui.Client, cfg *config.Config) *Server {
+func New(db *database.DB, clientA, clientC *threexui.Client, cfg *config.Config) *Server {
 	return &Server{
-		db:       db,
-		clientA:  clientA,
-		config:   cfg,
+		db:      db,
+		clientA: clientA,
+		clientC: clientC,
+		config:  cfg,
 	}
 }
 
@@ -59,9 +61,9 @@ func (s *Server) handleSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 	clientName := user.Email
 
-	// Generate VLESS links
-	linkA, linkB := vless.GenerateLinks(clientUUID, clientName, s.config.ServerA, s.config.ServerB)
-	configText := fmt.Sprintf("%s\n%s", linkA, linkB)
+	// Generate VLESS links for all servers
+	linkA, linkB, linkC := vless.GenerateLinks(clientUUID, s.config.ServerA, s.config.ServerB, s.config.ServerC)
+	configText := fmt.Sprintf("%s\n%s\n%s", linkA, linkB, linkC)
 	configBase64 := base64.StdEncoding.EncodeToString([]byte(configText))
 
 	// Get traffic stats from Server A (where limits are set)

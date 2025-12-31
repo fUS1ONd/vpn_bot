@@ -29,12 +29,13 @@ type Bot struct {
 	db         *database.DB
 	clientA    *threexui.Client
 	clientB    *threexui.Client
+	clientC    *threexui.Client
 	config     *config.Config
 	userStates map[int64]string
 }
 
 // New creates a new Telegram bot
-func New(token string, db *database.DB, clientA, clientB *threexui.Client, cfg *config.Config) (*Bot, error) {
+func New(token string, db *database.DB, clientA, clientB, clientC *threexui.Client, cfg *config.Config) (*Bot, error) {
 	pref := tele.Settings{
 		Token:  token,
 		Poller: &tele.LongPoller{},
@@ -50,6 +51,7 @@ func New(token string, db *database.DB, clientA, clientB *threexui.Client, cfg *
 		db:         db,
 		clientA:    clientA,
 		clientB:    clientB,
+		clientC:    clientC,
 		config:     cfg,
 		userStates: make(map[int64]string),
 	}
@@ -214,7 +216,7 @@ func (b *Bot) activateTrialNewUser(c tele.Context) error {
 	// Trial traffic limit: 1GB
 	trialTrafficBytes := int64(1 * 1024 * 1024 * 1024)
 
-	// Login to both servers
+	// Login to all servers
 	if err := b.clientA.Login(); err != nil {
 		slog.Error("Failed to login to Server A", "error", err)
 		return c.Send("Ошибка подключения к серверу. Попробуйте позже.")
@@ -223,8 +225,12 @@ func (b *Bot) activateTrialNewUser(c tele.Context) error {
 		slog.Error("Failed to login to Server B", "error", err)
 		return c.Send("Ошибка подключения к серверу. Попробуйте позже.")
 	}
+	if err := b.clientC.Login(); err != nil {
+		slog.Error("Failed to login to Server C", "error", err)
+		return c.Send("Ошибка подключения к серверу. Попробуйте позже.")
+	}
 
-	// Create settings for both servers
+	// Create settings for all servers
 	settingsRU := threexui.ClientSettings{
 		UUID:       clientUUID,
 		Email:      email,
@@ -251,8 +257,14 @@ func (b *Bot) activateTrialNewUser(c tele.Context) error {
 
 	if err := b.clientB.AddClientWithSettings(b.config.ServerB.InboundID, settingsEU); err != nil {
 		slog.Error("Failed to add client to Server B", "error", err)
-		// Rollback Server A
 		_ = b.clientA.DeleteClient(b.config.ServerA.InboundID, clientUUID)
+		return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
+	}
+
+	if err := b.clientC.AddClientWithSettings(b.config.ServerC.InboundID, settingsEU); err != nil {
+		slog.Error("Failed to add client to Server C", "error", err)
+		_ = b.clientA.DeleteClient(b.config.ServerA.InboundID, clientUUID)
+		_ = b.clientB.DeleteClient(b.config.ServerB.InboundID, clientUUID)
 		return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
 	}
 
@@ -296,6 +308,10 @@ func (b *Bot) activateTrial(c tele.Context, user *database.User) error {
 		slog.Error("Failed to login to Server B", "error", err)
 		return c.Send("Ошибка подключения к серверу. Попробуйте позже.")
 	}
+	if err := b.clientC.Login(); err != nil {
+		slog.Error("Failed to login to Server C", "error", err)
+		return c.Send("Ошибка подключения к серверу. Попробуйте позже.")
+	}
 
 	// Update client settings
 	settingsRU := threexui.ClientSettings{
@@ -323,6 +339,11 @@ func (b *Bot) activateTrial(c tele.Context, user *database.User) error {
 
 	if err := b.clientB.UpdateClient(b.config.ServerB.InboundID, user.UUID, settingsEU); err != nil {
 		slog.Error("Failed to update client on Server B", "error", err)
+		return c.Send("Ошибка активации. Попробуйте позже.")
+	}
+
+	if err := b.clientC.UpdateClient(b.config.ServerC.InboundID, user.UUID, settingsEU); err != nil {
+		slog.Error("Failed to update client on Server C", "error", err)
 		return c.Send("Ошибка активации. Попробуйте позже.")
 	}
 
@@ -608,7 +629,7 @@ func (b *Bot) processCreateClient(c tele.Context, email string) error {
 	expiryTime := time.Now().AddDate(0, 1, 0)
 	expiryTimeMs := expiryTime.UnixMilli()
 
-	// Login to both servers
+	// Login to all servers
 	if err := b.clientA.Login(); err != nil {
 		slog.Error("Failed to login to Server A", "error", err)
 		return c.Send(fmt.Sprintf("Ошибка подключения к Server A: %v", err))
@@ -619,7 +640,12 @@ func (b *Bot) processCreateClient(c tele.Context, email string) error {
 		return c.Send(fmt.Sprintf("Ошибка подключения к Server B: %v", err))
 	}
 
-	// Create settings for both servers
+	if err := b.clientC.Login(); err != nil {
+		slog.Error("Failed to login to Server C", "error", err)
+		return c.Send(fmt.Sprintf("Ошибка подключения к Server C: %v", err))
+	}
+
+	// Create settings for all servers
 	settingsRU := threexui.ClientSettings{
 		UUID:       clientUUID,
 		Email:      email,
@@ -644,14 +670,20 @@ func (b *Bot) processCreateClient(c tele.Context, email string) error {
 		slog.Error("Failed to add client to Server A", "error", errA)
 	}
 
-	// Add client to Server B (EU)
+	// Add client to Server B (DE)
 	errB := b.clientB.AddClientWithSettings(b.config.ServerB.InboundID, settingsEU)
 	if errB != nil {
 		slog.Error("Failed to add client to Server B", "error", errB)
 	}
 
-	if errA != nil || errB != nil {
-		return c.Send(fmt.Sprintf("Ошибка:\nRU: %v\nEU: %v", errA, errB))
+	// Add client to Server C (NL)
+	errC := b.clientC.AddClientWithSettings(b.config.ServerC.InboundID, settingsEU)
+	if errC != nil {
+		slog.Error("Failed to add client to Server C", "error", errC)
+	}
+
+	if errA != nil || errB != nil || errC != nil {
+		return c.Send(fmt.Sprintf("Ошибка:\nRU: %v\nDE: %v\nNL: %v", errA, errB, errC))
 	}
 
 	// Save to database with telegram_id = 0 (NULL, admin-created user)
@@ -775,6 +807,9 @@ func (b *Bot) updatePanelExpiry(user *database.User, expiryTimeMs int64) error {
 	if err := b.clientB.Login(); err != nil {
 		return err
 	}
+	if err := b.clientC.Login(); err != nil {
+		return err
+	}
 
 	// Get current status to preserve other settings
 	statusA, err := b.clientA.GetClientStatus(b.config.ServerA.InboundID, user.Email)
@@ -809,7 +844,25 @@ func (b *Bot) updatePanelExpiry(user *database.User, expiryTimeMs int64) error {
 		Enable:     true,
 	}
 
-	return b.clientB.UpdateClient(b.config.ServerB.InboundID, user.UUID, settingsB)
+	if err := b.clientB.UpdateClient(b.config.ServerB.InboundID, user.UUID, settingsB); err != nil {
+		return err
+	}
+
+	statusC, err := b.clientC.GetClientStatus(b.config.ServerC.InboundID, user.Email)
+	if err != nil {
+		return err
+	}
+
+	settingsC := threexui.ClientSettings{
+		UUID:       user.UUID,
+		Email:      user.Email,
+		LimitIP:    statusC.LimitIP,
+		TotalGB:    statusC.TotalGB,
+		ExpiryTime: expiryTimeMs,
+		Enable:     true,
+	}
+
+	return b.clientC.UpdateClient(b.config.ServerC.InboundID, user.UUID, settingsC)
 }
 
 // updatePanelTrafficLimit adds extra traffic to the panel limit

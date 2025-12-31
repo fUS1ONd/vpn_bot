@@ -51,7 +51,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Login to both servers
+	clientC, err := threexui.New(cfg.ServerC)
+	if err != nil {
+		slog.Error("Failed to create Server C client", "error", err)
+		os.Exit(1)
+	}
+
+	// Login to all servers
 	slog.Info("Logging in to Server A...")
 	if err := clientA.Login(); err != nil {
 		slog.Error("Failed to login to Server A", "error", err)
@@ -64,8 +70,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	slog.Info("Logging in to Server C...")
+	if err := clientC.Login(); err != nil {
+		slog.Error("Failed to login to Server C", "error", err)
+		os.Exit(1)
+	}
+
 	// Start subscription server in a goroutine
-	subServer := subscription.New(db, clientA, cfg)
+	subServer := subscription.New(db, clientA, clientC, cfg)
 	go func() {
 		if err := subServer.Start(cfg.SubPort); err != nil {
 			slog.Error("Subscription server failed", "error", err)
@@ -73,7 +85,7 @@ func main() {
 	}()
 
 	// Create and start Telegram bot
-	telegramBot, err := bot.New(cfg.BotToken, db, clientA, clientB, cfg)
+	telegramBot, err := bot.New(cfg.BotToken, db, clientA, clientB, clientC, cfg)
 	if err != nil {
 		slog.Error("Failed to create Telegram bot", "error", err)
 		os.Exit(1)

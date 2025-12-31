@@ -8,13 +8,14 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/config"
 )
 
-// GenerateLinks creates VLESS subscription links for both servers
-func GenerateLinks(uuid, email string, serverA, serverB config.ServerConfig) (linkA, linkB string) {
+// GenerateLinks creates VLESS subscription links for all servers
+func GenerateLinks(uuid string, serverA, serverB, serverC config.ServerConfig) (linkA, linkB, linkC string) {
 	// Extract IP from base URL (remove https:// and port)
 	ipA := extractIP(serverA.BaseURL)
 	ipB := extractIP(serverB.BaseURL)
+	ipC := extractIP(serverC.BaseURL)
 
-	// Link A (Russia server with 30GB limit)
+	// Link A (Russia cascade server with 30GB limit, exit in Germany)
 	linkA = fmt.Sprintf("vless://%s@%s:443?security=reality&encryption=none&pbk=%s&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=%s&sid=%s&spx=%s#%s",
 		uuid,
 		ipA,
@@ -22,7 +23,7 @@ func GenerateLinks(uuid, email string, serverA, serverB config.ServerConfig) (li
 		url.QueryEscape(serverA.SNI),
 		url.QueryEscape(serverA.SID),
 		url.QueryEscape("/"),
-		url.QueryEscape(fmt.Sprintf("🇷🇺 %s | 30GB", email)),
+		url.QueryEscape("🇷🇺→🇩🇪 | 30GB"),
 	)
 
 	// Link B (Germany server unlimited)
@@ -33,10 +34,21 @@ func GenerateLinks(uuid, email string, serverA, serverB config.ServerConfig) (li
 		url.QueryEscape(serverB.SNI),
 		url.QueryEscape(serverB.SID),
 		url.QueryEscape("/"),
-		url.QueryEscape(fmt.Sprintf("🇩🇪 %s | FR", email)),
+		url.QueryEscape("🇩🇪 DE | ∞"),
 	)
 
-	return linkA, linkB
+	// Link C (Netherlands server unlimited)
+	linkC = fmt.Sprintf("vless://%s@%s:443?security=reality&encryption=none&pbk=%s&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=%s&sid=%s&spx=%s#%s",
+		uuid,
+		ipC,
+		url.QueryEscape(serverC.PublicKey),
+		url.QueryEscape(serverC.SNI),
+		url.QueryEscape(serverC.SID),
+		url.QueryEscape("/"),
+		url.QueryEscape("🇳🇱 NL | ∞"),
+	)
+
+	return linkA, linkB, linkC
 }
 
 // extractIP extracts IP address from URL (removes https:// and :port)

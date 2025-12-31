@@ -30,6 +30,7 @@ type Config struct {
 	DBPath           string
 	ServerA          ServerConfig
 	ServerB          ServerConfig
+	ServerC          ServerConfig
 }
 
 // Load reads configuration from environment variables
@@ -67,6 +68,12 @@ func Load() (*Config, error) {
 	cfg.ServerB, err = loadServerConfig("SERVER_B")
 	if err != nil {
 		return nil, fmt.Errorf("failed to load Server B config: %w", err)
+	}
+
+	// Load Server C config
+	cfg.ServerC, err = loadServerConfig("SERVER_C")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load Server C config: %w", err)
 	}
 
 	// Validate required fields

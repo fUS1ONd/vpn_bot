@@ -85,7 +85,7 @@ func (b *Bot) handleAdminCreate(c tele.Context) error {
 		return err
 	}
 
-	// Login to both servers
+	// Login to all servers
 	if err := b.clientA.Login(); err != nil {
 		slog.Error("Failed to login to Server A", "error", err)
 		_, editErr := c.Bot().Edit(status, fmt.Sprintf("Ошибка подключения к Server A: %v", err))
@@ -98,10 +98,16 @@ func (b *Bot) handleAdminCreate(c tele.Context) error {
 		return editErr
 	}
 
+	if err := b.clientC.Login(); err != nil {
+		slog.Error("Failed to login to Server C", "error", err)
+		_, editErr := c.Bot().Edit(status, fmt.Sprintf("Ошибка подключения к Server C: %v", err))
+		return editErr
+	}
+
 	// Calculate expiry time (1 month from now)
 	expiryTime := time.Now().AddDate(0, 1, 0).UnixMilli()
 
-	// Create settings for both servers
+	// Create settings for all servers
 	settingsRU := threexui.ClientSettings{
 		UUID:       clientUUID,
 		Email:      email,
@@ -126,14 +132,20 @@ func (b *Bot) handleAdminCreate(c tele.Context) error {
 		slog.Error("Failed to add client to Server A", "error", errA)
 	}
 
-	// Add client to Server B (EU)
+	// Add client to Server B (DE)
 	errB := b.clientB.AddClientWithSettings(b.config.ServerB.InboundID, settingsEU)
 	if errB != nil {
 		slog.Error("Failed to add client to Server B", "error", errB)
 	}
 
-	if errA != nil || errB != nil {
-		errorMsg := fmt.Sprintf("Ошибка:\nRU: %v\nEU: %v", errA, errB)
+	// Add client to Server C (NL)
+	errC := b.clientC.AddClientWithSettings(b.config.ServerC.InboundID, settingsEU)
+	if errC != nil {
+		slog.Error("Failed to add client to Server C", "error", errC)
+	}
+
+	if errA != nil || errB != nil || errC != nil {
+		errorMsg := fmt.Sprintf("Ошибка:\nRU: %v\nDE: %v\nNL: %v", errA, errB, errC)
 		_, editErr := c.Bot().Edit(status, errorMsg)
 		return editErr
 	}
@@ -410,11 +422,15 @@ func (b *Bot) processAdminDeleteClient(c tele.Context, email string) error {
 	// Login to servers
 	if err := b.clientA.Login(); err != nil {
 		slog.Error("Failed to login to Server A", "error", err)
-		return c.Send(fmt.Sprintf("Ошибка подключения к Server A: %v", err)) // Keep keyboard?
+		return c.Send(fmt.Sprintf("Ошибка подключения к Server A: %v", err))
 	}
 	if err := b.clientB.Login(); err != nil {
 		slog.Error("Failed to login to Server B", "error", err)
 		return c.Send(fmt.Sprintf("Ошибка подключения к Server B: %v", err))
+	}
+	if err := b.clientC.Login(); err != nil {
+		slog.Error("Failed to login to Server C", "error", err)
+		return c.Send(fmt.Sprintf("Ошибка подключения к Server C: %v", err))
 	}
 
 	// Delete from Server A
@@ -429,6 +445,12 @@ func (b *Bot) processAdminDeleteClient(c tele.Context, email string) error {
 		slog.Error("Failed to delete client from Server B", "error", errB)
 	}
 
+	// Delete from Server C
+	errC := b.clientC.DeleteClient(b.config.ServerC.InboundID, user.UUID)
+	if errC != nil {
+		slog.Error("Failed to delete client from Server C", "error", errC)
+	}
+
 	// Delete from database
 	if err := b.db.DeleteUser(user.ID); err != nil {
 		slog.Error("Failed to delete user from database", "error", err)
@@ -436,8 +458,8 @@ func (b *Bot) processAdminDeleteClient(c tele.Context, email string) error {
 	}
 
 	msg := fmt.Sprintf("<b>Клиент удалён</b>\n\nEmail: <code>%s</code>", email)
-	if errA != nil || errB != nil {
-		msg += fmt.Sprintf("\n\n<i>Предупреждения:\nRU: %v\nEU: %v</i>", errA, errB)
+	if errA != nil || errB != nil || errC != nil {
+		msg += fmt.Sprintf("\n\n<i>Предупреждения:\nRU: %v\nDE: %v\nNL: %v</i>", errA, errB, errC)
 	}
 
 	return c.Send(msg, &tele.SendOptions{
