@@ -252,6 +252,8 @@ func FormatStatus(user *database.User, subLink string, trafficUsedRU, trafficLim
 	if user.SubscriptionEndAt != nil {
 		daysLeft := FormatDaysLeft(user.SubscriptionEndAt)
 		msg += fmt.Sprintf("<b>Действует до:</b> %s (%s)\n", user.SubscriptionEndAt.Format("02.01.2006 15:04"), daysLeft)
+	} else if user.SubscriptionStatus == database.StatusActive {
+		msg += "<b>Тип:</b> Unlimited\n"
 	}
 
 	msg += "\n<b>Трафик RU сервер:</b>\n"
@@ -263,6 +265,16 @@ func FormatStatus(user *database.User, subLink string, trafficUsedRU, trafficLim
 		msg += fmt.Sprintf("%.2f GB / %.0f GB (%.0f%%)\n", usedGB, limitGB, percent)
 	} else {
 		msg += fmt.Sprintf("%.2f GB использовано\n", usedGB)
+	}
+
+	// Show next traffic reset date for unlimited subscriptions
+	if user.SubscriptionEndAt == nil && user.TrafficResetAt != nil {
+		nextReset := user.TrafficResetAt.AddDate(0, 0, 30)
+		daysUntilReset := int(time.Until(nextReset).Hours() / 24)
+		if daysUntilReset < 0 {
+			daysUntilReset = 0
+		}
+		msg += fmt.Sprintf("<b>Сброс трафика:</b> %s (через %d дн.)\n", nextReset.Format("02.01.2006"), daysUntilReset)
 	}
 
 	msg += "\n<b>EU сервера:</b> Безлимит\n"

@@ -76,6 +76,9 @@ func MenuKeyboard(user *database.User) *tele.ReplyMarkup {
 	if user != nil && (user.SubscriptionStatus == database.StatusActive || user.SubscriptionStatus == database.StatusTrial) {
 		if user.SubscriptionEndAt != nil {
 			infoText = fmt.Sprintf("%s до %s %s", StatusActiveIcon, user.SubscriptionEndAt.Format("02.01 15:04"), StatusActiveIcon)
+		} else {
+			// Unlimited subscription
+			infoText = fmt.Sprintf("%s Unlimited %s", StatusActiveIcon, StatusActiveIcon)
 		}
 	}
 	btnInfo := menu.Text(infoText)
