@@ -103,6 +103,9 @@ func main() {
 		cancel()
 	}()
 
+	// Start background scheduler for unlimited users traffic reset
+	go telegramBot.StartScheduler(ctx)
+
 	// Start bot (blocks until stopped)
 	telegramBot.Run()
 

@@ -311,6 +311,25 @@ func (db *DB) NeedsTrafficReset(user *User) bool {
 	return time.Since(*user.TrafficResetAt) > 30*24*time.Hour
 }
 
+// GetUnlimitedUsers retrieves all users with unlimited subscription
+func (db *DB) GetUnlimitedUsers() ([]User, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
+		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
+		 FROM users
+		 WHERE subscription_status = ?
+		   AND subscription_end_at IS NULL
+		 ORDER BY id`,
+		StatusActive,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query unlimited users: %w", err)
+	}
+	defer rows.Close()
+
+	return db.scanUsers(rows)
+}
+
 // GetActiveUsersWithTelegram retrieves users with active subscriptions who have telegram_id
 func (db *DB) GetActiveUsersWithTelegram() ([]User, error) {
 	rows, err := db.conn.Query(
