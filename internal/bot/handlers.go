@@ -262,7 +262,7 @@ func (b *Bot) activateTrialNewUser(c tele.Context) error {
 	settingsRU := threexui.ClientSettings{
 		UUID:       clientUUID,
 		Email:      email,
-		LimitIP:    2,
+		LimitIP:    3,
 		TotalGB:    trialTrafficBytes,
 		ExpiryTime: expiryTimeMs,
 		Enable:     true,
@@ -271,7 +271,7 @@ func (b *Bot) activateTrialNewUser(c tele.Context) error {
 	settingsEU := threexui.ClientSettings{
 		UUID:       clientUUID,
 		Email:      email,
-		LimitIP:    2,
+		LimitIP:    3,
 		TotalGB:    0, // Unlimited
 		ExpiryTime: expiryTimeMs,
 		Enable:     true,
@@ -345,7 +345,7 @@ func (b *Bot) activateTrial(c tele.Context, user *database.User) error {
 	settingsRU := threexui.ClientSettings{
 		UUID:       user.UUID,
 		Email:      user.Email,
-		LimitIP:    2,
+		LimitIP:    3,
 		TotalGB:    trialTrafficBytes,
 		ExpiryTime: expiryTimeMs,
 		Enable:     true,
@@ -354,7 +354,7 @@ func (b *Bot) activateTrial(c tele.Context, user *database.User) error {
 	settingsEU := threexui.ClientSettings{
 		UUID:       user.UUID,
 		Email:      user.Email,
-		LimitIP:    2,
+		LimitIP:    3,
 		TotalGB:    0,
 		ExpiryTime: expiryTimeMs,
 		Enable:     true,
@@ -705,7 +705,7 @@ func (b *Bot) processCreateClient(c tele.Context, email string) error {
 	settingsRU := threexui.ClientSettings{
 		UUID:       clientUUID,
 		Email:      email,
-		LimitIP:    2,
+		LimitIP:    3,
 		TotalGB:    b.config.ServerA.LimitBytes,
 		ExpiryTime: expiryTimeMs,
 		Enable:     true,
@@ -714,7 +714,7 @@ func (b *Bot) processCreateClient(c tele.Context, email string) error {
 	settingsEU := threexui.ClientSettings{
 		UUID:       clientUUID,
 		Email:      email,
-		LimitIP:    2,
+		LimitIP:    3,
 		TotalGB:    0, // Unlimited
 		ExpiryTime: expiryTimeMs,
 		Enable:     true,
@@ -976,7 +976,7 @@ func (b *Bot) resetPanelForUnlimited(user *database.User) error {
 	settingsA := threexui.ClientSettings{
 		UUID:       user.UUID,
 		Email:      user.Email,
-		LimitIP:    2,
+		LimitIP:    3,
 		TotalGB:    b.config.ServerA.LimitBytes, // 30GB
 		ExpiryTime: 0,                           // No expiry
 		Enable:     true,
@@ -992,7 +992,7 @@ func (b *Bot) resetPanelForUnlimited(user *database.User) error {
 	settingsEU := threexui.ClientSettings{
 		UUID:       user.UUID,
 		Email:      user.Email,
-		LimitIP:    2,
+		LimitIP:    3,
 		TotalGB:    0, // Unlimited
 		ExpiryTime: 0, // No expiry
 		Enable:     true,
