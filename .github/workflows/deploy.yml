@@ -58,7 +58,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /home/${{ secrets.VPS_USER }}/projects/vpn_bot
+            cd ~/vpn_bot
             docker compose pull vpn-bot
             docker compose up -d --no-deps vpn-bot
             docker image prune -af
