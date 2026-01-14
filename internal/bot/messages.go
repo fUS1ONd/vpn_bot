@@ -165,9 +165,6 @@ const (
 5. Включите VPN переключателем
 
 <b>Ваша ссылка подписки:</b>
-<code>%s</code>
-
-<b>Ваша ссылка подписки:</b>
 <code>%s</code>`
 
 	MsgInstructionWindows = `<b>Настройка на Windows/linux</b>
