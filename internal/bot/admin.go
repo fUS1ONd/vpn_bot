@@ -7,18 +7,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fus1ond/vpn_bot/internal/database"
-	"github.com/fus1ond/vpn_bot/internal/threexui"
-	"github.com/google/uuid"
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	tele "gopkg.in/telebot.v3"
 )
 
-// isAdmin checks if the user is admin
+// Состояния админа
+const (
+	StateWaitBanUser = "wait_ban_user" // Ожидание telegram_id для бана
+)
+
+// isAdmin проверяет, является ли пользователь админом
 func (b *Bot) isAdmin(c tele.Context) bool {
 	return c.Sender().ID == b.config.AdminID
 }
 
-// handleAdminStart handles /start for admin
+// handleAdminStart показывает главное меню админа
 func (b *Bot) handleAdminStart(c tele.Context) error {
 	return c.Send(MsgAdminWelcome, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
@@ -26,546 +29,221 @@ func (b *Bot) handleAdminStart(c tele.Context) error {
 	})
 }
 
-// handleAdminClientsMenu handles clients submenu
-func (b *Bot) handleAdminClientsMenu(c tele.Context) error {
+// handleAdminManageMenu показывает меню управления
+func (b *Bot) handleAdminManageMenu(c tele.Context) error {
 	if !b.isAdmin(c) {
 		return nil
 	}
-	return c.Send("<b>Управление клиентами</b>\n\nВыберите действие:", &tele.SendOptions{
+	return c.Send("<b>Управление</b>\n\nВыберите действие:", &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminClientsKeyboard(),
+		ReplyMarkup: AdminManageKeyboard(),
 	})
 }
 
-// handleAdminPromosMenu handles promos submenu
-func (b *Bot) handleAdminPromosMenu(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-	return c.Send("<b>Управление промокодами</b>\n\nВыберите действие:", &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminPromosKeyboard(),
-	})
-}
-
-// handleAdminCreateRequest handles admin create button request
-func (b *Bot) handleAdminCreateRequest(c tele.Context) error {
+// handleCreateInvite создаёт новый инвайт-код
+func (b *Bot) handleCreateInvite(c tele.Context) error {
 	if !b.isAdmin(c) {
 		return nil
 	}
 
-	b.userStates[c.Sender().ID] = StateWaitClient
-
-	return c.Send(MsgAdminEnterClientName, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: CancelReplyKeyboard(),
-	})
-}
-
-// handleAdminCreate handles creating a new client (admin only)
-func (b *Bot) handleAdminCreate(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	args := strings.Fields(c.Text())
-	if len(args) < 2 {
-		return c.Send(MsgAdminEnterClientName, &tele.SendOptions{
-			ParseMode: tele.ModeHTML,
-		})
-	}
-
-	email := args[1]
-	clientUUID := uuid.New().String()
-
-	status, err := c.Bot().Send(c.Sender(), fmt.Sprintf("Создаю <b>%s</b>...", email), &tele.SendOptions{
-		ParseMode: tele.ModeHTML,
-	})
+	// Создаём инвайт (код генерируется автоматически в БД)
+	invite, err := b.db.CreateInvite(c.Sender().ID)
 	if err != nil {
-		return err
+		slog.Error("Failed to create invite", "error", err)
+		return c.Send("Ошибка создания инвайта", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	// Login to all servers
-	if err := b.clientA.Login(); err != nil {
-		slog.Error("Failed to login to Server A", "error", err)
-		_, editErr := c.Bot().Edit(status, fmt.Sprintf("Ошибка подключения к Server A: %v", err))
-		return editErr
-	}
-
-	if err := b.clientB.Login(); err != nil {
-		slog.Error("Failed to login to Server B", "error", err)
-		_, editErr := c.Bot().Edit(status, fmt.Sprintf("Ошибка подключения к Server B: %v", err))
-		return editErr
-	}
-
-	if err := b.clientC.Login(); err != nil {
-		slog.Error("Failed to login to Server C", "error", err)
-		_, editErr := c.Bot().Edit(status, fmt.Sprintf("Ошибка подключения к Server C: %v", err))
-		return editErr
-	}
-
-	// Calculate expiry time (1 month from now)
-	expiryTime := time.Now().AddDate(0, 1, 0).UnixMilli()
-
-	// Create settings for all servers
-	settingsRU := threexui.ClientSettings{
-		UUID:       clientUUID,
-		Email:      email,
-		LimitIP:    2,
-		TotalGB:    b.config.ServerA.LimitBytes,
-		ExpiryTime: expiryTime,
-		Enable:     true,
-	}
-
-	settingsEU := threexui.ClientSettings{
-		UUID:       clientUUID,
-		Email:      email,
-		LimitIP:    2,
-		TotalGB:    0, // Unlimited
-		ExpiryTime: expiryTime,
-		Enable:     true,
-	}
-
-	// Add client to Server A (RU)
-	errA := b.clientA.AddClientWithSettings(b.config.ServerA.InboundID, settingsRU)
-	if errA != nil {
-		slog.Error("Failed to add client to Server A", "error", errA)
-	}
-
-	// Add client to Server B (DE)
-	errB := b.clientB.AddClientWithSettings(b.config.ServerB.InboundID, settingsEU)
-	if errB != nil {
-		slog.Error("Failed to add client to Server B", "error", errB)
-	}
-
-	// Add client to Server C (NL)
-	errC := b.clientC.AddClientWithSettings(b.config.ServerC.InboundID, settingsEU)
-	if errC != nil {
-		slog.Error("Failed to add client to Server C", "error", errC)
-	}
-
-	if errA != nil || errB != nil || errC != nil {
-		errorMsg := fmt.Sprintf("Ошибка:\nRU: %v\nDE: %v\nNL: %v", errA, errB, errC)
-		_, editErr := c.Bot().Edit(status, errorMsg)
-		return editErr
-	}
-
-	// Save to database
-	endTime := time.Now().AddDate(0, 1, 0)
-	user, dbErr := b.db.CreateUser(0, email, clientUUID, "")
-	if dbErr != nil {
-		slog.Error("Failed to add user to database", "error", dbErr)
-		_, editErr := c.Bot().Edit(status, fmt.Sprintf("Ошибка сохранения в БД: %v", dbErr))
-		return editErr
-	}
-
-	// Update subscription status
-	if err := b.db.UpdateUserSubscription(user.ID, database.StatusActive, &endTime); err != nil {
-		slog.Error("Failed to update subscription", "error", err)
-	}
-
-	// Generate subscription link
-	subLink := b.generateSubLink(clientUUID)
-
-	successMsg := fmt.Sprintf(MsgAdminClientCreated, email, clientUUID, subLink)
-
-	_, editErr := c.Bot().Edit(status, successMsg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminKeyboard(),
-	})
-	return editErr
-}
-
-// handleAdminList handles listing all clients (admin only)
-func (b *Bot) handleAdminList(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	// Sync clients from panel
-	if err := b.syncClients(); err != nil {
-		slog.Error("Failed to sync clients", "error", err)
-	}
-
-	// Get all users from database
-	users, err := b.db.GetAllUsers()
-	if err != nil {
-		slog.Error("Failed to get users from database", "error", err)
-		return c.Send("Ошибка получения списка клиентов")
-	}
-
-	if len(users) == 0 {
-		return c.Send("Список клиентов пуст")
-	}
-
-	// Build message
-	var sb strings.Builder
-	for i, user := range users {
-		subLink := b.generateSubLink(user.UUID)
-		statusIcon := b.getStatusIcon(user.SubscriptionStatus)
-
-		username := ""
-		if user.Username.Valid && user.Username.String != "" {
-			username = fmt.Sprintf(" (@%s)", user.Username.String)
-		}
-
-		expiryInfo := "Бессрочно"
-		if user.SubscriptionEndAt != nil {
-			daysLeft := FormatDaysLeft(user.SubscriptionEndAt)
-			expiryInfo = fmt.Sprintf("%s (%s)", user.SubscriptionEndAt.Format("02.01.2006"), daysLeft)
-		}
-
-		sb.WriteString(fmt.Sprintf("<b>%d. %s</b>%s %s\n", i+1, user.Email, username, statusIcon))
-		sb.WriteString(fmt.Sprintf("   Активен до: %s\n", expiryInfo))
-		sb.WriteString(fmt.Sprintf("   UUID: <code>%s</code>\n", user.UUID))
-		sb.WriteString(fmt.Sprintf("   Ссылка: <code>%s</code>\n\n", subLink))
-	}
-
-	msg := fmt.Sprintf(MsgAdminClientList, len(users), sb.String())
-
-	// Send long message, splitting if necessary (simplified here)
-	return c.Send(msg, &tele.SendOptions{ // Logic relies on msg fit, usually ok for small userbase
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminClientsKeyboard(),
-	})
-}
-
-// handlePromoAddRequest handles promo add button request
-func (b *Bot) handlePromoAddRequest(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-	b.userStates[c.Sender().ID] = StateWaitPromoAdd
-	return c.Send(MsgAdminEnterPromoData, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: CancelReplyKeyboard(),
-	})
-}
-
-// processPromoAdd handles adding a promo code
-func (b *Bot) processPromoAdd(c tele.Context, text string) error {
-	delete(b.userStates, c.Sender().ID)
-
-	// Reuse logic from old handlePromoAdd, but with text argument
-	// Format: <code> <type> <value> <max_uses> [valid_days]
-	// We add fake command prefix to reuse parsing logic or just parse directly
-	// Parsing directly:
-	args := strings.Fields(text)
-	if len(args) < 4 { // code type value max_uses
-		return c.Send("Ошибка формата. Попробуйте еще раз:\nCode Type Value MaxUses [Days]", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
-	}
-
-	code := args[0]
-	promoType := args[1]
-	value, err := strconv.Atoi(args[2])
-	if err != nil {
-		return c.Send("Неверное значение value", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
-	}
-	maxUses, err := strconv.Atoi(args[3])
-	if err != nil {
-		return c.Send("Неверное значение max_uses", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
-	}
-
-	// Validate promo type
-	if promoType != database.PromoTypeDiscount &&
-		promoType != database.PromoTypeFreeDays &&
-		promoType != database.PromoTypeExtraTraffic &&
-		promoType != database.PromoTypeUnlimited {
-		return c.Send("Неверный тип промокода. Допустимые: discount, free_days, extra_traffic, unlimited", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
-	}
-
-	// For extra_traffic type, convert GB to bytes
-	if promoType == database.PromoTypeExtraTraffic {
-		value = value * 1024 * 1024 * 1024 // GB to bytes
-	}
-
-	var validUntil *time.Time
-	if len(args) > 4 {
-		days, err := strconv.Atoi(args[4])
-		if err == nil && days > 0 {
-			t := time.Now().AddDate(0, 0, days)
-			validUntil = &t
-		}
-	}
-
-	promo, err := b.db.CreatePromoCode(code, promoType, value, maxUses, validUntil)
-	if err != nil {
-		slog.Error("Failed to create promo code", "error", err)
-		return c.Send(fmt.Sprintf("Ошибка создания промокода: %v", err))
-	}
-
-	// Display value: for extra_traffic show in GB, otherwise show raw value
-	displayValue := fmt.Sprintf("%d", promo.Value)
-	if promo.Type == database.PromoTypeExtraTraffic {
-		displayValue = fmt.Sprintf("%d GB", promo.Value/(1024*1024*1024))
-	}
-
-	msg := fmt.Sprintf("<b>Промокод создан!</b>\n\nКод: <code>%s</code>\nТип: %s\nЗначение: %s\nМакс. использований: %d",
-		promo.Code, promo.Type, displayValue, promo.MaxUses)
-
-	if validUntil != nil {
-		msg += fmt.Sprintf("\nДействует до: %s", validUntil.Format("02.01.2006"))
-	}
-
+	msg := fmt.Sprintf(MsgInviteCreated, invite.Code)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminPromosKeyboard(),
+		ReplyMarkup: AdminManageKeyboard(),
 	})
 }
 
-// handlePromoDelRequest handles promo delete button request
-func (b *Bot) handlePromoDelRequest(c tele.Context) error {
+// handleAddTrafficRequest запрашивает данные для добавления трафика
+func (b *Bot) handleAddTrafficRequest(c tele.Context) error {
 	if !b.isAdmin(c) {
 		return nil
 	}
-	b.userStates[c.Sender().ID] = StateWaitPromoDel
-	return c.Send(MsgAdminEnterPromoCode, &tele.SendOptions{
+
+	b.userStates[c.Sender().ID] = StateWaitAddTraffic
+	return c.Send(MsgEnterAddTraffic, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: CancelReplyKeyboard(),
+		ReplyMarkup: CancelKeyboard(),
 	})
 }
 
-// processPromoDel handles deleting a promo code
-func (b *Bot) processPromoDel(c tele.Context, code string) error {
+// processAddTraffic обрабатывает добавление трафика
+func (b *Bot) processAddTraffic(c tele.Context, text string) error {
 	delete(b.userStates, c.Sender().ID)
 
-	code = strings.TrimSpace(code)
-
-	promo, err := b.db.GetPromoCodeByCode(code)
-	if err != nil || promo == nil {
-		return c.Send("Промокод не найден", &tele.SendOptions{ReplyMarkup: AdminPromosKeyboard()})
+	// Формат: telegram_id GB
+	parts := strings.Fields(text)
+	if len(parts) != 2 {
+		return c.Send("Неверный формат. Используйте: telegram_id GB", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	if err := b.db.DeletePromoCode(promo.ID); err != nil {
-		slog.Error("Failed to delete promo code", "error", err)
-		return c.Send(fmt.Sprintf("Ошибка удаления: %v", err))
-	}
-
-	return c.Send(fmt.Sprintf("Промокод <code>%s</code> удален", code), &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminPromosKeyboard(),
-	})
-}
-
-// handlePromoList handles listing promo codes (admin only)
-func (b *Bot) handlePromoList(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	promos, err := b.db.GetAllPromoCodes()
+	telegramID, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		slog.Error("Failed to get promo codes", "error", err)
-		return c.Send("Ошибка получения промокодов")
+		return c.Send("Неверный telegram_id", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	if len(promos) == 0 {
-		return c.Send("Нет активных промокодов")
+	gb, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || gb <= 0 {
+		return c.Send("Неверное количество GB", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	var sb strings.Builder
-	for _, p := range promos {
-		statusIcon := "OK"
-		if p.UsedCount >= p.MaxUses {
-			statusIcon = "X"
-		}
-		if p.ValidUntil != nil && p.ValidUntil.Before(time.Now()) {
-			statusIcon = "X"
-		}
-
-		// Display value: for extra_traffic show in GB
-		displayValue := fmt.Sprintf("%d", p.Value)
-		if p.Type == database.PromoTypeExtraTraffic {
-			displayValue = fmt.Sprintf("%d GB", p.Value/(1024*1024*1024))
-		}
-
-		sb.WriteString(fmt.Sprintf("%s <code>%s</code> (%s: %s) — %d/%d\n",
-			statusIcon, p.Code, p.Type, displayValue, p.UsedCount, p.MaxUses))
+	// Находим пользователя
+	user, err := b.db.GetUserByTelegramID(telegramID)
+	if err != nil || user == nil {
+		return c.Send("Пользователь не найден", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	msg := fmt.Sprintf(MsgAdminPromoList, sb.String())
+	// Получаем текущий лимит из Remnawave
+	remnawaveUser, err := b.remnawave.GetUser(user.RemnawaveUUID)
+	if err != nil {
+		slog.Error("Failed to get user from Remnawave", "error", err)
+		return c.Send("Ошибка получения данных пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	// Добавляем трафик к текущему лимиту
+	newLimit := remnawaveUser.TrafficLimitBytes + (gb * 1024 * 1024 * 1024)
+	err = b.remnawave.UpdateUserTraffic(user.RemnawaveUUID, newLimit)
+	if err != nil {
+		slog.Error("Failed to update traffic", "error", err)
+		return c.Send("Ошибка обновления лимита трафика", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	msg := fmt.Sprintf("✅ Добавлено %d GB пользователю %d\nНовый лимит: %.1f GB",
+		gb, telegramID, float64(newLimit)/(1024*1024*1024))
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminPromosKeyboard(),
+		ReplyMarkup: AdminManageKeyboard(),
 	})
 }
 
-// handleAdminDeleteRequest handles deleting a client request
-func (b *Bot) handleAdminDeleteRequest(c tele.Context) error {
+// handleBanUserRequest запрашивает telegram_id для бана
+func (b *Bot) handleBanUserRequest(c tele.Context) error {
 	if !b.isAdmin(c) {
 		return nil
 	}
-	b.userStates[c.Sender().ID] = StateWaitClientDelete
-	return c.Send("<b>Удаление клиента</b>\n\nОтправьте email клиента для удаления:", &tele.SendOptions{
+
+	b.userStates[c.Sender().ID] = StateWaitBanUser
+	return c.Send(MsgEnterBanUser, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: CancelReplyKeyboard(),
+		ReplyMarkup: CancelKeyboard(),
 	})
 }
 
-// processAdminDeleteClient handles deleting a client logic
-func (b *Bot) processAdminDeleteClient(c tele.Context, email string) error {
+// processBanUser обрабатывает бан пользователя
+func (b *Bot) processBanUser(c tele.Context, text string) error {
 	delete(b.userStates, c.Sender().ID)
-	email = strings.TrimSpace(email)
 
-	// Find user in database
-	user, err := b.db.GetUserByEmail(email)
+	telegramID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
 	if err != nil {
-		slog.Error("Failed to get user", "error", err)
-		return c.Send("Ошибка поиска пользователя", &tele.SendOptions{ReplyMarkup: AdminClientsKeyboard()})
-	}
-	if user == nil {
-		return c.Send(fmt.Sprintf("Пользователь <code>%s</code> не найден", email), &tele.SendOptions{
-			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: AdminClientsKeyboard(),
-		})
+		return c.Send("Неверный telegram_id", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	// Login to servers
-	if err := b.clientA.Login(); err != nil {
-		slog.Error("Failed to login to Server A", "error", err)
-		return c.Send(fmt.Sprintf("Ошибка подключения к Server A: %v", err))
-	}
-	if err := b.clientB.Login(); err != nil {
-		slog.Error("Failed to login to Server B", "error", err)
-		return c.Send(fmt.Sprintf("Ошибка подключения к Server B: %v", err))
-	}
-	if err := b.clientC.Login(); err != nil {
-		slog.Error("Failed to login to Server C", "error", err)
-		return c.Send(fmt.Sprintf("Ошибка подключения к Server C: %v", err))
+	// Находим пользователя в БД
+	user, err := b.db.GetUserByTelegramID(telegramID)
+	if err != nil || user == nil {
+		return c.Send("Пользователь не найден", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	// Delete from Server A
-	errA := b.clientA.DeleteClient(b.config.ServerA.InboundID, user.UUID)
-	if errA != nil {
-		slog.Error("Failed to delete client from Server A", "error", errA)
+	// Удаляем из Remnawave (отключаем доступ к серверам)
+	err = b.remnawave.DeleteUser(user.RemnawaveUUID)
+	if err != nil {
+		slog.Error("Failed to delete user from Remnawave", "error", err)
+		// Продолжаем удаление из БД даже если не удалось удалить из Remnawave
 	}
 
-	// Delete from Server B
-	errB := b.clientB.DeleteClient(b.config.ServerB.InboundID, user.UUID)
-	if errB != nil {
-		slog.Error("Failed to delete client from Server B", "error", errB)
+	// Удаляем из БД бота (отключаем доступ к боту)
+	err = b.db.DeleteUser(telegramID)
+	if err != nil {
+		slog.Error("Failed to delete user from DB", "error", err)
+		return c.Send("Ошибка удаления пользователя из БД", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	// Delete from Server C
-	errC := b.clientC.DeleteClient(b.config.ServerC.InboundID, user.UUID)
-	if errC != nil {
-		slog.Error("Failed to delete client from Server C", "error", errC)
-	}
-
-	// Delete from database
-	if err := b.db.DeleteUser(user.ID); err != nil {
-		slog.Error("Failed to delete user from database", "error", err)
-		return c.Send(fmt.Sprintf("Ошибка удаления из БД: %v", err))
-	}
-
-	msg := fmt.Sprintf("<b>Клиент удалён</b>\n\nEmail: <code>%s</code>", email)
-	if errA != nil || errB != nil || errC != nil {
-		msg += fmt.Sprintf("\n\n<i>Предупреждения:\nRU: %v\nDE: %v\nNL: %v</i>", errA, errB, errC)
-	}
-
+	msg := fmt.Sprintf("🚫 Пользователь %d забанен\n• Удалён из БД бота\n• Удалён из Remnawave", telegramID)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminClientsKeyboard(),
+		ReplyMarkup: AdminManageKeyboard(),
 	})
 }
 
-// getStatusIcon returns status icon for user status
-func (b *Bot) getStatusIcon(status string) string {
-	switch status {
-	case database.StatusActive:
-		return "[OK]"
-	case database.StatusTrial:
-		return "[TRIAL]"
-	case database.StatusExpired:
-		return "[X]"
-	default:
-		return "[-]"
-	}
-}
-
-// generateSubLink generates subscription link for a user
-func (b *Bot) generateSubLink(clientUUID string) string {
-	// Use configured subscription host if available
-	if b.config.SubscriptionHost != "" {
-		return fmt.Sprintf("http://%s:%d/sub/%s", b.config.SubscriptionHost, b.config.SubPort, clientUUID)
-	}
-	// Fallback to old behavior (IP from ServerA)
-	myIP := extractIP(b.config.ServerA.BaseURL)
-	return fmt.Sprintf("http://%s:%d/sub/%s", myIP, b.config.SubPort, clientUUID)
-}
-
-// handleAdminBroadcastMenu handles broadcast submenu
+// handleAdminBroadcastMenu показывает меню рассылки
 func (b *Bot) handleAdminBroadcastMenu(c tele.Context) error {
 	if !b.isAdmin(c) {
 		return nil
 	}
 
-	// Get counts for display
-	allUsers, _ := b.db.GetAllUsersWithTelegram()
-	activeUsers, _ := b.db.GetActiveUsersWithTelegram()
+	// Получаем количество активных пользователей из Remnawave
+	users, err := b.remnawave.GetAllUsers()
+	activeCount := 0
+	if err == nil {
+		for _, u := range users {
+			if u.Status == remnawave.StatusActive {
+				activeCount++
+			}
+		}
+	}
 
-	msg := fmt.Sprintf(MsgAdminBroadcastMenu, len(allUsers), len(activeUsers))
-
+	msg := fmt.Sprintf(MsgAdminBroadcastMenu, activeCount)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: AdminBroadcastKeyboard(),
 	})
 }
 
-// handleBroadcastAllRequest handles request to broadcast to all users
-func (b *Bot) handleBroadcastAllRequest(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	users, _ := b.db.GetAllUsersWithTelegram()
-	b.userStates[c.Sender().ID] = StateWaitBroadcastAll
-
-	return c.Send(fmt.Sprintf(MsgAdminEnterBroadcast, len(users), "всем пользователям"), &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: CancelReplyKeyboard(),
-	})
-}
-
-// handleBroadcastActiveRequest handles request to broadcast to active users only
+// handleBroadcastActiveRequest запрашивает сообщение для рассылки активным
 func (b *Bot) handleBroadcastActiveRequest(c tele.Context) error {
 	if !b.isAdmin(c) {
 		return nil
 	}
 
-	users, _ := b.db.GetActiveUsersWithTelegram()
-	b.userStates[c.Sender().ID] = StateWaitBroadcastActive
+	// Получаем количество активных
+	users, err := b.remnawave.GetAllUsers()
+	activeCount := 0
+	if err == nil {
+		for _, u := range users {
+			if u.Status == remnawave.StatusActive {
+				activeCount++
+			}
+		}
+	}
 
-	return c.Send(fmt.Sprintf(MsgAdminEnterBroadcast, len(users), "активным пользователям"), &tele.SendOptions{
+	b.userStates[c.Sender().ID] = StateWaitBroadcastActive
+	return c.Send(fmt.Sprintf(MsgAdminEnterBroadcast, activeCount), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: CancelReplyKeyboard(),
+		ReplyMarkup: CancelKeyboard(),
 	})
 }
 
-// processBroadcastMessage sends broadcast message (text, photo, video, document) to users
-func (b *Bot) processBroadcastMessage(c tele.Context, activeOnly bool) error {
+// processBroadcastMessage отправляет рассылку только активным пользователям
+func (b *Bot) processBroadcastMessage(c tele.Context, _ bool) error {
 	delete(b.userStates, c.Sender().ID)
 
-	var users []database.User
-	var err error
-
-	if activeOnly {
-		users, err = b.db.GetActiveUsersWithTelegram()
-	} else {
-		users, err = b.db.GetAllUsersWithTelegram()
-	}
-
+	// Получаем всех активных пользователей из Remnawave
+	remnawaveUsers, err := b.remnawave.GetAllUsers()
 	if err != nil {
-		slog.Error("Failed to get users for broadcast", "error", err)
+		slog.Error("Failed to get users from Remnawave", "error", err)
 		return c.Send("Ошибка получения списка пользователей", &tele.SendOptions{ReplyMarkup: AdminBroadcastKeyboard()})
 	}
 
-	if len(users) == 0 {
-		return c.Send("Нет пользователей для рассылки", &tele.SendOptions{ReplyMarkup: AdminBroadcastKeyboard()})
+	// Фильтруем только активных с TelegramID
+	var activeUsers []remnawave.User
+	for _, u := range remnawaveUsers {
+		if u.Status == remnawave.StatusActive && u.TelegramID != nil && *u.TelegramID != 0 {
+			activeUsers = append(activeUsers, u)
+		}
 	}
 
-	// Send status message
-	statusMsg, err := c.Bot().Send(c.Sender(), fmt.Sprintf("Начинаю рассылку %d пользователям...", len(users)))
+	if len(activeUsers) == 0 {
+		return c.Send("Нет активных пользователей для рассылки", &tele.SendOptions{ReplyMarkup: AdminBroadcastKeyboard()})
+	}
+
+	// Отправляем статус
+	statusMsg, err := c.Bot().Send(c.Sender(), fmt.Sprintf("Начинаю рассылку %d активным пользователям...", len(activeUsers)))
 	if err != nil {
 		return err
 	}
@@ -574,26 +252,22 @@ func (b *Bot) processBroadcastMessage(c tele.Context, activeOnly bool) error {
 	failCount := 0
 	msg := c.Message()
 
-	for _, user := range users {
-		if user.TelegramID == 0 {
-			continue
-		}
+	for _, user := range activeUsers {
+		recipient := &tele.User{ID: *user.TelegramID}
 
-		recipient := &tele.User{ID: user.TelegramID}
-
-		// Copy the original message (works for text, photo, video, document, etc.)
+		// Копируем сообщение (работает для текста, фото, видео и т.д.)
 		_, err := c.Bot().Copy(recipient, msg, &tele.SendOptions{
 			ParseMode: tele.ModeHTML,
 		})
 
 		if err != nil {
-			slog.Error("Failed to send broadcast to user", "telegram_id", user.TelegramID, "error", err)
+			slog.Error("Failed to send broadcast", "telegram_id", *user.TelegramID, "error", err)
 			failCount++
 		} else {
 			successCount++
 		}
 
-		// Small delay to avoid rate limiting
+		// Задержка для избежания rate limiting
 		time.Sleep(50 * time.Millisecond)
 	}
 
@@ -605,3 +279,4 @@ func (b *Bot) processBroadcastMessage(c tele.Context, activeOnly bool) error {
 
 	return nil
 }
+
