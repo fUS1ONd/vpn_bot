@@ -3,190 +3,73 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"time"
 )
 
-// CreateUser creates a new user (telegramID = 0 means NULL / admin-created)
-func (db *DB) CreateUser(telegramID int64, email, uuid, username string) (*User, error) {
-	var result sql.Result
-	var err error
-
-	if telegramID == 0 {
-		// Admin-created user - telegram_id is NULL
-		result, err = db.conn.Exec(
-			`INSERT INTO users (telegram_id, email, uuid, username) VALUES (NULL, ?, ?, ?)`,
-			email, uuid, sql.NullString{String: username, Valid: username != ""},
-		)
-	} else {
-		// Real Telegram user
-		result, err = db.conn.Exec(
-			`INSERT INTO users (telegram_id, email, uuid, username) VALUES (?, ?, ?, ?)`,
-			telegramID, email, uuid, sql.NullString{String: username, Valid: username != ""},
-		)
-	}
-
+// CreateUser создаёт нового пользователя
+func (db *DB) CreateUser(telegramID int64, username, remnawaveUUID string) (*User, error) {
+	_, err := db.conn.Exec(
+		`INSERT INTO users (telegram_id, username, remnawave_uuid) VALUES (?, ?, ?)`,
+		telegramID, username, remnawaveUUID,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get last insert id: %w", err)
-	}
-
-	return db.GetUserByID(id)
+	return db.GetUserByTelegramID(telegramID)
 }
 
-// GetUserByID retrieves a user by ID
-func (db *DB) GetUserByID(id int64) (*User, error) {
-	return db.scanUser(db.conn.QueryRow(
-		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
-		 FROM users WHERE id = ?`, id,
-	))
-}
-
-// GetUserByTelegramID retrieves a user by Telegram ID
+// GetUserByTelegramID получает пользователя по Telegram ID
 func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
-	return db.scanUser(db.conn.QueryRow(
-		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
-		 FROM users WHERE telegram_id = ?`, telegramID,
-	))
-}
-
-// GetUserByEmail retrieves a user by email
-func (db *DB) GetUserByEmail(email string) (*User, error) {
-	return db.scanUser(db.conn.QueryRow(
-		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
-		 FROM users WHERE email = ?`, email,
-	))
-}
-
-// GetUserByUUID retrieves a user by UUID
-func (db *DB) GetUserByUUID(uuid string) (*User, error) {
-	return db.scanUser(db.conn.QueryRow(
-		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
-		 FROM users WHERE uuid = ?`, uuid,
-	))
-}
-
-// scanUser scans a single user row
-func (db *DB) scanUser(row *sql.Row) (*User, error) {
 	var user User
-	var telegramID sql.NullInt64
-	var subscriptionEndAt sql.NullTime
-	var trafficResetAt sql.NullTime
+	err := db.conn.QueryRow(
+		`SELECT telegram_id, username, remnawave_uuid, created_at FROM users WHERE telegram_id = ?`,
+		telegramID,
+	).Scan(&user.TelegramID, &user.Username, &user.RemnawaveUUID, &user.CreatedAt)
 
-	err := row.Scan(
-		&user.ID, &telegramID, &user.Username, &user.Email, &user.UUID, &user.CreatedAt,
-		&user.SubscriptionStatus, &subscriptionEndAt, &user.TrialUsed, &user.RuExtraTraffic,
-		&trafficResetAt,
-	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to scan user: %w", err)
-	}
-
-	if telegramID.Valid {
-		user.TelegramID = telegramID.Int64
-	}
-
-	if subscriptionEndAt.Valid {
-		user.SubscriptionEndAt = &subscriptionEndAt.Time
-	}
-
-	if trafficResetAt.Valid {
-		user.TrafficResetAt = &trafficResetAt.Time
+		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 
 	return &user, nil
 }
 
-// GetAllUsers retrieves all users
+// GetUserByRemnawaveUUID получает пользователя по Remnawave UUID
+func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
+	var user User
+	err := db.conn.QueryRow(
+		`SELECT telegram_id, username, remnawave_uuid, created_at FROM users WHERE remnawave_uuid = ?`,
+		uuid,
+	).Scan(&user.TelegramID, &user.Username, &user.RemnawaveUUID, &user.CreatedAt)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	return &user, nil
+}
+
+// GetAllUsers получает всех пользователей
 func (db *DB) GetAllUsers() ([]User, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
-		 FROM users ORDER BY id`,
+		`SELECT telegram_id, username, remnawave_uuid, created_at FROM users ORDER BY created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query users: %w", err)
 	}
 	defer rows.Close()
 
-	return db.scanUsers(rows)
-}
-
-// GetActiveUsers retrieves users with active or trial subscriptions
-func (db *DB) GetActiveUsers() ([]User, error) {
-	rows, err := db.conn.Query(
-		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
-		 FROM users WHERE subscription_status IN (?, ?) ORDER BY id`,
-		StatusActive, StatusTrial,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query active users: %w", err)
-	}
-	defer rows.Close()
-
-	return db.scanUsers(rows)
-}
-
-// GetExpiredUsers retrieves users whose subscription has expired
-func (db *DB) GetExpiredUsers() ([]User, error) {
-	rows, err := db.conn.Query(
-		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
-		 FROM users
-		 WHERE subscription_status IN (?, ?)
-		   AND subscription_end_at IS NOT NULL
-		   AND subscription_end_at < ?
-		 ORDER BY id`,
-		StatusActive, StatusTrial, time.Now(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query expired users: %w", err)
-	}
-	defer rows.Close()
-
-	return db.scanUsers(rows)
-}
-
-// scanUsers scans multiple user rows
-func (db *DB) scanUsers(rows *sql.Rows) ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var user User
-		var telegramID sql.NullInt64
-		var subscriptionEndAt sql.NullTime
-		var trafficResetAt sql.NullTime
-
-		if err := rows.Scan(
-			&user.ID, &telegramID, &user.Username, &user.Email, &user.UUID, &user.CreatedAt,
-			&user.SubscriptionStatus, &subscriptionEndAt, &user.TrialUsed, &user.RuExtraTraffic,
-			&trafficResetAt,
-		); err != nil {
+		if err := rows.Scan(&user.TelegramID, &user.Username, &user.RemnawaveUUID, &user.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
 		}
-
-		if telegramID.Valid {
-			user.TelegramID = telegramID.Int64
-		}
-
-		if subscriptionEndAt.Valid {
-			user.SubscriptionEndAt = &subscriptionEndAt.Time
-		}
-
-		if trafficResetAt.Valid {
-			user.TrafficResetAt = &trafficResetAt.Time
-		}
-
 		users = append(users, user)
 	}
 
@@ -197,23 +80,11 @@ func (db *DB) scanUsers(rows *sql.Rows) ([]User, error) {
 	return users, nil
 }
 
-// UpdateUserSubscription updates user's subscription status and end time
-func (db *DB) UpdateUserSubscription(userID int64, status string, endAt *time.Time) error {
+// UpdateUsername обновляет username пользователя
+func (db *DB) UpdateUsername(telegramID int64, username string) error {
 	_, err := db.conn.Exec(
-		`UPDATE users SET subscription_status = ?, subscription_end_at = ? WHERE id = ?`,
-		status, endAt, userID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update subscription: %w", err)
-	}
-	return nil
-}
-
-// UpdateUserUsername updates user's telegram username
-func (db *DB) UpdateUserUsername(userID int64, username string) error {
-	_, err := db.conn.Exec(
-		`UPDATE users SET username = ? WHERE id = ?`,
-		sql.NullString{String: username, Valid: username != ""}, userID,
+		`UPDATE users SET username = ? WHERE telegram_id = ?`,
+		username, telegramID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update username: %w", err)
@@ -221,46 +92,16 @@ func (db *DB) UpdateUserUsername(userID int64, username string) error {
 	return nil
 }
 
-// MarkTrialUsed marks user's trial as used
-func (db *DB) MarkTrialUsed(userID int64) error {
-	_, err := db.conn.Exec(`UPDATE users SET trial_used = TRUE WHERE id = ?`, userID)
-	if err != nil {
-		return fmt.Errorf("failed to mark trial used: %w", err)
-	}
-	return nil
-}
-
-// AddRuExtraTraffic adds extra traffic quota for RU server
-func (db *DB) AddRuExtraTraffic(userID int64, bytes int64) error {
-	_, err := db.conn.Exec(
-		`UPDATE users SET ru_extra_traffic = ru_extra_traffic + ? WHERE id = ?`,
-		bytes, userID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to add extra traffic: %w", err)
-	}
-	return nil
-}
-
-// ResetRuExtraTraffic resets extra traffic quota
-func (db *DB) ResetRuExtraTraffic(userID int64) error {
-	_, err := db.conn.Exec(`UPDATE users SET ru_extra_traffic = 0 WHERE id = ?`, userID)
-	if err != nil {
-		return fmt.Errorf("failed to reset extra traffic: %w", err)
-	}
-	return nil
-}
-
-// DeleteUser deletes a user by ID
-func (db *DB) DeleteUser(userID int64) error {
-	_, err := db.conn.Exec(`DELETE FROM users WHERE id = ?`, userID)
+// DeleteUser удаляет пользователя
+func (db *DB) DeleteUser(telegramID int64) error {
+	_, err := db.conn.Exec(`DELETE FROM users WHERE telegram_id = ?`, telegramID)
 	if err != nil {
 		return fmt.Errorf("failed to delete user: %w", err)
 	}
 	return nil
 }
 
-// UserExists checks if user exists by telegram ID
+// UserExists проверяет существует ли пользователь
 func (db *DB) UserExists(telegramID int64) (bool, error) {
 	var exists bool
 	err := db.conn.QueryRow(
@@ -273,95 +114,12 @@ func (db *DB) UserExists(telegramID int64) (bool, error) {
 	return exists, nil
 }
 
-// SetUnlimitedSubscription sets user to unlimited subscription (no expiry, with traffic reset tracking)
-func (db *DB) SetUnlimitedSubscription(userID int64) error {
-	now := time.Now()
-	_, err := db.conn.Exec(
-		`UPDATE users SET subscription_status = ?, subscription_end_at = NULL, traffic_reset_at = ? WHERE id = ?`,
-		StatusActive, now, userID,
-	)
+// CountUsers возвращает количество пользователей
+func (db *DB) CountUsers() (int, error) {
+	var count int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&count)
 	if err != nil {
-		return fmt.Errorf("failed to set unlimited subscription: %w", err)
+		return 0, fmt.Errorf("failed to count users: %w", err)
 	}
-	return nil
-}
-
-// UpdateTrafficResetAt updates the traffic reset timestamp
-func (db *DB) UpdateTrafficResetAt(userID int64, resetAt time.Time) error {
-	_, err := db.conn.Exec(
-		`UPDATE users SET traffic_reset_at = ? WHERE id = ?`,
-		resetAt, userID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update traffic reset time: %w", err)
-	}
-	return nil
-}
-
-// IsUnlimitedSubscription checks if user has unlimited subscription (no end date but active)
-func (db *DB) IsUnlimitedSubscription(user *User) bool {
-	return user.SubscriptionStatus == StatusActive && user.SubscriptionEndAt == nil
-}
-
-// NeedsTrafficReset checks if user needs monthly traffic reset (more than 30 days since last reset)
-func (db *DB) NeedsTrafficReset(user *User) bool {
-	if user.TrafficResetAt == nil {
-		return false
-	}
-	return time.Since(*user.TrafficResetAt) > 30*24*time.Hour
-}
-
-// GetUnlimitedUsers retrieves all users with unlimited subscription
-func (db *DB) GetUnlimitedUsers() ([]User, error) {
-	rows, err := db.conn.Query(
-		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
-		 FROM users
-		 WHERE subscription_status = ?
-		   AND subscription_end_at IS NULL
-		 ORDER BY id`,
-		StatusActive,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query unlimited users: %w", err)
-	}
-	defer rows.Close()
-
-	return db.scanUsers(rows)
-}
-
-// GetActiveUsersWithTelegram retrieves users with active subscriptions who have telegram_id
-func (db *DB) GetActiveUsersWithTelegram() ([]User, error) {
-	rows, err := db.conn.Query(
-		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
-		 FROM users
-		 WHERE subscription_status IN (?, ?)
-		   AND telegram_id IS NOT NULL
-		 ORDER BY id`,
-		StatusActive, StatusTrial,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query active users with telegram: %w", err)
-	}
-	defer rows.Close()
-
-	return db.scanUsers(rows)
-}
-
-// GetAllUsersWithTelegram retrieves all users who have telegram_id (ever activated bot)
-func (db *DB) GetAllUsersWithTelegram() ([]User, error) {
-	rows, err := db.conn.Query(
-		`SELECT id, telegram_id, username, email, uuid, created_at, subscription_status,
-		        subscription_end_at, trial_used, ru_extra_traffic, traffic_reset_at
-		 FROM users
-		 WHERE telegram_id IS NOT NULL
-		 ORDER BY id`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query all users with telegram: %w", err)
-	}
-	defer rows.Close()
-
-	return db.scanUsers(rows)
+	return count, nil
 }
