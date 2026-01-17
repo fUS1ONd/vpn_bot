@@ -18,6 +18,7 @@ backups/
 *.log
 
 /bot
+/migrator
 
 # IDE
 .vscode/
