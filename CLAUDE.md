@@ -1,308 +1,147 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Руководство для разработчиков при работе с VPN-ботом на Remnawave.
 
-## Проект
+## Архитектура (v2)
 
-VPN Bot - Telegram бот для управления VPN подписками через 3X-UI панели. Написан на Go 1.25 для максимальной производительности. Поддерживает три сервера: Server A (Россия/Каскад, с лимитом трафика), Server B (Европа/Прямой, безлимитный) и Server C (дополнительный сервер).
+Бот работает как **пульт управления** для Remnawave API. База данных хранит только связь `Telegram ID <-> Remnawave UUID`.
+
+### Основные компоненты
+
+- **`internal/remnawave/client.go`** — HTTP-клиент Remnawave API
+- **`internal/database/users.go`** — таблица users (telegram_id, username, remnawave_uuid)
+- **`internal/database/invites.go`** — таблица invites (система инвайтов)
+- **`internal/bot/handlers.go`** — обработчики сообщений и команд
+- **`internal/bot/admin.go`** — админ-панель (инвайты, трафик, банн)
+- **`internal/bot/scheduler.go`** — сброс увеличенных лимитов 1-го числа
+- **`cmd/migrator/main.go`** — миграция активных пользователей из старой БД
+
+## Переменные окружения
+
+```env
+# Telegram
+BOT_TOKEN=...
+ADMIN_ID=...
+
+# Remnawave
+REMNAWAVE_URL=https://panel.example.com
+REMNAWAVE_API_TOKEN=...
+REMNAWAVE_DEFAULT_SQUAD_UUID=  # опционально, UUID сквада если нужен
+
+# База данных
+DB_PATH=/app/data/bot.db
+
+# Донат
+DONATE_TEXT=Перевод по СБП: +7 999 000-00-00 (Т-Банк), Константин К.
+```
+
+## Система инвайтов
+
+1. Новый пользователь отправляет `/start`
+2. Бот просит инвайт-код
+3. При вводе кода:
+   - Проверяется наличие и неиспользованность кода
+   - Создаётся пользователь в Remnawave (30 GB/месяц)
+   - Сохраняется связка в БД
+   - Инвайт помечается как использованный
+
+**Админ создаёт инвайты**: кнопка "📋 Управление" → "🎟 Создать инвайт"
+
+## Управление пользователями
+
+### Админ-панель
+
+- **📋 Управление**
+  - 🎟 Создать инвайт
+  - 📊 Добавить трафик (формат: `telegram_id GB`)
+  - 🚫 Забанить (удаляет из БД и Remnawave)
+- **📢 Рассылка** — только активным пользователям (status=ACTIVE)
+
+### Статусы в Remnawave
+
+- `ACTIVE` — активный доступ
+- `DISABLED` — заблокирован администратором
+- `LIMITED` — превышен лимит трафика
+- `EXPIRED` — истёк срок действия
+
+## Мигратор
+
+Перенос активных пользователей из старой БД в новую.
+
+```bash
+# Сборка
+go build -o migrator ./cmd/migrator
+
+# Предпросмотр (без изменений)
+./migrator --dry-run --old-db /path/to/users.db
+
+# Выполнить миграцию
+./migrator --live --old-db /path/to/users.db
+```
+
+**Что переносит:**
+- Только пользователей со статусом `active` (у кого есть доступ прямо сейчас)
+- Создаёт в Remnawave с тем же telegram_id и username
+- Сохраняет связку в новой БД
+- Логирует результаты в `migration_YYYY-MM-DD.log`
 
 ## Команды разработки
 
-### Основные команды (через Makefile)
-
-```bash
-make up              # Запустить бота в Docker
-make down            # Остановить бота
-make restart         # Перезапустить бота
-make logs            # Показать логи
-make rebuild         # Пересобрать и перезапустить
-make status          # Статус контейнеров
-make shell           # Войти в контейнер бота
-```
-
-### База данных
-
-```bash
-make db-ui           # Запустить SQLite Web UI на http://localhost:8080
-make db-ui-stop      # Остановить SQLite Web UI
-make backup          # Создать бэкап БД в backups/
-make volume-info     # Информация о Docker volume
-make clean           # ОСТОРОЖНО: удаляет все данные и контейнеры
-```
-
-### Локальная разработка (без Docker)
+### Локальная разработка
 
 ```bash
 go mod download      # Установить зависимости
 go run cmd/bot/main.go  # Запустить бота локально
 go build -o vpn-bot cmd/bot/main.go  # Собрать бинарник
-go test ./...        # Запустить все тесты
+go build ./cmd/migrator  # Собрать мигратор
+go test ./...        # Запустить тесты
+go vet ./...         # Проверить код
 ```
 
-### Docker команды
+### Docker (если есть docker-compose.yml)
 
 ```bash
+make up              # Запустить бота в Docker
+make down            # Остановить бота
+make logs            # Показать логи
 docker compose up -d --build           # Собрать и запустить
-docker compose logs -f vpn-bot         # Логи бота
-docker compose --profile tools up -d   # Запустить с SQLite Web UI
+docker compose logs -f vpn-bot         # Логи в реал-тайме
 ```
 
-## Архитектура
+## Важные заметки
 
-### Основная структура
+1. **Рассылка** отправляется только активным пользователям (status=ACTIVE в Remnawave)
+2. **Бан** удаляет пользователя как из БД бота, так и из Remnawave (отключает доступ к серверам)
+3. **Scheduler** проверяет 1-го числа месяца — сбрасывает увеличенные лимиты к базовым 30 GB
+4. **Сквады** опциональны — если пользователи не видят серверы, создайте internal squad в панели и добавьте UUID в конфиг
+5. **Трафик** — базовый лимит 30 GB/месяц, сбрасывается автоматически Remnawave
+6. **Добавление трафика** — увеличивает текущий лимит (например, 30 → 40 GB), не затрагивает использованный трафик
 
-```
-cmd/bot/main.go         - Точка входа, инициализация компонентов
-internal/
-  bot/                  - Telegram бот (handlers, keyboards, messages, admin)
-  config/               - Конфигурация из .env файлов
-  database/             - SQLite ORM (users, payments, promo codes)
-  threexui/             - HTTP клиент для 3X-UI API
-  vless/                - Генерация VLESS ссылок
-  subscription/         - HTTP сервер для подписок
-```
+## Структура БД
 
-### Поток данных
+### Таблица `users`
 
-1. **Telegram Bot** (`internal/bot`) - принимает команды пользователей
-2. **Database** (`internal/database`) - хранит пользователей, подписки, промокоды
-3. **3X-UI Client** (`internal/threexui`) - управляет VPN клиентами на панелях
-4. **Subscription Server** (`internal/subscription`) - отдает VLESS конфиги по HTTP
-
-### Три сервера
-
-- **Server A** (Россия/Каскад): лимитированный трафик, VLESS+XTLS-Vision
-- **Server B** (Европа/Прямой): безлимитный трафик, VLESS+XTLS-Vision
-- **Server C** (Дополнительный): конфигурируемый лимит, VLESS+XTLS-Vision
-
-Все три сервера создаются одновременно для каждого пользователя с одним UUID. Это обеспечивает избыточность и возможность выбора сервера пользователем.
-
-### Состояние пользователя
-
-Бот использует in-memory карту `userStates` для отслеживания состояния разговора:
-- `StateWaitPromo` - ожидает ввод промокода
-- `StateWaitClient` - админ создает клиента
-- `StateWaitClientDelete` - админ удаляет клиента
-- `StateWaitPromoAdd` - админ добавляет промокод
-- `StateWaitPromoDel` - админ удаляет промокод
-
-### База данных (SQLite)
-
-**Таблицы:**
-- `users` - пользователи (telegram_id может быть NULL для админских клиентов)
-- `payments` - история платежей
-- `promo_codes` - промокоды (типы: free_days, extra_traffic, discount)
-- `promo_uses` - использование промокодов
-
-**Важно:** `telegram_id` - UNIQUE, но может быть NULL. Это позволяет админу создавать клиентов без привязки к Telegram.
-
-### 3X-UI API интеграция
-
-Клиент использует cookie-based авторизацию:
-1. `Login()` - авторизация и сохранение cookie
-2. `AddClientWithSettings()` - создание клиента
-3. `UpdateClient()` - обновление настроек
-4. `GetClientStatus()` - получение статуса и трафика
-5. `DeleteClient()` - удаление клиента
-
-**ВАЖНО:** Сессии истекают, поэтому перед каждой операцией нужно вызывать `Login()`.
-
-### HTTP Subscription Server
-
-- Запускается на порту 8000 (SUB_PORT)
-- Endpoint: `http://{SUBSCRIPTION_HOST}:8000/sub/{UUID}`
-- Отдает base64 конфиг с двумя VLESS ссылками
-- Добавляет заголовок `Subscription-Userinfo` с трафиком и лимитами
-
-### Обработка сообщений
-
-Роутинг в `handleTextMessage`:
-1. Проверка состояния пользователя (state machine)
-2. Проверка динамических кнопок (статус с иконками)
-3. Админские кнопки (если `isAdmin()`)
-4. Обычные кнопки меню
-5. Fallback: показать главное меню
-
-### Промокоды
-
-Три типа промокодов:
-- `free_days` - добавляет дни к подписке
-- `extra_traffic` - добавляет трафик к Server A
-- `discount` - скидка (применяется при оплате)
-
-Промокод может быть использован несколько раз (`max_uses`), каждый пользователь может использовать промокод только один раз.
-
-## Конфигурация (.env)
-
-### Обязательные переменные
-
-```
-BOT_TOKEN                - Токен Telegram бота
-ADMIN_ID                 - Telegram ID администратора
-SUBSCRIPTION_HOST        - Домен/IP для ссылок подписок
-SERVER_A_BASE_URL        - URL 3X-UI панели (Server A)
-SERVER_A_WEB_PATH        - Web path для панели
-SERVER_A_USERNAME        - Логин
-SERVER_A_PASSWORD        - Пароль
-SERVER_A_INBOUND_ID      - ID inbound'а
-SERVER_A_LIMIT_BYTES     - Лимит трафика в байтах
-SERVER_A_PUBLIC_KEY      - Public key для VLESS
-SERVER_A_SNI             - SNI для TLS
-SERVER_A_SID             - Short ID
+```sql
+CREATE TABLE users (
+    telegram_id INTEGER PRIMARY KEY,
+    username TEXT,
+    remnawave_uuid TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
-То же самое для `SERVER_B_*`.
+### Таблица `invites`
 
-### Опциональные
-
-```
-SUB_PORT=8000           - Порт сервера подписок
-DB_PATH=/app/data/users.db  - Путь к БД
-```
-
-## Паттерны разработки
-
-### Логирование
-
-Используется `log/slog`:
-```go
-slog.Info("message", "key", value)
-slog.Error("error occurred", "error", err)
-slog.Warn("warning", "data", data)
+```sql
+CREATE TABLE invites (
+    code TEXT PRIMARY KEY,
+    created_by INTEGER NOT NULL,
+    used_by INTEGER,  -- NULL если не использован
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
-### Обработка ошибок
+## Ссылки
 
-Всегда логировать ошибки и показывать пользовательские сообщения:
-```go
-if err != nil {
-    slog.Error("Failed to do something", "error", err)
-    return c.Send("Произошла ошибка. Попробуйте позже.")
-}
-```
-
-### Работа с 3X-UI
-
-Всегда логиниться перед операциями:
-```go
-if err := b.clientA.Login(); err != nil {
-    slog.Error("Failed to login", "error", err)
-    return c.Send("Ошибка подключения к серверу")
-}
-```
-
-### Транзакции создания пользователя
-
-При создании пользователя:
-1. Создать на Server A
-2. Создать на Server B (при ошибке - откатить Server A)
-3. Создать на Server C (при ошибке - откатить Server A и B)
-4. Сохранить в БД
-5. Обновить статус подписки
-
-**Важно:** Все три сервера должны быть успешно созданы, иначе откатываются все изменения (никакие клиенты не создаются).
-
-### Тестирование
-
-- Используется `testify` для ассертов
-- Моки для 3X-UI клиента: `internal/threexui/mock.go`
-- Тесты БД используют `:memory:` SQLite
-
-```go
-// Пример теста
-func TestSomething(t *testing.T) {
-    assert := assert.New(t)
-    // ...
-    assert.NoError(err)
-    assert.Equal(expected, actual)
-}
-```
-
-## Особенности реализации
-
-### Trial система
-
-- 3 дня бесплатно
-- 1 ГБ трафика на Server A
-- Безлимит на Server B
-- Безлимит на Server C
-- Флаг `trial_used` предотвращает повторную активацию
-
-### Дополнительный трафик
-
-Поле `ru_extra_traffic` в БД хранит бонусный трафик (из промокодов). При отображении статуса складывается с `SERVER_A_LIMIT_BYTES`.
-
-### UUID как ключ
-
-Один UUID используется для:
-- Идентификации пользователя в БД
-- Клиента на Server A
-- Клиента на Server B
-- URL подписки
-
-### Graceful Shutdown
-
-Используется context с сигналами:
-```go
-ctx, cancel := context.WithCancel(context.Background())
-signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-```
-
-## Deployment
-
-### Продакшн
-
-1. Настроить `.env` файл
-2. Открыть порт 8000 в firewall
-3. `make up` или `docker compose up -d --build`
-4. Проверить логи: `make logs`
-
-### Обновление
-
-```bash
-git pull
-make rebuild
-```
-
-Данные сохраняются в volume `vpn_bot_vpn_data`.
-
-## Важные нюансы
-
-- **InsecureSkipVerify**: 3X-UI клиент пропускает проверку TLS сертификатов (самоподписанные)
-- **Cookie Jar**: HTTP клиент использует cookie jar для сессий 3X-UI
-- **VLESS Flow**: используется `xtls-rprx-vision`
-- **ExpiryTime**: в 3X-UI хранится в миллисекундах Unix timestamp
-- **TotalGB**: в байтах, 0 = безлимит
-- **Telegram ID**: может быть 0/NULL для админских клиентов
-
-## Частые задачи
-
-### Добавить новую команду бота
-
-1. Добавить константу кнопки в `internal/bot/keyboards.go`
-2. Добавить обработчик в `internal/bot/handlers.go`
-3. Добавить маршрут в `handleTextMessage()`
-
-### Добавить новый тип промокода
-
-1. Добавить константу в `internal/database/promo.go`
-2. Обновить `applyPromoCode()` в `internal/bot/handlers.go`
-3. Обновить `FormatPromoResult()` в `internal/bot/messages.go`
-
-### Изменить лимиты trial
-
-Константы находятся в `activateTrialNewUser()` и `activateTrial()`:
-```go
-expiryTime := time.Now().AddDate(0, 0, 3)  // 3 дня
-trialTrafficBytes := int64(1 * 1024 * 1024 * 1024)  // 1 ГБ
-```
-
-### Добавить миграцию БД
-
-Добавить SQL в массив `migrations` в `internal/database/db.go`:
-```go
-migrations := []string{
-    // existing migrations
-    `ALTER TABLE users ADD COLUMN new_field TEXT`,
-}
-```
+- **План миграции**: `docs/plans/2026-01-17-remnawave-migration-design.md`
+- **Прогресс**: `docs/plans/PROGRESS.md`
