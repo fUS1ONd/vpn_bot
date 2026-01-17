@@ -3,42 +3,16 @@ services:
     build: .
     container_name: vpn-bot
     restart: unless-stopped
-    ports:
-      - "${SUB_PORT:-8000}:8000"
     volumes:
       - ./data:/app/data
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - ADMIN_ID=${ADMIN_ID}
-      - SUB_PORT=${SUB_PORT:-8000}
-      - SUBSCRIPTION_HOST=${SUBSCRIPTION_HOST}
-      - SERVER_A_BASE_URL=${SERVER_A_BASE_URL}
-      - SERVER_A_WEB_PATH=${SERVER_A_WEB_PATH}
-      - SERVER_A_USERNAME=${SERVER_A_USERNAME}
-      - SERVER_A_PASSWORD=${SERVER_A_PASSWORD}
-      - SERVER_A_INBOUND_ID=${SERVER_A_INBOUND_ID}
-      - SERVER_A_LIMIT_BYTES=${SERVER_A_LIMIT_BYTES}
-      - SERVER_A_PUBLIC_KEY=${SERVER_A_PUBLIC_KEY}
-      - SERVER_A_SNI=${SERVER_A_SNI}
-      - SERVER_A_SID=${SERVER_A_SID}
-      - SERVER_B_BASE_URL=${SERVER_B_BASE_URL}
-      - SERVER_B_WEB_PATH=${SERVER_B_WEB_PATH}
-      - SERVER_B_USERNAME=${SERVER_B_USERNAME}
-      - SERVER_B_PASSWORD=${SERVER_B_PASSWORD}
-      - SERVER_B_INBOUND_ID=${SERVER_B_INBOUND_ID}
-      - SERVER_B_LIMIT_BYTES=${SERVER_B_LIMIT_BYTES}
-      - SERVER_B_PUBLIC_KEY=${SERVER_B_PUBLIC_KEY}
-      - SERVER_B_SNI=${SERVER_B_SNI}
-      - SERVER_B_SID=${SERVER_B_SID}
-      - SERVER_C_BASE_URL=${SERVER_C_BASE_URL}
-      - SERVER_C_WEB_PATH=${SERVER_C_WEB_PATH}
-      - SERVER_C_USERNAME=${SERVER_C_USERNAME}
-      - SERVER_C_PASSWORD=${SERVER_C_PASSWORD}
-      - SERVER_C_INBOUND_ID=${SERVER_C_INBOUND_ID}
-      - SERVER_C_LIMIT_BYTES=${SERVER_C_LIMIT_BYTES}
-      - SERVER_C_PUBLIC_KEY=${SERVER_C_PUBLIC_KEY}
-      - SERVER_C_SNI=${SERVER_C_SNI}
-      - SERVER_C_SID=${SERVER_C_SID}
+      - REMNAWAVE_URL=${REMNAWAVE_URL}
+      - REMNAWAVE_API_TOKEN=${REMNAWAVE_API_TOKEN}
+      - REMNAWAVE_DEFAULT_SQUAD_UUID=${REMNAWAVE_DEFAULT_SQUAD_UUID}
+      - DB_PATH=${DB_PATH:-/app/data/bot.db}
+      - DONATE_TEXT=${DONATE_TEXT}
     env_file:
       - .env
     networks:
@@ -48,25 +22,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-  # SQLite Web UI для просмотра базы данных (опционально)
-  # Доступен по адресу http://localhost:8080
-  sqlite-web:
-    image: coleifer/sqlite-web
-    container_name: vpn-sqlite-web
-    restart: unless-stopped
-    ports:
-      - "${SQLITE_WEB_PORT:-8080}:8080"
-    volumes:
-      - ./data:/data
-    environment:
-      - SQLITE_DATABASE=/data/users.db
-    networks:
-      - vpn-network
-    depends_on:
-      - vpn-bot
-    profiles:
-      - tools
 
 networks:
   vpn-network:

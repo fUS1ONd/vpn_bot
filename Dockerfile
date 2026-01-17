@@ -27,11 +27,8 @@ RUN apk --no-cache add ca-certificates
 # Copy binary from builder
 COPY --from=builder /build/vpn-bot /app/vpn-bot
 
-# Create data directory
+# Create data directory for SQLite
 RUN mkdir -p /app/data
-
-# Expose subscription port
-EXPOSE 8000
 
 # Run the bot
 CMD ["/app/vpn-bot"]
