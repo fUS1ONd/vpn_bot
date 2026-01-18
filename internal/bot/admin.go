@@ -180,13 +180,17 @@ func (b *Bot) handleAdminBroadcastMenu(c tele.Context) error {
 	// Получаем количество активных пользователей из Remnawave
 	users, err := b.remnawave.GetAllUsers()
 	activeCount := 0
-	if err == nil {
+	if err != nil {
+		slog.Error("Failed to get users from Remnawave for broadcast menu", "error", err)
+	} else {
+		slog.Info("Got users from Remnawave", "total", len(users))
 		for _, u := range users {
 			// Считаем только активных пользователей с привязанным Telegram ID
 			if u.Status == remnawave.StatusActive && u.TelegramID != nil && *u.TelegramID != 0 {
 				activeCount++
 			}
 		}
+		slog.Info("Active users with TelegramID", "count", activeCount)
 	}
 
 	msg := fmt.Sprintf(MsgAdminBroadcastMenu, activeCount)

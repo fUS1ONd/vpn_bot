@@ -170,8 +170,8 @@ func (c *Client) GetUserByTelegramID(telegramID int64) (*User, error) {
 
 // GetAllUsers получает список всех пользователей
 func (c *Client) GetAllUsers() ([]User, error) {
-	// Получаем с большим лимитом чтобы получить всех
-	resp, err := c.doRequest("GET", "/api/users?size=10000", nil)
+	// Получаем с максимальным лимитом (API ограничивает до 1000)
+	resp, err := c.doRequest("GET", "/api/users?size=1000", nil)
 	if err != nil {
 		return nil, err
 	}
