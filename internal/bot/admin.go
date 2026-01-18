@@ -182,7 +182,8 @@ func (b *Bot) handleAdminBroadcastMenu(c tele.Context) error {
 	activeCount := 0
 	if err == nil {
 		for _, u := range users {
-			if u.Status == remnawave.StatusActive {
+			// Считаем только активных пользователей с привязанным Telegram ID
+			if u.Status == remnawave.StatusActive && u.TelegramID != nil && *u.TelegramID != 0 {
 				activeCount++
 			}
 		}
@@ -201,12 +202,13 @@ func (b *Bot) handleBroadcastActiveRequest(c tele.Context) error {
 		return nil
 	}
 
-	// Получаем количество активных
+	// Получаем количество активных с Telegram ID
 	users, err := b.remnawave.GetAllUsers()
 	activeCount := 0
 	if err == nil {
 		for _, u := range users {
-			if u.Status == remnawave.StatusActive {
+			// Считаем только активных пользователей с привязанным Telegram ID
+			if u.Status == remnawave.StatusActive && u.TelegramID != nil && *u.TelegramID != 0 {
 				activeCount++
 			}
 		}
