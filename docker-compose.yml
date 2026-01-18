@@ -1,6 +1,6 @@
 services:
   vpn-bot:
-    build: .
+    image: fus1ond/vpn-bot:latest
     container_name: vpn-bot
     restart: unless-stopped
     volumes:
