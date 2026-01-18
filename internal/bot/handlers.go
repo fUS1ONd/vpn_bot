@@ -142,6 +142,9 @@ func (b *Bot) handleStart(c tele.Context) error {
 	}
 
 	// Существующий пользователь — обновляем username если изменился
+	// Очищаем состояние ожидания инвайта, если оно было (чтобы не блокировать доступ)
+	delete(b.userStates, telegramID)
+
 	currentUsername := c.Sender().Username
 	if user.Username != currentUsername {
 		if err := b.db.UpdateUsername(user.TelegramID, currentUsername); err != nil {
