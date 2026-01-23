@@ -7,13 +7,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	tele "gopkg.in/telebot.v3"
 )
 
 // Состояния админа
 const (
-	StateWaitBanUser = "wait_ban_user" // Ожидание telegram_id для бана
+	StateWaitBanUser      = "wait_ban_user"      // Ожидание telegram_id для бана
+	StateWaitDeleteInvite = "wait_delete_invite" // Ожидание кода для удаления
 )
 
 // isAdmin проверяет, является ли пользователь админом
@@ -284,5 +286,111 @@ func (b *Bot) processBroadcastMessage(c tele.Context, _ bool) error {
 	})
 
 	return nil
+}
+
+// handleViewInvites показывает список всех инвайт-кодов
+func (b *Bot) handleViewInvites(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	invites, err := b.db.GetAllInvitesWithUsers()
+	if err != nil {
+		slog.Error("Failed to get invites", "error", err)
+		return c.Send("Ошибка получения списка кодов", &tele.SendOptions{
+			ReplyMarkup: AdminManageKeyboard(),
+		})
+	}
+
+	if len(invites) == 0 {
+		return c.Send("📋 Инвайт-кодов пока нет", &tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: AdminManageKeyboard(),
+		})
+	}
+
+	msg := formatInvitesList(invites)
+	return c.Send(msg, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminManageKeyboard(),
+	})
+}
+
+// formatInvitesList форматирует список инвайтов для отображения
+func formatInvitesList(invites []database.InviteWithUser) string {
+	var msg strings.Builder
+	msg.WriteString("<b>📋 Список инвайт-кодов</b>\n\n")
+
+	for _, inv := range invites {
+		if inv.UsedBy != nil {
+			// Использованный код
+			msg.WriteString("✅ <b>Использован</b>\n")
+			msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
+
+			// Ссылка на пользователя
+			userLink := fmt.Sprintf("<a href=\"tg://user?id=%d\">%d</a>", *inv.UsedBy, *inv.UsedBy)
+			if inv.UserUsername != "" {
+				msg.WriteString(fmt.Sprintf("👤 @%s (%s)", inv.UserUsername, userLink))
+			} else {
+				msg.WriteString(fmt.Sprintf("👤 %s", userLink))
+			}
+
+			if inv.UserFirstName != "" {
+				msg.WriteString(fmt.Sprintf(" • %s", inv.UserFirstName))
+			}
+			msg.WriteString("\n")
+
+			// Дата активации
+			if inv.UsedAt != nil {
+				msg.WriteString(fmt.Sprintf("📅 %s\n", inv.UsedAt.Format("02.01.06 15:04")))
+			}
+		} else {
+			// Неиспользованный код
+			msg.WriteString("⭕ <b>Не использован</b>\n")
+			msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
+			msg.WriteString(fmt.Sprintf("📅 Создан: %s\n", inv.CreatedAt.Format("02.01.06 15:04")))
+		}
+		msg.WriteString("\n")
+	}
+
+	return msg.String()
+}
+
+// handleDeleteInviteRequest запрашивает код для удаления
+func (b *Bot) handleDeleteInviteRequest(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	b.userStates[c.Sender().ID] = StateWaitDeleteInvite
+	return c.Send("<b>🗑 Удаление инвайт-кода</b>\n\nВведите код для удаления:", &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: CancelKeyboard(),
+	})
+}
+
+// processDeleteInvite обрабатывает удаление инвайта
+func (b *Bot) processDeleteInvite(c tele.Context, code string) error {
+	delete(b.userStates, c.Sender().ID)
+
+	code = strings.TrimSpace(code)
+
+	err := b.db.DeleteUnusedInvite(code)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found or already used") {
+			return c.Send("❌ Код не найден или уже использован.\nМожно удалить только неиспользованные коды.", &tele.SendOptions{
+				ReplyMarkup: AdminManageKeyboard(),
+			})
+		}
+		slog.Error("Failed to delete invite", "error", err)
+		return c.Send("Ошибка удаления кода", &tele.SendOptions{
+			ReplyMarkup: AdminManageKeyboard(),
+		})
+	}
+
+	return c.Send(fmt.Sprintf("✅ Код <code>%s</code> удалён", code), &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminManageKeyboard(),
+	})
 }
 

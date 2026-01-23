@@ -19,6 +19,7 @@ type DB struct {
 type User struct {
 	TelegramID    int64
 	Username      string
+	FirstName     string // Имя пользователя из Telegram
 	RemnawaveUUID string
 	CreatedAt     time.Time
 }
@@ -28,6 +29,7 @@ type Invite struct {
 	Code      string
 	CreatedBy int64
 	UsedBy    *int64
+	UsedAt    *time.Time // Время активации кода
 	CreatedAt time.Time
 }
 
@@ -90,6 +92,19 @@ func migrate(conn *sql.DB) error {
 		if _, err := conn.Exec(m); err != nil {
 			return fmt.Errorf("migration failed: %w\nSQL: %s", err, m)
 		}
+	}
+
+	// Безопасные миграции ALTER TABLE (игнорируем ошибку "duplicate column")
+	alterMigrations := []string{
+		// Миграция: добавление поля first_name в таблицу users
+		`ALTER TABLE users ADD COLUMN first_name TEXT`,
+		// Миграция: добавление поля used_at в таблицу invites
+		`ALTER TABLE invites ADD COLUMN used_at TIMESTAMP`,
+	}
+
+	for _, m := range alterMigrations {
+		// Игнорируем ошибки ALTER TABLE - колонка может уже существовать
+		conn.Exec(m)
 	}
 
 	return nil

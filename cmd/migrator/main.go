@@ -133,8 +133,8 @@ func main() {
 			continue
 		}
 
-		// Сохраняем в новую БД
-		_, err = newDB.CreateUser(oldUser.TelegramID, username, remnawaveUser.UUID)
+		// Сохраняем в новую БД (first_name пустой, так как старая БД его не хранила)
+		_, err = newDB.CreateUser(oldUser.TelegramID, username, "", remnawaveUser.UUID)
 		if err != nil {
 			logLine := fmt.Sprintf("[ERROR] telegram_id=%d — DB error: %v\n", oldUser.TelegramID, err)
 			fmt.Print(logLine)

@@ -5,7 +5,19 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"time"
 )
+
+// InviteWithUser содержит информацию об инвайте вместе с данными пользователя, который его активировал
+type InviteWithUser struct {
+	Code          string
+	CreatedBy     int64
+	UsedBy        *int64
+	UsedAt        *time.Time
+	CreatedAt     time.Time
+	UserUsername  string // Username пользователя, который активировал код
+	UserFirstName string // First name пользователя, который активировал код
+}
 
 // CreateInvite создаёт новый инвайт
 func (db *DB) CreateInvite(createdBy int64) (*Invite, error) {
@@ -49,10 +61,10 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	return &invite, nil
 }
 
-// UseInvite помечает инвайт как использованный
+// UseInvite помечает инвайт как использованный с временем активации
 func (db *DB) UseInvite(code string, usedBy int64) error {
 	result, err := db.conn.Exec(
-		`UPDATE invites SET used_by = ? WHERE code = ? AND used_by IS NULL`,
+		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL`,
 		usedBy, code,
 	)
 	if err != nil {
@@ -162,6 +174,82 @@ func (db *DB) CountUnusedInvites() (int, error) {
 		return 0, fmt.Errorf("failed to count invites: %w", err)
 	}
 	return count, nil
+}
+
+// GetAllInvitesWithUsers получает все инвайты с информацией о пользователях
+func (db *DB) GetAllInvitesWithUsers() ([]InviteWithUser, error) {
+	query := `
+		SELECT
+			i.code, i.created_by, i.used_by, i.used_at, i.created_at,
+			u.username, u.first_name
+		FROM invites i
+		LEFT JOIN users u ON i.used_by = u.telegram_id
+		ORDER BY i.created_at DESC
+	`
+
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query invites: %w", err)
+	}
+	defer rows.Close()
+
+	var invites []InviteWithUser
+	for rows.Next() {
+		var inv InviteWithUser
+		var usedBy sql.NullInt64
+		var usedAt sql.NullTime
+		var username, firstName sql.NullString
+
+		err := rows.Scan(
+			&inv.Code, &inv.CreatedBy, &usedBy, &usedAt, &inv.CreatedAt,
+			&username, &firstName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan invite: %w", err)
+		}
+
+		if usedBy.Valid {
+			inv.UsedBy = &usedBy.Int64
+		}
+		if usedAt.Valid {
+			inv.UsedAt = &usedAt.Time
+		}
+		if username.Valid {
+			inv.UserUsername = username.String
+		}
+		if firstName.Valid {
+			inv.UserFirstName = firstName.String
+		}
+
+		invites = append(invites, inv)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return invites, nil
+}
+
+// DeleteUnusedInvite удаляет только неиспользованный инвайт
+func (db *DB) DeleteUnusedInvite(code string) error {
+	result, err := db.conn.Exec(
+		`DELETE FROM invites WHERE code = ? AND used_by IS NULL`,
+		code,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete invite: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get affected rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("invite not found or already used")
+	}
+
+	return nil
 }
 
 // generateInviteCode генерирует случайный 8-символьный код

@@ -6,10 +6,10 @@ import (
 )
 
 // CreateUser создаёт нового пользователя
-func (db *DB) CreateUser(telegramID int64, username, remnawaveUUID string) (*User, error) {
+func (db *DB) CreateUser(telegramID int64, username, firstName, remnawaveUUID string) (*User, error) {
 	_, err := db.conn.Exec(
-		`INSERT INTO users (telegram_id, username, remnawave_uuid) VALUES (?, ?, ?)`,
-		telegramID, username, remnawaveUUID,
+		`INSERT INTO users (telegram_id, username, first_name, remnawave_uuid) VALUES (?, ?, ?, ?)`,
+		telegramID, username, firstName, remnawaveUUID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
@@ -21,16 +21,21 @@ func (db *DB) CreateUser(telegramID int64, username, remnawaveUUID string) (*Use
 // GetUserByTelegramID получает пользователя по Telegram ID
 func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 	var user User
+	var firstName sql.NullString
 	err := db.conn.QueryRow(
-		`SELECT telegram_id, username, remnawave_uuid, created_at FROM users WHERE telegram_id = ?`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, created_at FROM users WHERE telegram_id = ?`,
 		telegramID,
-	).Scan(&user.TelegramID, &user.Username, &user.RemnawaveUUID, &user.CreatedAt)
+	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &user.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	if firstName.Valid {
+		user.FirstName = firstName.String
 	}
 
 	return &user, nil
@@ -39,10 +44,11 @@ func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 // GetUserByRemnawaveUUID получает пользователя по Remnawave UUID
 func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
 	var user User
+	var firstName sql.NullString
 	err := db.conn.QueryRow(
-		`SELECT telegram_id, username, remnawave_uuid, created_at FROM users WHERE remnawave_uuid = ?`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, created_at FROM users WHERE remnawave_uuid = ?`,
 		uuid,
-	).Scan(&user.TelegramID, &user.Username, &user.RemnawaveUUID, &user.CreatedAt)
+	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &user.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -51,13 +57,17 @@ func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 
+	if firstName.Valid {
+		user.FirstName = firstName.String
+	}
+
 	return &user, nil
 }
 
 // GetAllUsers получает всех пользователей
 func (db *DB) GetAllUsers() ([]User, error) {
 	rows, err := db.conn.Query(
-		`SELECT telegram_id, username, remnawave_uuid, created_at FROM users ORDER BY created_at`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, created_at FROM users ORDER BY created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query users: %w", err)
@@ -67,8 +77,12 @@ func (db *DB) GetAllUsers() ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var user User
-		if err := rows.Scan(&user.TelegramID, &user.Username, &user.RemnawaveUUID, &user.CreatedAt); err != nil {
+		var firstName sql.NullString
+		if err := rows.Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &user.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
+		}
+		if firstName.Valid {
+			user.FirstName = firstName.String
 		}
 		users = append(users, user)
 	}
@@ -88,6 +102,18 @@ func (db *DB) UpdateUsername(telegramID int64, username string) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update username: %w", err)
+	}
+	return nil
+}
+
+// UpdateUserInfo обновляет username и first_name пользователя (Upsert для актуализации данных)
+func (db *DB) UpdateUserInfo(telegramID int64, username, firstName string) error {
+	_, err := db.conn.Exec(
+		`UPDATE users SET username = ?, first_name = ? WHERE telegram_id = ?`,
+		username, firstName, telegramID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update user info: %w", err)
 	}
 	return nil
 }

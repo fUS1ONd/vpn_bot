@@ -62,7 +62,7 @@ func TestHandleStart(t *testing.T) {
 	t.Run("ExistingUser", func(t *testing.T) {
 		// Создаем пользователя в БД
 		userID := int64(222)
-		_, err := db.CreateUser(userID, "olduser", "uuid-123")
+		_, err := db.CreateUser(userID, "olduser", "OldFirstName", "uuid-123")
 		assert.NoError(t, err)
 
 		user := &tele.User{ID: userID, Username: "olduser"}

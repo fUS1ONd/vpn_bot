@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
@@ -141,16 +142,12 @@ func (b *Bot) handleStart(c tele.Context) error {
 		})
 	}
 
-	// Существующий пользователь — обновляем username если изменился
+	// Существующий пользователь — синхронизируем данные
 	// Очищаем состояние ожидания инвайта, если оно было (чтобы не блокировать доступ)
 	delete(b.userStates, telegramID)
 
-	currentUsername := c.Sender().Username
-	if user.Username != currentUsername {
-		if err := b.db.UpdateUsername(user.TelegramID, currentUsername); err != nil {
-			slog.Error("Failed to update username", "error", err)
-		}
-	}
+	// Актуализируем username и first_name в БД и Remnawave
+	b.syncUserInfo(c)
 
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
@@ -208,6 +205,15 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		if b.isAdmin(c) {
 			return b.processBanUser(c, text)
 		}
+
+	case StateWaitDeleteInvite:
+		if text == BtnCancel {
+			delete(b.userStates, telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processDeleteInvite(c, text)
+		}
 	}
 
 	// Админ-кнопки
@@ -227,6 +233,10 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleAddTrafficRequest(c)
 		case BtnAdminBanUser:
 			return b.handleBanUserRequest(c)
+		case BtnAdminViewInvites:
+			return b.handleViewInvites(c)
+		case BtnAdminDeleteInvite:
+			return b.handleDeleteInviteRequest(c)
 		case BtnBroadcastActive:
 			return b.handleBroadcastActiveRequest(c)
 		}
@@ -291,7 +301,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	}
 
 	// Сохраняем связку в БД
-	_, err = b.db.CreateUser(telegramID, username, remnawaveUser.UUID)
+	_, err = b.db.CreateUser(telegramID, username, c.Sender().FirstName, remnawaveUser.UUID)
 	if err != nil {
 		slog.Error("Failed to create user in DB", "error", err)
 		// Пытаемся удалить из Remnawave если не смогли сохранить в БД
@@ -304,6 +314,9 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		slog.Error("Failed to mark invite as used", "error", err)
 	}
 
+	// Отправляем уведомление админу о новом пользователе (асинхронно)
+	go b.notifyAdminNewUser(telegramID, username, c.Sender().FirstName)
+
 	// Очищаем состояние
 	delete(b.userStates, telegramID)
 
@@ -313,6 +326,37 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: UserMenuKeyboard(),
 	})
+}
+
+// notifyAdminNewUser отправляет админу уведомление о новом пользователе
+func (b *Bot) notifyAdminNewUser(telegramID int64, username, firstName string) {
+	var msg strings.Builder
+	msg.WriteString("🆕 <b>Новый пользователь</b>\n\n")
+
+	// Дата и время
+	now := time.Now()
+	fmt.Fprintf(&msg, "📅 %s\n", now.Format("02.01.06 15:04"))
+
+	// Telegram ID с кликабельной ссылкой
+	userLink := fmt.Sprintf("<a href=\"tg://user?id=%d\">%d</a>", telegramID, telegramID)
+	if username != "" {
+		fmt.Fprintf(&msg, "🆔 %s (@%s)\n", userLink, username)
+	} else {
+		fmt.Fprintf(&msg, "🆔 %s\n", userLink)
+	}
+
+	// First name (если есть)
+	if firstName != "" {
+		fmt.Fprintf(&msg, "👤 %s\n", firstName)
+	}
+
+	admin := &tele.User{ID: b.config.AdminID}
+	_, err := b.bot.Send(admin, msg.String(), &tele.SendOptions{
+		ParseMode: tele.ModeHTML,
+	})
+	if err != nil {
+		slog.Error("Failed to notify admin about new user", "error", err)
+	}
 }
 
 // handleStatus показывает статус пользователя
@@ -451,4 +495,43 @@ func (b *Bot) handleInstructionMac(c tele.Context) error {
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: InstructionsKeyboard(),
 	})
+}
+
+// syncUserInfo синхронизирует username и first_name пользователя с БД и Remnawave
+// Вызывается при каждом взаимодействии пользователя с ботом для актуализации данных
+func (b *Bot) syncUserInfo(c tele.Context) {
+	telegramID := c.Sender().ID
+	currentUsername := c.Sender().Username
+	currentFirstName := c.Sender().FirstName
+
+	// Получаем данные из БД
+	user, err := b.db.GetUserByTelegramID(telegramID)
+	if err != nil || user == nil {
+		return // Пользователь не зарегистрирован - ничего не делаем
+	}
+
+	// Проверяем изменения
+	usernameChanged := user.Username != currentUsername
+	firstNameChanged := user.FirstName != currentFirstName
+
+	if !usernameChanged && !firstNameChanged {
+		return // Нет изменений
+	}
+
+	// Обновляем в БД
+	if err := b.db.UpdateUserInfo(telegramID, currentUsername, currentFirstName); err != nil {
+		slog.Error("Failed to update user info in DB", "error", err, "telegram_id", telegramID)
+	}
+
+	// Синхронизируем username с Remnawave (только если изменился)
+	if usernameChanged {
+		// Если username пустой, используем tg_id
+		usernameForRemnawave := currentUsername
+		if usernameForRemnawave == "" {
+			usernameForRemnawave = fmt.Sprintf("tg_%d", telegramID)
+		}
+		if err := b.remnawave.UpdateUsername(user.RemnawaveUUID, usernameForRemnawave); err != nil {
+			slog.Error("Failed to sync username to Remnawave", "error", err, "telegram_id", telegramID)
+		}
+	}
 }

@@ -26,6 +26,8 @@ const (
 	BtnAdminUserMode     = "👤 Режим пользователя"
 	BtnAdminBack         = "🔙 В меню админа"
 	BtnAdminCreateInvite = "🎟 Создать инвайт"
+	BtnAdminViewInvites  = "📋 Коды"
+	BtnAdminDeleteInvite = "🗑 Удалить код"
 	BtnAdminAddTraffic   = "📊 Добавить трафик"
 	BtnAdminBanUser      = "🚫 Забанить"
 
@@ -68,8 +70,9 @@ func AdminKeyboard() *tele.ReplyMarkup {
 func AdminManageKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
-		menu.Row(menu.Text(BtnAdminCreateInvite)),
+		menu.Row(menu.Text(BtnAdminCreateInvite), menu.Text(BtnAdminViewInvites)),
 		menu.Row(menu.Text(BtnAdminAddTraffic), menu.Text(BtnAdminBanUser)),
+		menu.Row(menu.Text(BtnAdminDeleteInvite)),
 		menu.Row(menu.Text(BtnAdminBack)),
 	)
 	return menu
