@@ -32,6 +32,7 @@ import (
 
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
+	"github.com/joho/godotenv"
 )
 
 func main() {
@@ -50,6 +51,11 @@ func main() {
 
 	if *dryRun && *live {
 		log.Fatal("Нельзя указать одновременно --dry-run и --live")
+	}
+
+	// Загружаем .env файл
+	if err := godotenv.Load(); err != nil {
+		log.Printf("⚠️  Файл .env не найден, используются переменные окружения")
 	}
 
 	// Загружаем конфигурацию из окружения
