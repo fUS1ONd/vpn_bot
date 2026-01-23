@@ -19,6 +19,7 @@ backups/
 
 /bot
 /migrator
+/backfill-used-at
 
 # IDE
 .vscode/
