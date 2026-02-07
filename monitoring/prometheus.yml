@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'vps_nodes'
+    file_sd_configs:
+      - files:
+          - '/etc/prometheus/sd_configs/targets.json'
+        refresh_interval: 30s

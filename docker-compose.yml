@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./data:/app/data
+      - ./sd_configs:/app/sd_configs
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - ADMIN_ID=${ADMIN_ID}
@@ -13,8 +14,51 @@ services:
       - REMNAWAVE_DEFAULT_SQUAD_UUID=${REMNAWAVE_DEFAULT_SQUAD_UUID}
       - DB_PATH=${DB_PATH:-/app/data/bot.db}
       - DONATE_TEXT=${DONATE_TEXT}
+      - SD_CONFIGS_PATH=${SD_CONFIGS_PATH:-/app/sd_configs}
+      - VICTORIA_METRICS_URL=${VICTORIA_METRICS_URL:-http://victoriametrics:8428}
     env_file:
       - .env
+    networks:
+      - vpn-network
+    depends_on:
+      - victoriametrics
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    container_name: vm_db
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8428:8428"
+    volumes:
+      - ./vm-data:/storage
+    command:
+      - "--storageDataPath=/storage"
+      - "--retentionPeriod=30d"
+    networks:
+      - vpn-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  vmagent:
+    image: victoriametrics/vmagent:latest
+    container_name: vm_agent
+    restart: unless-stopped
+    depends_on:
+      - victoriametrics
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./sd_configs:/etc/prometheus/sd_configs:ro
+    command:
+      - "--promscrape.config=/etc/prometheus/prometheus.yml"
+      - "--remoteWrite.url=http://victoriametrics:8428/api/v1/write"
     networks:
       - vpn-network
     logging:
