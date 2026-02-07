@@ -14,6 +14,9 @@
 - **`internal/bot/handlers.go`** — обработчики сообщений, команд и синхронизация данных пользователей
 - **`internal/bot/admin.go`** — админ-панель (инвайты, просмотр кодов, трафик, бан, уведомления)
 - **`internal/bot/scheduler.go`** — сброс увеличенных лимитов 1-го числа
+- **`internal/bot/dashboard.go`** — Session Manager и движок live-дашборда мониторинга
+- **`internal/bot/dashboard_render.go`** — визуализация дашборда (прогресс-бары, флаги, метрики)
+- **`internal/monitoring/`** — пакет мониторинга (MetricsClient, SyncNodes, LoadIndex, Alerter)
 - **`cmd/migrator/main.go`** — миграция активных пользователей из старой БД
 
 ## Переменные окружения
@@ -33,6 +36,10 @@ DB_PATH=/app/data/bot.db
 
 # Донат
 DONATE_TEXT=Перевод по СБП: +7 999 000-00-00 (Т-Банк), Константин К.
+
+# Мониторинг (опционально, включается автоматически если VM доступна)
+SD_CONFIGS_PATH=/app/sd_configs
+VICTORIA_METRICS_URL=http://victoriametrics:8428
 ```
 
 ## Система инвайтов
@@ -156,8 +163,31 @@ CREATE TABLE invites (
 );
 ```
 
+## Мониторинг нод
+
+### Архитектура
+- **VictoriaMetrics** — база метрик (порт 8428)
+- **vmagent** — скрейпит Node Exporter на нодах
+- **Бот** — генерирует `targets.json`, читает метрики через PromQL
+
+### Конвенция тегов
+На нодах в Remnawave задаётся тег `bw:<число>` для указания bandwidth в Mbps.
+Пример: `bw:1000` = 1 Gbit. Дефолт: 1000 Mbps.
+
+### Алерты
+Бот отправляет админу алерты при:
+- Нода OFFLINE (Node Exporter не отвечает)
+- Load Index > 80% (перегрузка)
+
+### Установка Node Exporter на ноду
+```bash
+bash scripts/install-node-exporter.sh <IP_СЕРВЕРА_БОТА>
+```
+
 ## Ссылки
 
 - **План миграции**: `docs/plans/2026-01-17-remnawave-migration-design.md`
 - **Прогресс**: `docs/plans/PROGRESS.md`
 - **Дизайн отслеживания кодов**: `docs/plans/2026-01-23-admin-invite-tracking-design.md`
+- **Инфраструктура мониторинга**: `docs/plans/2026-02-07-monitoring-infrastructure-design.md`
+- **Дашборд мониторинга**: `docs/plans/2026-02-07-bot-monitoring-dashboard-design.md`
