@@ -16,13 +16,6 @@ const (
 	dashboardTTL            = 60 * time.Second
 )
 
-// Inline-кнопки дашборда (глобальные для регистрации обработчиков)
-var (
-	btnDashRefresh = tele.InlineButton{Unique: "dash_refresh", Text: "🔄 Обновить"}
-	btnDashStop    = tele.InlineButton{Unique: "dash_stop", Text: "⏹ Стоп"}
-	btnDashStart   = tele.InlineButton{Unique: "dash_start", Text: "▶️ Запустить"}
-)
-
 // dashboardSession — активная сессия мониторинга для одного чата
 type dashboardSession struct {
 	cancel    context.CancelFunc
@@ -58,13 +51,6 @@ func (dm *dashboardManager) set(chatID int64, session *dashboardSession) {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 	dm.sessions[chatID] = session
-}
-
-// registerDashboardHandlers регистрирует обработчики inline-кнопок дашборда
-func (b *Bot) registerDashboardHandlers() {
-	b.bot.Handle(&btnDashRefresh, b.handleDashCallbackRefresh)
-	b.bot.Handle(&btnDashStop, b.handleDashCallbackStop)
-	b.bot.Handle(&btnDashStart, b.handleDashCallbackStart)
 }
 
 // handleDashboard запускает live-дашборд для пользователя
@@ -106,22 +92,21 @@ func (b *Bot) runDashboardLoop(ctx context.Context, chatID int64, msgID int, sta
 
 	deadline := time.After(dashboardTTL)
 	var lastText string
-	var lastStats []monitoring.NodeStats
 
 	// Первое обновление сразу
 	remaining := dashboardTTL - time.Since(startedAt)
-	lastStats, lastText = b.updateDashboardMessage(chatID, msgID, lastText, remaining)
+	_, lastText = b.updateDashboardMessage(chatID, msgID, lastText, remaining)
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Остановлен пользователем или менеджером
+			// Остановлен менеджером (повторное нажатие «Серверы»)
 			return
 
 		case <-deadline:
-			// TTL истёк — засыпаем
+			// TTL истёк — финальное обновление с пометкой времени
 			b.dashboardMgr.stop(chatID)
-			b.sendDashboardStopped(chatID, msgID, lastStats)
+			b.sendDashboardFinished(chatID, msgID)
 			return
 
 		case <-ticker.C:
@@ -129,7 +114,7 @@ func (b *Bot) runDashboardLoop(ctx context.Context, chatID int64, msgID int, sta
 			if remaining < 0 {
 				remaining = 0
 			}
-			lastStats, lastText = b.updateDashboardMessage(chatID, msgID, lastText, remaining)
+			_, lastText = b.updateDashboardMessage(chatID, msgID, lastText, remaining)
 		}
 	}
 }
@@ -158,20 +143,13 @@ func (b *Bot) updateDashboardMessage(chatID int64, msgID int, prevText string, r
 		return stats, prevText
 	}
 
-	// Inline-кнопки
-	markup := &tele.ReplyMarkup{}
-	markup.Inline(
-		markup.Row(tele.Btn{Unique: btnDashRefresh.Unique, Text: btnDashRefresh.Text},
-			tele.Btn{Unique: btnDashStop.Unique, Text: btnDashStop.Text}),
-	)
-
-	// Редактируем сообщение
+	// Редактируем сообщение (без inline-кнопок)
 	_, err = b.bot.Edit(&tele.Message{
 		ID:   msgID,
 		Chat: &tele.Chat{ID: chatID},
 	}, text, &tele.SendOptions{
 		ParseMode: tele.ModeHTML,
-	}, markup)
+	})
 	if err != nil {
 		slog.Error("Ошибка редактирования дашборда", "error", err, "chat_id", chatID)
 	}
@@ -179,84 +157,33 @@ func (b *Bot) updateDashboardMessage(chatID int64, msgID int, prevText string, r
 	return stats, text
 }
 
-// sendDashboardStopped показывает «приостановлен» с кнопкой «Запустить»
-func (b *Bot) sendDashboardStopped(chatID int64, msgID int, lastStats []monitoring.NodeStats) {
-	text := renderDashboardStopped(lastStats)
+// sendDashboardFinished — финальное обновление после истечения TTL с пометкой времени
+func (b *Bot) sendDashboardFinished(chatID int64, msgID int) {
+	// Читаем последние данные
+	targets, err := monitoring.ReadTargets(b.sdConfigsPath)
+	if err != nil {
+		slog.Error("Ошибка чтения targets при завершении дашборда", "error", err)
+		return
+	}
 
-	markup := &tele.ReplyMarkup{}
-	markup.Inline(
-		markup.Row(tele.Btn{Unique: btnDashStart.Unique, Text: btnDashStart.Text}),
-	)
+	stats, err := b.metricsClient.GetAllNodeStats(targets)
+	if err != nil {
+		slog.Error("Ошибка получения метрик при завершении дашборда", "error", err)
+		return
+	}
 
-	_, err := b.bot.Edit(&tele.Message{
+	// Рендерим с нулевым remaining — покажет «Обновлено в HH:MM»
+	text := renderDashboard(stats, 0)
+
+	_, err = b.bot.Edit(&tele.Message{
 		ID:   msgID,
 		Chat: &tele.Chat{ID: chatID},
 	}, text, &tele.SendOptions{
 		ParseMode: tele.ModeHTML,
-	}, markup)
+	})
 	if err != nil {
-		slog.Error("Ошибка отправки stopped-дашборда", "error", err)
+		slog.Error("Ошибка финального обновления дашборда", "error", err)
 	}
-}
-
-// handleDashCallbackRefresh — кнопка «Обновить» (сбрасывает TTL)
-func (b *Bot) handleDashCallbackRefresh(c tele.Context) error {
-	chatID := c.Chat().ID
-
-	// Останавливаем текущую сессию и запускаем новую с тем же сообщением
-	b.dashboardMgr.stop(chatID)
-
-	msgID := c.Message().ID
-	ctx, cancel := context.WithCancel(context.Background())
-	now := time.Now()
-
-	session := &dashboardSession{
-		cancel:    cancel,
-		chatID:    chatID,
-		msgID:     msgID,
-		startedAt: now,
-	}
-	b.dashboardMgr.set(chatID, session)
-
-	go b.runDashboardLoop(ctx, chatID, msgID, now)
-
-	return c.Respond(&tele.CallbackResponse{Text: "🔄 Обновлено"})
-}
-
-// handleDashCallbackStop — кнопка «Стоп»
-func (b *Bot) handleDashCallbackStop(c tele.Context) error {
-	chatID := c.Chat().ID
-	b.dashboardMgr.stop(chatID)
-
-	// Получаем последние данные для отображения
-	targets, _ := monitoring.ReadTargets(b.sdConfigsPath)
-	stats, _ := b.metricsClient.GetAllNodeStats(targets)
-
-	b.sendDashboardStopped(chatID, c.Message().ID, stats)
-
-	return c.Respond(&tele.CallbackResponse{Text: "⏹ Остановлено"})
-}
-
-// handleDashCallbackStart — кнопка «Запустить снова»
-func (b *Bot) handleDashCallbackStart(c tele.Context) error {
-	chatID := c.Chat().ID
-	b.dashboardMgr.stop(chatID)
-
-	msgID := c.Message().ID
-	ctx, cancel := context.WithCancel(context.Background())
-	now := time.Now()
-
-	session := &dashboardSession{
-		cancel:    cancel,
-		chatID:    chatID,
-		msgID:     msgID,
-		startedAt: now,
-	}
-	b.dashboardMgr.set(chatID, session)
-
-	go b.runDashboardLoop(ctx, chatID, msgID, now)
-
-	return c.Respond(&tele.CallbackResponse{Text: "▶️ Запущено"})
 }
 
 // BotAlertSender — реализация AlertSender через Telegram бота

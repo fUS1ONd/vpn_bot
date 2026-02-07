@@ -98,25 +98,13 @@ func renderDashboard(allStats []monitoring.NodeStats, remaining time.Duration) s
 
 	// Футер с временем
 	now := time.Now()
-	secs := int(remaining.Seconds())
-	fmt.Fprintf(&b, "\n<i>⏱ %s (Live • %ds)</i>", now.Format("15:04:05"), secs)
-
-	return b.String()
-}
-
-// renderDashboardStopped — сообщение при остановке мониторинга
-func renderDashboardStopped(allStats []monitoring.NodeStats) string {
-	var b strings.Builder
-
-	b.WriteString("📡 <b>MONITORING DASHBOARD</b>\n")
-
-	for _, stats := range allStats {
-		b.WriteString("\n")
-		b.WriteString(renderNodeBlock(stats))
-		b.WriteString("\n")
+	if remaining <= 0 {
+		// TTL истёк — показываем время последнего обновления
+		fmt.Fprintf(&b, "\n<i>⏱ Обновлено в %s</i>", now.Format("15:04"))
+	} else {
+		secs := int(remaining.Seconds())
+		fmt.Fprintf(&b, "\n<i>⏱ %s (Live • %ds)</i>", now.Format("15:04:05"), secs)
 	}
-
-	b.WriteString("\n<i>💤 Мониторинг приостановлен</i>")
 
 	return b.String()
 }

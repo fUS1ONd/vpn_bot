@@ -80,14 +80,10 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 
 	// Регистрация обработчиков
 	b.Handle("/start", bot.handleStart)
-	b.Handle(tele.OnCallback, bot.handleCallback)
 	b.Handle(tele.OnText, bot.handleTextMessage)
 	b.Handle(tele.OnPhoto, bot.handleMediaMessage)
 	b.Handle(tele.OnVideo, bot.handleMediaMessage)
 	b.Handle(tele.OnDocument, bot.handleMediaMessage)
-
-	// Обработчики inline-кнопок дашборда
-	bot.registerDashboardHandlers()
 
 	return bot, nil
 }
@@ -96,17 +92,6 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 func (b *Bot) Run() {
 	slog.Info("Bot started", "username", b.bot.Me.Username)
 	b.bot.Start()
-}
-
-// handleCallback обрабатывает callback-запросы (fallback для незарегистрированных кнопок)
-func (b *Bot) handleCallback(c tele.Context) error {
-	callback := c.Callback()
-	if callback == nil {
-		return nil
-	}
-
-	slog.Info("Unhandled callback", "data", callback.Data, "from", c.Sender().ID)
-	return c.Respond()
 }
 
 // handleMediaMessage обрабатывает медиа-сообщения (для рассылки)
