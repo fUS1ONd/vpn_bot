@@ -24,6 +24,10 @@ type Config struct {
 
 	// Донат
 	DonateText string
+
+	// Мониторинг
+	SDConfigsPath      string // Путь к папке sd_configs для targets.json
+	VictoriaMetricsURL string // URL VictoriaMetrics API
 }
 
 // Load читает конфигурацию из переменных окружения
@@ -38,6 +42,8 @@ func Load() (*Config, error) {
 		RemnawaveSquadUUID: os.Getenv("REMNAWAVE_DEFAULT_SQUAD_UUID"),
 		DBPath:             getEnvOrDefault("DB_PATH", "/app/data/bot.db"),
 		DonateText:         os.Getenv("DONATE_TEXT"),
+		SDConfigsPath:      getEnvOrDefault("SD_CONFIGS_PATH", "/app/sd_configs"),
+		VictoriaMetricsURL: getEnvOrDefault("VICTORIA_METRICS_URL", "http://victoriametrics:8428"),
 	}
 
 	// Парсинг AdminID
