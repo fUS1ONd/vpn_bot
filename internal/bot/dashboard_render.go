@@ -71,14 +71,10 @@ func renderNodeBlock(stats monitoring.NodeStats) string {
 	fmt.Fprintf(&b, "├ <b>NET:</b>  %.0f%% (%.0f Mbps)%s\n", netPercent, stats.NetOutMbps, netExtra)
 
 	// LOSS (TCP retransmissions/sec)
-	lossExtra := ""
-	if stats.PktLoss > 0.5 {
-		lossExtra = " 💀"
-	}
 	if stats.PktLoss < 0.01 {
-		fmt.Fprintf(&b, "└ <b>LOSS:</b> 0%%%s", lossExtra)
+		fmt.Fprintf(&b, "└ <b>LOSS:</b> 0%%")
 	} else {
-		fmt.Fprintf(&b, "└ <b>LOSS:</b> %.1f seg/s%s", stats.PktLoss, lossExtra)
+		fmt.Fprintf(&b, "└ <b>LOSS:</b> %.1f seg/s", stats.PktLoss)
 	}
 
 	return b.String()

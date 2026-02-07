@@ -3,7 +3,7 @@ package monitoring
 import "math"
 
 // CalculateLoadIndex вычисляет индекс нагрузки ноды.
-// Формула: max(CPU%, NET%) + штраф за потери пакетов.
+// Формула: 0.3×CPU% + 0.7×NET% + мягкий штраф за потери пакетов.
 func CalculateLoadIndex(stats NodeStats) NodeStats {
 	// Процент загрузки сети (исходящий трафик / лимит канала)
 	netLoadPercent := 0.0
@@ -11,16 +11,16 @@ func CalculateLoadIndex(stats NodeStats) NodeStats {
 		netLoadPercent = (stats.NetOutMbps / float64(stats.BandwidthMb)) * 100
 	}
 
-	// Базовая нагрузка — максимум между CPU и сетью
-	baseLoad := math.Max(stats.CpuPercent, netLoadPercent)
+	// Взвешенная нагрузка: сеть важнее CPU для VPN-ноды
+	baseLoad := 0.3*stats.CpuPercent + 0.7*netLoadPercent
 
-	// Штраф за потери пакетов (TCP retransmissions/sec)
+	// Мягкий штраф за потери пакетов (TCP retransmissions/sec)
 	penalty := 0.0
 	if stats.PktLoss > 0.5 {
-		penalty += 10
+		penalty += 5
 	}
 	if stats.PktLoss > 2.0 {
-		penalty += 40
+		penalty += 10
 	}
 
 	stats.LoadIndex = math.Min(baseLoad+penalty, 100)
