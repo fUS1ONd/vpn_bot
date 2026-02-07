@@ -9,15 +9,6 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/monitoring"
 )
 
-// Флаги стран по ISO-кодам (наиболее частые)
-var countryFlags = map[string]string{
-	"DE": "🇩🇪", "US": "🇺🇸", "NL": "🇳🇱", "FI": "🇫🇮",
-	"FR": "🇫🇷", "GB": "🇬🇧", "JP": "🇯🇵", "SG": "🇸🇬",
-	"CA": "🇨🇦", "AU": "🇦🇺", "SE": "🇸🇪", "CH": "🇨🇭",
-	"KR": "🇰🇷", "HK": "🇭🇰", "PL": "🇵🇱", "RU": "🇷🇺",
-	"TR": "🇹🇷", "AE": "🇦🇪", "IN": "🇮🇳", "BR": "🇧🇷",
-}
-
 // renderLoadBar генерирует шкалу загрузки [▓▓▓░░░░░░░]
 func renderLoadBar(percent float64) string {
 	const barLen = 10
@@ -33,20 +24,15 @@ func renderLoadBar(percent float64) string {
 
 // renderNodeBlock генерирует текстовый блок одной ноды
 func renderNodeBlock(stats monitoring.NodeStats) string {
-	flag := countryFlags[stats.Country]
-	if flag == "" {
-		flag = "🌐"
-	}
-
 	// Нода offline
 	if !stats.IsUp {
-		return fmt.Sprintf("%s <b>%s</b> ⚫ OFFLINE", flag, stats.Hostname)
+		return fmt.Sprintf("<b>%s</b> ⚫ OFFLINE", stats.Hostname)
 	}
 
 	var b strings.Builder
 
-	// Заголовок: 🇩🇪 DE-Frankfurt-1
-	fmt.Fprintf(&b, "%s <b>%s</b>\n", flag, stats.Hostname)
+	// Заголовок (имя из remark хоста, флаги уже включены в имя)
+	fmt.Fprintf(&b, "<b>%s</b>\n", stats.Hostname)
 
 	// Load bar: [▓▓░░░░░░░░] 18% 🟢
 	bar := renderLoadBar(stats.LoadIndex)
