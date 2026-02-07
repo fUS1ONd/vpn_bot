@@ -80,6 +80,13 @@ type Node struct {
 	UsersOnline *int     `json:"usersOnline"`
 }
 
+// Host — данные хоста из Remnawave (прокси-конфиг, видимый пользователям)
+type Host struct {
+	UUID   string   `json:"uuid"`
+	Remark string   `json:"remark"`
+	Nodes  []string `json:"nodes"`
+}
+
 // CreateUserRequest — запрос на создание пользователя
 type CreateUserRequest struct {
 	Username             string   `json:"username"`
@@ -259,6 +266,23 @@ func (c *Client) GetAllNodes() ([]Node, error) {
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal nodes response: %w", err)
+	}
+
+	return result.Response, nil
+}
+
+// GetAllHosts получает список всех хостов
+func (c *Client) GetAllHosts() ([]Host, error) {
+	resp, err := c.doRequest("GET", "/api/hosts", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Response []Host `json:"response"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal hosts response: %w", err)
 	}
 
 	return result.Response, nil
