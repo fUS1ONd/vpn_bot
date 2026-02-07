@@ -67,6 +67,19 @@ type Traffic struct {
 	OnlineAt                 *time.Time `json:"onlineAt"`
 }
 
+// Node — данные ноды из Remnawave
+type Node struct {
+	UUID        string   `json:"uuid"`
+	Name        string   `json:"name"`
+	Address     string   `json:"address"`
+	Port        *int     `json:"port"`
+	IsConnected bool     `json:"isConnected"`
+	IsDisabled  bool     `json:"isDisabled"`
+	CountryCode string   `json:"countryCode"`
+	Tags        []string `json:"tags"`
+	UsersOnline *int     `json:"usersOnline"`
+}
+
 // CreateUserRequest — запрос на создание пользователя
 type CreateUserRequest struct {
 	Username             string   `json:"username"`
@@ -232,6 +245,23 @@ func (c *Client) ResetUserTraffic(uuid string) error {
 func (c *Client) DeleteUser(uuid string) error {
 	_, err := c.doRequest("DELETE", "/api/users/"+uuid, nil)
 	return err
+}
+
+// GetAllNodes получает список всех нод
+func (c *Client) GetAllNodes() ([]Node, error) {
+	resp, err := c.doRequest("GET", "/api/nodes", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Response []Node `json:"response"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal nodes response: %w", err)
+	}
+
+	return result.Response, nil
 }
 
 // doRequest выполняет HTTP-запрос к API
