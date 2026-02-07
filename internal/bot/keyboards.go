@@ -20,6 +20,9 @@ const (
 	BtnInstWindows = "💻 Windows"
 	BtnInstMac     = "🍏 macOS"
 
+	// Кнопка серверов (мониторинг)
+	BtnServers = "📡 Серверы"
+
 	// Админ-кнопки
 	BtnAdminManage       = "📋 Управление"
 	BtnAdminBroadcast    = "📢 Рассылка"
@@ -40,7 +43,8 @@ func UserMenuKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnStatus), menu.Text(BtnConnect)),
-		menu.Row(menu.Text(BtnDonate), menu.Text(BtnInstructions)),
+		menu.Row(menu.Text(BtnServers), menu.Text(BtnInstructions)),
+		menu.Row(menu.Text(BtnDonate)),
 	)
 	return menu
 }

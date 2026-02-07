@@ -8,6 +8,7 @@ import (
 
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/monitoring"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	tele "gopkg.in/telebot.v3"
 )
@@ -23,11 +24,14 @@ const (
 
 // Bot представляет Telegram бота
 type Bot struct {
-	bot        *tele.Bot
-	db         *database.DB
-	remnawave  *remnawave.Client
-	config     *config.Config
-	userStates map[int64]string
+	bot           *tele.Bot
+	db            *database.DB
+	remnawave     *remnawave.Client
+	config        *config.Config
+	userStates    map[int64]string
+	metricsClient *monitoring.MetricsClient // клиент метрик VM
+	dashboardMgr  *dashboardManager         // менеджер сессий дашборда
+	sdConfigsPath string                    // путь к sd_configs (для чтения targets)
 }
 
 // New создаёт нового Telegram бота
@@ -43,11 +47,14 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	}
 
 	bot := &Bot{
-		bot:        b,
-		db:         db,
-		remnawave:  remnawaveClient,
-		config:     cfg,
-		userStates: make(map[int64]string),
+		bot:           b,
+		db:            db,
+		remnawave:     remnawaveClient,
+		config:        cfg,
+		userStates:    make(map[int64]string),
+		metricsClient: monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
+		dashboardMgr:  newDashboardManager(),
+		sdConfigsPath: cfg.SDConfigsPath,
 	}
 
 	// Middleware для логирования
@@ -95,7 +102,18 @@ func (b *Bot) handleCallback(c tele.Context) error {
 		return nil
 	}
 
-	slog.Info("Callback routing", "data", callback.Data, "from", c.Sender().ID)
+	data := callback.Data
+	slog.Info("Callback routing", "data", data, "from", c.Sender().ID)
+
+	switch data {
+	case "\f" + cbDashRefresh:
+		return b.handleDashCallbackRefresh(c)
+	case "\f" + cbDashStop:
+		return b.handleDashCallbackStop(c)
+	case "\f" + cbDashStart:
+		return b.handleDashCallbackStart(c)
+	}
+
 	return c.Respond()
 }
 
@@ -250,6 +268,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		return b.handleConnect(c)
 	case BtnDonate:
 		return b.handleDonate(c)
+	case BtnServers:
+		return b.handleDashboard(c)
 	case BtnInstructions:
 		return b.handleInstructionsMenu(c)
 	case BtnBack:
