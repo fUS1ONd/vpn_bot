@@ -70,6 +70,10 @@ func main() {
 	// Запуск фоновой синхронизации targets.json для мониторинга нод
 	go monitoring.StartSyncLoop(ctx, remnawaveClient, cfg.SDConfigsPath)
 
+	// Запуск алертера (проверка состояния нод раз в минуту)
+	alertSender := bot.NewBotAlertSender(telegramBot)
+	go monitoring.StartAlerter(ctx, telegramBot.MetricsClient(), cfg.SDConfigsPath, alertSender)
+
 	// Запуск бота (блокирующий вызов)
 	telegramBot.Run()
 
