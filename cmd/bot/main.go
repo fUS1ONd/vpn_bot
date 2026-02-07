@@ -10,6 +10,7 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/bot"
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/monitoring"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
 
@@ -65,6 +66,9 @@ func main() {
 
 	// Запуск фонового scheduler для сброса лимитов (1-го числа месяца)
 	go telegramBot.StartScheduler(ctx)
+
+	// Запуск фоновой синхронизации targets.json для мониторинга нод
+	go monitoring.StartSyncLoop(ctx, remnawaveClient, cfg.SDConfigsPath)
 
 	// Запуск бота (блокирующий вызов)
 	telegramBot.Run()
