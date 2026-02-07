@@ -46,11 +46,14 @@ else
     echo "ВНИМАНИЕ: firewall не найден. Вручную откройте порт 9100 для ${CENTRAL_IP}"
 fi
 
-# Проверка
-sleep 5
-if curl -sf http://localhost:9100/metrics | head -1 | grep -q "HELP"; then
-    echo "=== Node Exporter установлен и работает ==="
-else
-    echo "ОШИБКА: Node Exporter не отвечает на localhost:9100"
-    exit 1
-fi
+# Проверка (ждём до 15 секунд пока сервис поднимется)
+for i in $(seq 1 15); do
+    if curl -sf http://localhost:9100/metrics | head -1 | grep -q "HELP"; then
+        echo "=== Node Exporter установлен и работает ==="
+        exit 0
+    fi
+    sleep 1
+done
+
+echo "ОШИБКА: Node Exporter не отвечает на localhost:9100"
+exit 1
