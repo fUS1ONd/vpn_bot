@@ -14,18 +14,21 @@ import (
 const (
 	dashboardUpdateInterval = 5 * time.Second
 	dashboardTTL            = 60 * time.Second
+)
 
-	// Callback data для inline-кнопок
-	cbDashRefresh = "dash_refresh"
-	cbDashStop    = "dash_stop"
-	cbDashStart   = "dash_start"
+// Inline-кнопки дашборда (глобальные для регистрации обработчиков)
+var (
+	btnDashRefresh = tele.InlineButton{Unique: "dash_refresh", Text: "🔄 Обновить"}
+	btnDashStop    = tele.InlineButton{Unique: "dash_stop", Text: "⏹ Стоп"}
+	btnDashStart   = tele.InlineButton{Unique: "dash_start", Text: "▶️ Запустить"}
 )
 
 // dashboardSession — активная сессия мониторинга для одного чата
 type dashboardSession struct {
-	cancel context.CancelFunc
-	chatID int64
-	msgID  int
+	cancel    context.CancelFunc
+	chatID    int64
+	msgID     int
+	startedAt time.Time
 }
 
 // dashboardManager — менеджер активных сессий дашборда
@@ -57,6 +60,13 @@ func (dm *dashboardManager) set(chatID int64, session *dashboardSession) {
 	dm.sessions[chatID] = session
 }
 
+// registerDashboardHandlers регистрирует обработчики inline-кнопок дашборда
+func (b *Bot) registerDashboardHandlers() {
+	b.bot.Handle(&btnDashRefresh, b.handleDashCallbackRefresh)
+	b.bot.Handle(&btnDashStop, b.handleDashCallbackStop)
+	b.bot.Handle(&btnDashStart, b.handleDashCallbackStart)
+}
+
 // handleDashboard запускает live-дашборд для пользователя
 func (b *Bot) handleDashboard(c tele.Context) error {
 	chatID := c.Chat().ID
@@ -76,20 +86,21 @@ func (b *Bot) handleDashboard(c tele.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	session := &dashboardSession{
-		cancel: cancel,
-		chatID: chatID,
-		msgID:  msg.ID,
+		cancel:    cancel,
+		chatID:    chatID,
+		msgID:     msg.ID,
+		startedAt: time.Now(),
 	}
 	b.dashboardMgr.set(chatID, session)
 
 	// Запускаем горутину обновлений
-	go b.runDashboardLoop(ctx, chatID, msg.ID)
+	go b.runDashboardLoop(ctx, chatID, msg.ID, session.startedAt)
 
 	return nil
 }
 
 // runDashboardLoop — цикл обновления дашборда
-func (b *Bot) runDashboardLoop(ctx context.Context, chatID int64, msgID int) {
+func (b *Bot) runDashboardLoop(ctx context.Context, chatID int64, msgID int, startedAt time.Time) {
 	ticker := time.NewTicker(dashboardUpdateInterval)
 	defer ticker.Stop()
 
@@ -98,7 +109,8 @@ func (b *Bot) runDashboardLoop(ctx context.Context, chatID int64, msgID int) {
 	var lastStats []monitoring.NodeStats
 
 	// Первое обновление сразу
-	lastStats, lastText = b.updateDashboardMessage(chatID, msgID, lastText, dashboardTTL)
+	remaining := dashboardTTL - time.Since(startedAt)
+	lastStats, lastText = b.updateDashboardMessage(chatID, msgID, lastText, remaining)
 
 	for {
 		select {
@@ -113,7 +125,11 @@ func (b *Bot) runDashboardLoop(ctx context.Context, chatID int64, msgID int) {
 			return
 
 		case <-ticker.C:
-			lastStats, lastText = b.updateDashboardMessage(chatID, msgID, lastText, 0)
+			remaining = dashboardTTL - time.Since(startedAt)
+			if remaining < 0 {
+				remaining = 0
+			}
+			lastStats, lastText = b.updateDashboardMessage(chatID, msgID, lastText, remaining)
 		}
 	}
 }
@@ -144,9 +160,10 @@ func (b *Bot) updateDashboardMessage(chatID int64, msgID int, prevText string, r
 
 	// Inline-кнопки
 	markup := &tele.ReplyMarkup{}
-	btnRefresh := markup.Data("🔄 Обновить", cbDashRefresh)
-	btnStop := markup.Data("⏹ Стоп", cbDashStop)
-	markup.Inline(markup.Row(btnRefresh, btnStop))
+	markup.Inline(
+		markup.Row(tele.Btn{Unique: btnDashRefresh.Unique, Text: btnDashRefresh.Text},
+			tele.Btn{Unique: btnDashStop.Unique, Text: btnDashStop.Text}),
+	)
 
 	// Редактируем сообщение
 	_, err = b.bot.Edit(&tele.Message{
@@ -167,8 +184,9 @@ func (b *Bot) sendDashboardStopped(chatID int64, msgID int, lastStats []monitori
 	text := renderDashboardStopped(lastStats)
 
 	markup := &tele.ReplyMarkup{}
-	btnStart := markup.Data("▶️ Запустить", cbDashStart)
-	markup.Inline(markup.Row(btnStart))
+	markup.Inline(
+		markup.Row(tele.Btn{Unique: btnDashStart.Unique, Text: btnDashStart.Text}),
+	)
 
 	_, err := b.bot.Edit(&tele.Message{
 		ID:   msgID,
@@ -190,15 +208,17 @@ func (b *Bot) handleDashCallbackRefresh(c tele.Context) error {
 
 	msgID := c.Message().ID
 	ctx, cancel := context.WithCancel(context.Background())
+	now := time.Now()
 
 	session := &dashboardSession{
-		cancel: cancel,
-		chatID: chatID,
-		msgID:  msgID,
+		cancel:    cancel,
+		chatID:    chatID,
+		msgID:     msgID,
+		startedAt: now,
 	}
 	b.dashboardMgr.set(chatID, session)
 
-	go b.runDashboardLoop(ctx, chatID, msgID)
+	go b.runDashboardLoop(ctx, chatID, msgID, now)
 
 	return c.Respond(&tele.CallbackResponse{Text: "🔄 Обновлено"})
 }
@@ -224,15 +244,17 @@ func (b *Bot) handleDashCallbackStart(c tele.Context) error {
 
 	msgID := c.Message().ID
 	ctx, cancel := context.WithCancel(context.Background())
+	now := time.Now()
 
 	session := &dashboardSession{
-		cancel: cancel,
-		chatID: chatID,
-		msgID:  msgID,
+		cancel:    cancel,
+		chatID:    chatID,
+		msgID:     msgID,
+		startedAt: now,
 	}
 	b.dashboardMgr.set(chatID, session)
 
-	go b.runDashboardLoop(ctx, chatID, msgID)
+	go b.runDashboardLoop(ctx, chatID, msgID, now)
 
 	return c.Respond(&tele.CallbackResponse{Text: "▶️ Запущено"})
 }

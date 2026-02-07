@@ -86,6 +86,9 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(tele.OnVideo, bot.handleMediaMessage)
 	b.Handle(tele.OnDocument, bot.handleMediaMessage)
 
+	// Обработчики inline-кнопок дашборда
+	bot.registerDashboardHandlers()
+
 	return bot, nil
 }
 
@@ -95,25 +98,14 @@ func (b *Bot) Run() {
 	b.bot.Start()
 }
 
-// handleCallback обрабатывает callback-запросы
+// handleCallback обрабатывает callback-запросы (fallback для незарегистрированных кнопок)
 func (b *Bot) handleCallback(c tele.Context) error {
 	callback := c.Callback()
 	if callback == nil {
 		return nil
 	}
 
-	data := callback.Data
-	slog.Info("Callback routing", "data", data, "from", c.Sender().ID)
-
-	switch data {
-	case "\f" + cbDashRefresh:
-		return b.handleDashCallbackRefresh(c)
-	case "\f" + cbDashStop:
-		return b.handleDashCallbackStop(c)
-	case "\f" + cbDashStart:
-		return b.handleDashCallbackStart(c)
-	}
-
+	slog.Info("Unhandled callback", "data", callback.Data, "from", c.Sender().ID)
 	return c.Respond()
 }
 
