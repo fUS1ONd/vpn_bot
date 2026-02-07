@@ -16,6 +16,10 @@ backups/
 
 # Docker
 *.log
+vm-data/
+
+# Мониторинг (рантайм-данные, генерируются ботом)
+sd_configs/targets.json
 
 /bot
 /migrator
