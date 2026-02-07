@@ -47,7 +47,7 @@ else
 fi
 
 # Проверка
-sleep 2
+sleep 5
 if curl -sf http://localhost:9100/metrics | head -1 | grep -q "HELP"; then
     echo "=== Node Exporter установлен и работает ==="
 else
