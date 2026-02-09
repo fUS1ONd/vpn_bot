@@ -28,6 +28,10 @@ type Config struct {
 	// Мониторинг
 	SDConfigsPath      string // Путь к папке sd_configs для targets.json
 	VictoriaMetricsURL string // URL VictoriaMetrics API
+
+	// Render-сервис (субтитры)
+	RenderURL    string // URL render-сервиса (опционально)
+	RenderAPIKey string // API-ключ для render-сервиса
 }
 
 // Load читает конфигурацию из переменных окружения
@@ -44,6 +48,8 @@ func Load() (*Config, error) {
 		DonateText:         os.Getenv("DONATE_TEXT"),
 		SDConfigsPath:      getEnvOrDefault("SD_CONFIGS_PATH", "/app/sd_configs"),
 		VictoriaMetricsURL: getEnvOrDefault("VICTORIA_METRICS_URL", "http://victoriametrics:8428"),
+		RenderURL:          os.Getenv("RENDER_URL"),
+		RenderAPIKey:       os.Getenv("RENDER_API_KEY"),
 	}
 
 	// Парсинг AdminID
