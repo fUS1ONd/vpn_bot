@@ -13,6 +13,7 @@ const (
 	BtnInstructions = "📚 Инструкции"
 	BtnBack         = "🔙 Назад"
 	BtnCancel       = "🚫 Отмена"
+	BtnSubtitles    = "🎤 Субтитры"
 
 	// Кнопки инструкций
 	BtnInstIOS     = "🍎 iOS"
@@ -39,13 +40,17 @@ const (
 )
 
 // UserMenuKeyboard возвращает главное меню пользователя
-func UserMenuKeyboard() *tele.ReplyMarkup {
+func UserMenuKeyboard(renderEnabled bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
+	rows := []tele.Row{
 		menu.Row(menu.Text(BtnStatus), menu.Text(BtnConnect)),
 		menu.Row(menu.Text(BtnServers), menu.Text(BtnInstructions)),
-		menu.Row(menu.Text(BtnDonate)),
-	)
+	}
+	if renderEnabled {
+		rows = append(rows, menu.Row(menu.Text(BtnSubtitles)))
+	}
+	rows = append(rows, menu.Row(menu.Text(BtnDonate)))
+	menu.Reply(rows...)
 	return menu
 }
 
