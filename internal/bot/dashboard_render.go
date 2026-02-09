@@ -26,7 +26,7 @@ func renderLoadBar(percent float64) string {
 func renderNodeBlock(stats monitoring.NodeStats) string {
 	// Нода offline
 	if !stats.IsUp {
-		return fmt.Sprintf("<b>%s</b> ⚫ OFFLINE", stats.Hostname)
+		return fmt.Sprintf("<b>%s</b> ⚫ Оффлайн", stats.Hostname)
 	}
 
 	var b strings.Builder
@@ -36,14 +36,14 @@ func renderNodeBlock(stats monitoring.NodeStats) string {
 
 	// Load bar: [▓▓░░░░░░░░] 18% 🟢
 	bar := renderLoadBar(stats.LoadIndex)
-	fmt.Fprintf(&b, "<b>Load:</b> %s <b>%.0f%%</b> %s\n", bar, stats.LoadIndex, stats.StatusEmoji)
+	fmt.Fprintf(&b, "<b>Индекс загрузки:</b> %s <b>%.0f%%</b> %s\n", bar, stats.LoadIndex, stats.StatusEmoji)
 
 	// CPU
 	cpuExtra := ""
 	if stats.CpuPercent > 90 {
 		cpuExtra = " 🔥"
 	}
-	fmt.Fprintf(&b, "├ <b>CPU:</b>  %.0f%%%s\n", stats.CpuPercent, cpuExtra)
+	fmt.Fprintf(&b, "├ <b>ЦП:</b>  %.0f%%%s\n", stats.CpuPercent, cpuExtra)
 
 	// NET (% от канала + значение в Mbps)
 	netPercent := 0.0
@@ -54,13 +54,13 @@ func renderNodeBlock(stats monitoring.NodeStats) string {
 	if netPercent > 80 {
 		netExtra = " ⚠️"
 	}
-	fmt.Fprintf(&b, "├ <b>NET:</b>  %.0f%% (%.0f Mbps)%s\n", netPercent, stats.NetOutMbps, netExtra)
+	fmt.Fprintf(&b, "├ <b>Сеть:</b>  %.0f%% (%.0f Mbps)%s\n", netPercent, stats.NetOutMbps, netExtra)
 
 	// LOSS (TCP retransmissions/sec)
 	if stats.PktLoss < 0.01 {
-		fmt.Fprintf(&b, "└ <b>LOSS:</b> 0%%")
+		fmt.Fprintf(&b, "└ <b>Потери:</b> 0%%")
 	} else {
-		fmt.Fprintf(&b, "└ <b>LOSS:</b> %.1f seg/s", stats.PktLoss)
+		fmt.Fprintf(&b, "└ <b>Потери:</b> %.1f TCP сегмент/сек", stats.PktLoss)
 	}
 
 	return b.String()
@@ -70,7 +70,7 @@ func renderNodeBlock(stats monitoring.NodeStats) string {
 func renderDashboard(allStats []monitoring.NodeStats, remaining time.Duration) string {
 	var b strings.Builder
 
-	b.WriteString("📡 <b>MONITORING DASHBOARD</b>\n")
+	b.WriteString("📡 <b>Мониторинг серверов</b>\n")
 
 	for _, stats := range allStats {
 		b.WriteString("\n")
@@ -85,7 +85,7 @@ func renderDashboard(allStats []monitoring.NodeStats, remaining time.Duration) s
 		fmt.Fprintf(&b, "\n<i>⏱ Обновлено в %s</i>", now.Format("15:04"))
 	} else {
 		secs := int(remaining.Seconds())
-		fmt.Fprintf(&b, "\n<i>⏱ %s (Live • %ds)</i>", now.Format("15:04:05"), secs)
+		fmt.Fprintf(&b, "\n<i>⏱ %s (Работает • %ds)</i>", now.Format("15:04:05"), secs)
 	}
 
 	return b.String()

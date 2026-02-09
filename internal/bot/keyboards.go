@@ -13,7 +13,7 @@ const (
 	BtnInstructions = "📚 Инструкции"
 	BtnBack         = "🔙 Назад"
 	BtnCancel       = "🚫 Отмена"
-	BtnSubtitles    = "🎤 Субтитры"
+	BtnSubtitles    = "🎤 Создать субтитры"
 
 	// Кнопки инструкций
 	BtnInstIOS     = "🍎 iOS"
