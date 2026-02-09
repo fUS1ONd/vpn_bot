@@ -17,6 +17,8 @@
 - **`internal/bot/dashboard.go`** — Session Manager и движок live-дашборда мониторинга
 - **`internal/bot/dashboard_render.go`** — визуализация дашборда (прогресс-бары, флаги, метрики)
 - **`internal/monitoring/`** — пакет мониторинга (MetricsClient, SyncNodes, LoadIndex, Alerter)
+- **`internal/render/client.go`** — HTTP-клиент render-сервиса (субтитры на видео)
+- **`internal/bot/render_handler.go`** — обработчики субтитров (голосовое → видео, кружок → кружок)
 - **`cmd/migrator/main.go`** — миграция активных пользователей из старой БД
 
 ## Переменные окружения
@@ -40,6 +42,10 @@ DONATE_TEXT=Перевод по СБП: +7 999 000-00-00 (Т-Банк), Конс
 # Мониторинг (опционально, включается автоматически если VM доступна)
 SD_CONFIGS_PATH=/app/sd_configs
 VICTORIA_METRICS_URL=http://victoriametrics:8428
+
+# Render-сервис субтитров (опционально, кнопка скрыта если не задан)
+RENDER_URL=http://render:8080
+RENDER_API_KEY=ключ_render_сервиса
 ```
 
 ## Система инвайтов
@@ -136,6 +142,7 @@ docker compose logs -f vpn-bot         # Логи в реал-тайме
 6. **Добавление трафика** — увеличивает текущий лимит (например, 30 → 40 GB), не затрагивает использованный трафик
 7. **Актуализация данных** — при каждом /start бот обновляет username и first_name в БД и синхронизирует username с Remnawave
 8. **Удаление кодов** — можно удалять только неиспользованные коды (защита истории активаций)
+9. **Субтитры** — опционально, требует запущенный render-сервис. Голосовое → видео с субтитрами, кружок → кружок с субтитрами
 
 ## Структура БД
 
@@ -191,3 +198,4 @@ bash scripts/install-node-exporter.sh <IP_СЕРВЕРА_БОТА>
 - **Дизайн отслеживания кодов**: `docs/plans/2026-01-23-admin-invite-tracking-design.md`
 - **Инфраструктура мониторинга**: `docs/plans/2026-02-07-monitoring-infrastructure-design.md`
 - **Дашборд мониторинга**: `docs/plans/2026-02-07-bot-monitoring-dashboard-design.md`
+- **Субтитры (render)**: `docs/plans/2026-02-10-render-subtitles-design.md`
