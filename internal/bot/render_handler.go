@@ -15,6 +15,38 @@ import (
 //go:embed default_avatar.png
 var defaultAvatar []byte
 
+// resolveMessageAuthor определяет автора сообщения — для пересланных возвращает оригинального отправителя
+func resolveMessageAuthor(c tele.Context) (author *tele.User, displayName string) {
+	msg := c.Message()
+
+	// Пересланное сообщение от пользователя с открытым аккаунтом
+	if msg.OriginalSender != nil {
+		user := msg.OriginalSender
+		name := user.Username
+		if name != "" {
+			name = "@" + name
+		} else if user.FirstName != "" {
+			name = user.FirstName
+		}
+		return user, name
+	}
+
+	// Пересланное сообщение от пользователя со скрытым аккаунтом
+	if msg.OriginalSenderName != "" {
+		return nil, msg.OriginalSenderName
+	}
+
+	// Обычное сообщение — используем отправителя
+	sender := c.Sender()
+	name := sender.Username
+	if name != "" {
+		name = "@" + name
+	} else if sender.FirstName != "" {
+		name = sender.FirstName
+	}
+	return sender, name
+}
+
 // handleVoiceMessage обрабатывает голосовые сообщения — сразу отправляет на рендер
 func (b *Bot) handleVoiceMessage(c tele.Context) error {
 	telegramID := c.Sender().ID
@@ -54,16 +86,11 @@ func (b *Bot) handleVoiceMessage(c tele.Context) error {
 		return nil
 	}
 
-	// Получаем аватарку пользователя (с fallback на дефолтную)
-	avatarData := b.getUserAvatar(c, statusMsg, telegramID)
+	// Определяем автора сообщения (для пересланных — оригинальный отправитель)
+	author, username := resolveMessageAuthor(c)
 
-	// Определяем отображаемое имя
-	username := c.Sender().Username
-	if username != "" {
-		username = "@" + username
-	} else if c.Sender().FirstName != "" {
-		username = c.Sender().FirstName
-	}
+	// Получаем аватарку автора (с fallback на дефолтную)
+	avatarData := b.getUserAvatar(author, statusMsg, telegramID)
 
 	// Запускаем рендеринг в горутине
 	go b.processVideoRender(c.Chat().ID, statusMsg.ID, telegramID, audioData, avatarData, username)
@@ -109,13 +136,8 @@ func (b *Bot) handleVideoNoteMessage(c tele.Context) error {
 		return nil
 	}
 
-	// Определяем отображаемое имя
-	username := c.Sender().Username
-	if username != "" {
-		username = "@" + username
-	} else if c.Sender().FirstName != "" {
-		username = c.Sender().FirstName
-	}
+	// Определяем автора сообщения (для пересланных — оригинальный отправитель)
+	_, username := resolveMessageAuthor(c)
 
 	// Запускаем рендеринг в горутине
 	go b.processCircleRender(c.Chat().ID, statusMsg.ID, telegramID, videoData, username)
@@ -238,9 +260,16 @@ func (b *Bot) processCircleRender(chatID int64, statusMsgID int, telegramID int6
 	b.bot.Delete(statusMsg)
 }
 
-// getUserAvatar получает аватарку пользователя, при неудаче возвращает дефолтную
-func (b *Bot) getUserAvatar(c tele.Context, statusMsg *tele.Message, telegramID int64) []byte {
-	photos, err := b.bot.ProfilePhotosOf(c.Sender())
+// getUserAvatar получает аватарку пользователя, при неудаче возвращает дефолтную.
+// Если user == nil (пересланное от скрытого аккаунта), сразу возвращает дефолтную.
+func (b *Bot) getUserAvatar(user *tele.User, statusMsg *tele.Message, telegramID int64) []byte {
+	if user == nil {
+		slog.Info("Автор скрыл аккаунт, используем дефолтную аватарку", "telegram_id", telegramID)
+		b.bot.Edit(statusMsg, MsgSubtitlesNoAvatar)
+		return defaultAvatar
+	}
+
+	photos, err := b.bot.ProfilePhotosOf(user)
 	if err != nil || len(photos) == 0 {
 		slog.Info("Аватарка недоступна, используем дефолтную", "telegram_id", telegramID)
 		b.bot.Edit(statusMsg, MsgSubtitlesNoAvatar)
