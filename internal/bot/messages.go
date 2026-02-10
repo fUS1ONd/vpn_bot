@@ -128,8 +128,6 @@ const (
 	MsgSubtitlesTimeout = `⏰ Рендеринг занял слишком долго. Попробуйте позже.`
 
 	MsgSubtitlesUnavailable = `❌ Сервис временно недоступен. Попробуйте позже.`
-
-	MsgSubtitlesCancelled = `Отменено ✖️`
 )
 
 // Сообщения админа

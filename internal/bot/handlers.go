@@ -34,7 +34,6 @@ type Bot struct {
 	dashboardMgr  *dashboardManager         // менеджер сессий дашборда
 	sdConfigsPath string                    // путь к sd_configs (для чтения targets)
 	render        *render.Client           // клиент render-сервиса (nil если не настроен)
-	renderCancels *renderCancels           // отмена активных рендер-задач
 }
 
 // New создаёт нового Telegram бота
@@ -58,7 +57,6 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		metricsClient: monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
 		dashboardMgr:  newDashboardManager(),
 		sdConfigsPath: cfg.SDConfigsPath,
-		renderCancels: newRenderCancels(),
 	}
 
 	// Middleware для логирования
@@ -96,7 +94,6 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(tele.OnDocument, bot.handleMediaMessage)
 	b.Handle(tele.OnVoice, bot.handleVoiceMessage)
 	b.Handle(tele.OnVideoNote, bot.handleVideoNoteMessage)
-	b.Handle(&tele.Btn{Unique: "render_cancel"}, bot.handleRenderCancel)
 
 	return bot, nil
 }
