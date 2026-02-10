@@ -2,6 +2,7 @@ package bot
 
 import (
 	"bytes"
+	_ "embed"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +11,9 @@ import (
 
 	tele "gopkg.in/telebot.v3"
 )
+
+//go:embed default_avatar.png
+var defaultAvatar []byte
 
 // handleVoiceMessage обрабатывает голосовые сообщения — сразу отправляет на рендер
 func (b *Bot) handleVoiceMessage(c tele.Context) error {
@@ -42,25 +46,7 @@ func (b *Bot) handleVoiceMessage(c tele.Context) error {
 	}
 	defer audioFile.Close()
 
-	// Получаем аватарку пользователя
-	photos, err := b.bot.ProfilePhotosOf(c.Sender())
-	if err != nil || len(photos) == 0 {
-		slog.Info("У пользователя нет аватарки", "telegram_id", telegramID)
-		b.bot.Edit(statusMsg, MsgSubtitlesNoAvatar)
-		return nil
-	}
-
-	// Скачиваем первую аватарку
-	photo := photos[0]
-	avatarFile, err := b.bot.File(&photo.File)
-	if err != nil {
-		slog.Error("Не удалось скачать аватарку", "error", err, "telegram_id", telegramID)
-		b.bot.Edit(statusMsg, MsgSubtitlesNoAvatar)
-		return nil
-	}
-	defer avatarFile.Close()
-
-	// Читаем файлы в буферы для передачи в горутину
+	// Читаем аудио в буфер для передачи в горутину
 	audioData, err := io.ReadAll(audioFile)
 	if err != nil {
 		slog.Error("Не удалось прочитать аудио", "error", err)
@@ -68,12 +54,8 @@ func (b *Bot) handleVoiceMessage(c tele.Context) error {
 		return nil
 	}
 
-	avatarData, err := io.ReadAll(avatarFile)
-	if err != nil {
-		slog.Error("Не удалось прочитать аватарку", "error", err)
-		b.bot.Edit(statusMsg, MsgSubtitlesError)
-		return nil
-	}
+	// Получаем аватарку пользователя (с fallback на дефолтную)
+	avatarData := b.getUserAvatar(c, statusMsg, telegramID)
 
 	// Определяем отображаемое имя
 	username := c.Sender().Username
@@ -254,6 +236,32 @@ func (b *Bot) processCircleRender(chatID int64, statusMsgID int, telegramID int6
 
 	// Удаляем статус-сообщение
 	b.bot.Delete(statusMsg)
+}
+
+// getUserAvatar получает аватарку пользователя, при неудаче возвращает дефолтную
+func (b *Bot) getUserAvatar(c tele.Context, statusMsg *tele.Message, telegramID int64) []byte {
+	photos, err := b.bot.ProfilePhotosOf(c.Sender())
+	if err != nil || len(photos) == 0 {
+		slog.Info("Аватарка недоступна, используем дефолтную", "telegram_id", telegramID)
+		b.bot.Edit(statusMsg, MsgSubtitlesNoAvatar)
+		return defaultAvatar
+	}
+
+	photo := photos[0]
+	avatarFile, err := b.bot.File(&photo.File)
+	if err != nil {
+		slog.Warn("Не удалось скачать аватарку, используем дефолтную", "error", err, "telegram_id", telegramID)
+		return defaultAvatar
+	}
+	defer avatarFile.Close()
+
+	avatarData, err := io.ReadAll(avatarFile)
+	if err != nil {
+		slog.Warn("Не удалось прочитать аватарку, используем дефолтную", "error", err, "telegram_id", telegramID)
+		return defaultAvatar
+	}
+
+	return avatarData
 }
 
 // pollRenderTask поллит статус задачи render с таймаутом 2 минуты
