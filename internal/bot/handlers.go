@@ -21,7 +21,6 @@ const (
 	StateWaitBroadcastAll   = "wait_broadcast_all"   // Ожидание сообщения для рассылки всем
 	StateWaitBroadcastActive = "wait_broadcast_active" // Ожидание сообщения для рассылки активным
 	StateWaitAddTraffic     = "wait_add_traffic"     // Ожидание данных для добавления трафика
-	StateWaitRender         = "wait_render"          // Ожидание голосового или кружка для субтитров
 )
 
 // Bot представляет Telegram бота
@@ -35,6 +34,7 @@ type Bot struct {
 	dashboardMgr  *dashboardManager         // менеджер сессий дашборда
 	sdConfigsPath string                    // путь к sd_configs (для чтения targets)
 	render        *render.Client           // клиент render-сервиса (nil если не настроен)
+	renderCancels *renderCancels           // отмена активных рендер-задач
 }
 
 // New создаёт нового Telegram бота
@@ -58,6 +58,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		metricsClient: monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
 		dashboardMgr:  newDashboardManager(),
 		sdConfigsPath: cfg.SDConfigsPath,
+		renderCancels: newRenderCancels(),
 	}
 
 	// Middleware для логирования
@@ -95,6 +96,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(tele.OnDocument, bot.handleMediaMessage)
 	b.Handle(tele.OnVoice, bot.handleVoiceMessage)
 	b.Handle(tele.OnVideoNote, bot.handleVideoNoteMessage)
+	b.Handle(&tele.Btn{Unique: "render_cancel"}, bot.handleRenderCancel)
 
 	return bot, nil
 }
@@ -119,11 +121,6 @@ func (b *Bot) handleMediaMessage(c tele.Context) error {
 		if b.isAdmin(c) {
 			return b.processBroadcastMessage(c, true)
 		}
-	case StateWaitRender:
-		// Фото/видео/документы в состоянии ожидания рендера — подсказка
-		return c.Send(MsgSubtitlesWrongType, &tele.SendOptions{
-			ReplyMarkup: CancelKeyboard(),
-		})
 	}
 
 	return nil
@@ -162,7 +159,7 @@ func (b *Bot) handleStart(c tele.Context) error {
 
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(b.renderEnabled()),
+		ReplyMarkup: UserMenuKeyboard(),
 	})
 }
 
@@ -226,18 +223,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processDeleteInvite(c, text)
 		}
 
-	case StateWaitRender:
-		if text == BtnCancel {
-			delete(b.userStates, telegramID)
-			return c.Send(MsgWelcomeBack, &tele.SendOptions{
-				ParseMode:   tele.ModeHTML,
-				ReplyMarkup: UserMenuKeyboard(b.renderEnabled()),
-			})
-		}
-		// В состоянии ожидания рендера текст не принимаем
-		return c.Send(MsgSubtitlesWrongType, &tele.SendOptions{
-			ReplyMarkup: CancelKeyboard(),
-		})
 	}
 
 	// Админ-кнопки
@@ -278,8 +263,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		return b.handleDashboard(c)
 	case BtnInstructions:
 		return b.handleInstructionsMenu(c)
-	case BtnSubtitles:
-		return b.handleSubtitlesButton(c)
 	case BtnBack:
 		return b.handleBack(c)
 	case BtnInstIOS:
@@ -352,7 +335,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	msg := fmt.Sprintf(MsgAccountCreated, remnawaveUser.SubscriptionURL)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(b.renderEnabled()),
+		ReplyMarkup: UserMenuKeyboard(),
 	})
 }
 
@@ -406,7 +389,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	msg := FormatUserStatus(remnawaveUser)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(b.renderEnabled()),
+		ReplyMarkup: UserMenuKeyboard(),
 	})
 }
 
@@ -429,7 +412,7 @@ func (b *Bot) handleConnect(c tele.Context) error {
 	msg := fmt.Sprintf(MsgSubscriptionLink, remnawaveUser.SubscriptionURL)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(b.renderEnabled()),
+		ReplyMarkup: UserMenuKeyboard(),
 	})
 }
 
@@ -438,7 +421,7 @@ func (b *Bot) handleDonate(c tele.Context) error {
 	msg := fmt.Sprintf(MsgDonate, b.config.DonateText)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(b.renderEnabled()),
+		ReplyMarkup: UserMenuKeyboard(),
 	})
 }
 
@@ -462,7 +445,7 @@ func (b *Bot) handleBack(c tele.Context) error {
 
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(b.renderEnabled()),
+		ReplyMarkup: UserMenuKeyboard(),
 	})
 }
 
@@ -470,7 +453,7 @@ func (b *Bot) handleBack(c tele.Context) error {
 func (b *Bot) handleUserMode(c tele.Context) error {
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(b.renderEnabled()),
+		ReplyMarkup: UserMenuKeyboard(),
 	})
 }
 
@@ -523,11 +506,6 @@ func (b *Bot) handleInstructionMac(c tele.Context) error {
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: InstructionsKeyboard(),
 	})
-}
-
-// renderEnabled проверяет, настроен ли render-сервис
-func (b *Bot) renderEnabled() bool {
-	return b.config.RenderURL != ""
 }
 
 // syncUserInfo синхронизирует username и first_name пользователя с БД и Remnawave
