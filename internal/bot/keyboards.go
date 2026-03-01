@@ -17,7 +17,7 @@ const (
 	// Кнопки инструкций
 	BtnInstIOS     = "🍎 iOS"
 	BtnInstAndroid = "🤖 Android"
-	BtnInstWindows = "💻 Windows"
+	BtnInstWindows = "💻 Windows/Linux"
 	BtnInstMac     = "🍏 macOS"
 
 	// Кнопка серверов (мониторинг)
