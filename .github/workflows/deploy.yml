@@ -2,6 +2,7 @@ name: Build and Deploy
 
 on:
   push:
+  pull_request:
     branches:
       - main
 
@@ -42,6 +43,7 @@ jobs:
   build-and-push:
     name: Build Docker Image and Push to Docker Hub
     needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
 
     steps:
@@ -79,6 +81,7 @@ jobs:
   deploy:
     name: Deploy to VPS
     needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
 
     steps:

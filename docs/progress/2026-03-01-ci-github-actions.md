@@ -21,13 +21,24 @@
 - ✅ Добавлен шаг `go test ./...`
 - ✅ Добавлена зависимость `needs: ci` в job `build-and-push`
 
+### Доработка: разделение триггеров по событиям
+
+**Файл:** `.github/workflows/deploy.yml`
+
+- ✅ Триггер `on.push` расширен на все ветки (без фильтра)
+- ✅ Добавлен триггер `on.pull_request.branches: [main]`
+- ✅ Добавлено условие `if` на `build-and-push`: только при `push` в `main`
+- ✅ Добавлено условие `if` на `deploy`: только при `push` в `main`
+
 ---
 
 ## Итоговая цепочка пайплайна
 
-```
-push в main → ci (fmt + vet + build + tests) → build-and-push → deploy
-```
+| Событие | `ci` | `build-and-push` | `deploy` |
+|---|---|---|---|
+| push в любую ветку | ✅ | ❌ | ❌ |
+| PR в main | ✅ | ❌ | ❌ |
+| push в main | ✅ | ✅ | ✅ |
 
 ---
 
@@ -36,4 +47,6 @@ push в main → ci (fmt + vet + build + tests) → build-and-push → deploy
 После мержа в main убедиться что:
 - [ ] В GitHub Actions появляется job `Lint and Test` перед сборкой Docker
 - [ ] При падении теста/vet/build job `build-and-push` не запускается
-- [ ] При успехе всё работает как раньше
+- [ ] CI запускается на PR в main
+- [ ] CI запускается на пуш в любую ветку
+- [ ] `build-and-push` и `deploy` запускаются только при пуше в main
