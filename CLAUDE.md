@@ -36,9 +36,6 @@ REMNAWAVE_DEFAULT_SQUAD_UUID=  # опционально, UUID сквада ес�
 # База данных
 DB_PATH=/app/data/bot.db
 
-# Донат
-DONATE_TEXT=Перевод по СБП: +7 999 000-00-00 (Т-Банк), Константин К.
-
 # Мониторинг (опционально, включается автоматически если VM доступна)
 SD_CONFIGS_PATH=/app/sd_configs
 VICTORIA_METRICS_URL=http://victoriametrics:8428
@@ -76,6 +73,7 @@ RENDER_API_KEY=ключ_render_сервиса
 ### Уведомления админу
 
 При активации инвайт-кода админ получает уведомление:
+
 - Дата и время активации (формат: `23.01.26 15:30`)
 - Telegram ID с кликабельной ссылкой
 - Username (если есть)
@@ -88,48 +86,17 @@ RENDER_API_KEY=ключ_render_сервиса
 - `LIMITED` — превышен лимит трафика
 - `EXPIRED` — истёк срок действия
 
-## Мигратор
-
-Перенос активных пользователей из старой БД в новую.
-
-```bash
-# Сборка
-go build -o migrator ./cmd/migrator
-
-# Предпросмотр (без изменений)
-./migrator --dry-run --old-db /path/to/users.db
-
-# Выполнить миграцию
-./migrator --live --old-db /path/to/users.db
-```
-
-**Что переносит:**
-- Только пользователей со статусом `active` (у кого есть доступ прямо сейчас)
-- Создаёт в Remnawave с тем же telegram_id и username
-- Сохраняет связку в новой БД
-- Логирует результаты в `migration_YYYY-MM-DD.log`
-
 ## Команды разработки
 
-### Локальная разработка
+## Разработка в докере
 
 ```bash
 go mod download      # Установить зависимости
-go run cmd/bot/main.go  # Запустить бота локально
-go build -o vpn-bot cmd/bot/main.go  # Собрать бинарник
-go build ./cmd/migrator  # Собрать мигратор
-go test ./...        # Запустить тесты
-go vet ./...         # Проверить код
-```
-
-### Docker (если есть docker-compose.yml)
-
-```bash
-make up              # Запустить бота в Docker
-make down            # Остановить бота
+make down # Остановить бота
+make up # Пересобрать докер с ботом
+make tests        # Запустить тесты
+make fmt         # Проверить код
 make logs            # Показать логи
-docker compose up -d --build           # Собрать и запустить
-docker compose logs -f vpn-bot         # Логи в реал-тайме
 ```
 
 ## Важные заметки
@@ -173,20 +140,25 @@ CREATE TABLE invites (
 ## Мониторинг нод
 
 ### Архитектура
+
 - **VictoriaMetrics** — база метрик (порт 8428)
 - **vmagent** — скрейпит Node Exporter на нодах
 - **Бот** — генерирует `targets.json`, читает метрики через PromQL
 
 ### Конвенция тегов
+
 На нодах в Remnawave задаётся тег `bw:<число>` для указания bandwidth в Mbps.
 Пример: `bw:1000` = 1 Gbit. Дефолт: 1000 Mbps.
 
 ### Алерты
+
 Бот отправляет админу алерты при:
+
 - Нода OFFLINE (Node Exporter не отвечает)
 - Load Index > 80% (перегрузка)
 
 ### Установка Node Exporter на ноду
+
 ```bash
 bash scripts/install-node-exporter.sh <IP_СЕРВЕРА_БОТА>
 ```
