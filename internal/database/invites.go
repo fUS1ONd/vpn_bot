@@ -252,6 +252,101 @@ func (db *DB) DeleteUnusedInvite(code string) error {
 	return nil
 }
 
+// GetInvitesWithUsersByCreator получает инвайты конкретного автора с данными пользователей
+func (db *DB) GetInvitesWithUsersByCreator(createdBy int64) ([]InviteWithUser, error) {
+	query := `
+		SELECT
+			i.code, i.created_by, i.used_by, i.used_at, i.created_at,
+			u.username, u.first_name
+		FROM invites i
+		LEFT JOIN users u ON i.used_by = u.telegram_id
+		WHERE i.created_by = ?
+		ORDER BY i.created_at DESC
+	`
+
+	rows, err := db.conn.Query(query, createdBy)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query invites by creator: %w", err)
+	}
+	defer rows.Close()
+
+	var invites []InviteWithUser
+	for rows.Next() {
+		var inv InviteWithUser
+		var usedBy sql.NullInt64
+		var usedAt sql.NullTime
+		var username, firstName sql.NullString
+
+		err := rows.Scan(
+			&inv.Code, &inv.CreatedBy, &usedBy, &usedAt, &inv.CreatedAt,
+			&username, &firstName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan invite: %w", err)
+		}
+
+		if usedBy.Valid {
+			inv.UsedBy = &usedBy.Int64
+		}
+		if usedAt.Valid {
+			inv.UsedAt = &usedAt.Time
+		}
+		if username.Valid {
+			inv.UserUsername = username.String
+		}
+		if firstName.Valid {
+			inv.UserFirstName = firstName.String
+		}
+
+		invites = append(invites, inv)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return invites, nil
+}
+
+// DeleteUnusedInviteByOwner удаляет только свой неиспользованный инвайт
+func (db *DB) DeleteUnusedInviteByOwner(code string, createdBy int64) error {
+	result, err := db.conn.Exec(
+		`DELETE FROM invites WHERE code = ? AND used_by IS NULL AND created_by = ?`,
+		code, createdBy,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete invite: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get affected rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("invite not found, already used, or not owned by you")
+	}
+
+	return nil
+}
+
+// DeleteUnusedInvitesByCreator удаляет все неиспользованные инвайты конкретного автора
+func (db *DB) DeleteUnusedInvitesByCreator(createdBy int64) (int64, error) {
+	result, err := db.conn.Exec(
+		`DELETE FROM invites WHERE created_by = ? AND used_by IS NULL`,
+		createdBy,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete invites: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get affected rows: %w", err)
+	}
+
+	return rows, nil
+}
+
 // generateInviteCode генерирует случайный 8-символьный код
 func generateInviteCode() (string, error) {
 	bytes := make([]byte, 4)
