@@ -393,4 +393,3 @@ func (b *Bot) processDeleteInvite(c tele.Context, code string) error {
 		ReplyMarkup: AdminManageKeyboard(),
 	})
 }
-

@@ -46,8 +46,8 @@ else
     echo "ВНИМАНИЕ: firewall не найден. Вручную откройте порт 9100 для ${CENTRAL_IP}"
 fi
 
-# Проверка (ждём до 15 секунд пока сервис поднимется)
-for i in $(seq 1 15); do
+# Проверка (ждём до 45 секунд пока сервис поднимется)
+for i in $(seq 1 45); do
     if curl -sf http://localhost:9100/metrics | head -1 | grep -q "HELP"; then
         echo "=== Node Exporter установлен и работает ==="
         exit 0
