@@ -94,3 +94,11 @@
 ## Подход
 
 Разработка выполнена по TDD: сначала писались падающие тесты (RED), затем минимальный код для прохождения (GREEN). Каждый шаг верифицирован через `make tests` и `make fmt`.
+
+Оба замечания GPT были реальными:
+
+1. Потеря клавиатуры модератора — handleStatus, handleConnect, handleDonate, handleBack, handleUserMode возвращали  
+   UserMenuKeyboard() без проверки роли. Теперь все используют хелпер b.userKeyboard(telegramID), который проверяет  
+   isModerator.
+2. Маскирование ошибок БД — strings.Contains(err.Error(), "add moderator") всегда срабатывало, потому что обёртка  
+   AddModerator добавляет эту строку ко всем ошибкам. Убрал, оставил только "UNIQUE" для обнаружения дубликатов.
