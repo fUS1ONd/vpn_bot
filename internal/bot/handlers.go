@@ -178,9 +178,15 @@ func (b *Bot) handleStart(c tele.Context) error {
 	// Актуализируем username и first_name в БД и Remnawave
 	b.syncUserInfo(c)
 
+	// Модератор получает клавиатуру с кнопкой приглашений
+	keyboard := UserMenuKeyboard()
+	if b.isModerator(telegramID) {
+		keyboard = UserMenuKeyboardModerator()
+	}
+
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: keyboard,
 	})
 }
 
@@ -244,6 +250,31 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processDeleteInvite(c, text)
 		}
 
+	case StateWaitModDeleteInvite:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+		}
+		return b.processModeratorDeleteInvite(c, text)
+
+	case StateWaitAddModerator:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processAddModerator(c, text)
+		}
+
+	case StateWaitRemoveModerator:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processRemoveModerator(c, text)
+		}
+
 	}
 
 	// Админ-кнопки
@@ -269,6 +300,30 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleDeleteInviteRequest(c)
 		case BtnBroadcastActive:
 			return b.handleBroadcastActiveRequest(c)
+		case BtnAdminModerators:
+			return b.handleAdminModeratorMenu(c)
+		case BtnAdminAddModerator:
+			return b.handleAdminAddModeratorRequest(c)
+		case BtnAdminListMods:
+			return b.handleAdminListModerators(c)
+		case BtnAdminRemoveMod:
+			return b.handleAdminRemoveModeratorRequest(c)
+		}
+	}
+
+	// Кнопки модератора
+	if b.isModerator(telegramID) {
+		switch text {
+		case BtnModInvites:
+			return b.handleModeratorMenu(c)
+		case BtnModCreate:
+			return b.handleModeratorCreateInvite(c)
+		case BtnModView:
+			return b.handleModeratorViewInvites(c)
+		case BtnModDelete:
+			return b.handleModeratorDeleteInviteRequest(c)
+		case BtnModBack:
+			return b.handleModeratorBack(c)
 		}
 	}
 
