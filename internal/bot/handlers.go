@@ -141,6 +141,30 @@ func (b *Bot) handleStart(c tele.Context) error {
 
 	// Новый пользователь — требуется инвайт
 	if user == nil {
+		// Проверяем deep link payload (из ссылки /start <code>)
+		payload := ""
+		if msg := c.Message(); msg != nil {
+			payload = strings.TrimSpace(msg.Payload)
+		}
+
+		if payload != "" {
+			// Пытаемся автоматически активировать код из deep link
+			err := b.processInviteCode(c, payload)
+			if err != nil {
+				return err
+			}
+			// Если processInviteCode показал ошибку (код не найден/использован),
+			// ставим StateWaitInvite чтобы юзер мог ввести код вручную
+			if b.userStates.Get(telegramID) == "" {
+				// Код невалиден — processInviteCode отправил ошибку, ставим ожидание
+				existsNow, _ := b.db.UserExists(telegramID)
+				if !existsNow {
+					b.userStates.Set(telegramID, StateWaitInvite)
+				}
+			}
+			return nil
+		}
+
 		b.userStates.Set(telegramID, StateWaitInvite)
 		return c.Send(MsgWelcomeInvite, &tele.SendOptions{
 			ParseMode: tele.ModeHTML,
@@ -503,6 +527,14 @@ func (b *Bot) handleInstructionMac(c tele.Context) error {
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: InstructionsKeyboard(),
 	})
+}
+
+// getBotUsername возвращает username бота для формирования deep link
+func (b *Bot) getBotUsername() string {
+	if b.bot != nil && b.bot.Me != nil {
+		return b.bot.Me.Username
+	}
+	return "bot"
 }
 
 // syncUserInfo синхронизирует username и first_name пользователя с БД и Remnawave

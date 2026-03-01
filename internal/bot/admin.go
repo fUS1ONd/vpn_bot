@@ -55,7 +55,7 @@ func (b *Bot) handleCreateInvite(c tele.Context) error {
 		return c.Send("Ошибка создания инвайта", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	msg := fmt.Sprintf(MsgInviteCreated, invite.Code)
+	msg := fmt.Sprintf(MsgInviteCreated, b.getBotUsername(), invite.Code)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: AdminManageKeyboard(),
