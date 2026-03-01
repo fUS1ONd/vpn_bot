@@ -15,8 +15,8 @@ type Config struct {
 	AdminID  int64
 
 	// Remnawave
-	RemnawaveURL      string
-	RemnawaveAPIToken string
+	RemnawaveURL       string
+	RemnawaveAPIToken  string
 	RemnawaveSquadUUID string // Опционально, UUID внутреннего сквада
 
 	// База данных

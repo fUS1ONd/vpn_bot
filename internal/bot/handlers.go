@@ -16,11 +16,11 @@ import (
 
 // Состояния пользователя для диалогов
 const (
-	StateNone               = ""
-	StateWaitInvite         = "wait_invite"          // Ожидание инвайт-кода
-	StateWaitBroadcastAll   = "wait_broadcast_all"   // Ожидание сообщения для рассылки всем
+	StateNone                = ""
+	StateWaitInvite          = "wait_invite"           // Ожидание инвайт-кода
+	StateWaitBroadcastAll    = "wait_broadcast_all"    // Ожидание сообщения для рассылки всем
 	StateWaitBroadcastActive = "wait_broadcast_active" // Ожидание сообщения для рассылки активным
-	StateWaitAddTraffic     = "wait_add_traffic"     // Ожидание данных для добавления трафика
+	StateWaitAddTraffic      = "wait_add_traffic"      // Ожидание данных для добавления трафика
 )
 
 // Bot представляет Telegram бота
@@ -33,7 +33,7 @@ type Bot struct {
 	metricsClient *monitoring.MetricsClient // клиент метрик VM
 	dashboardMgr  *dashboardManager         // менеджер сессий дашборда
 	sdConfigsPath string                    // путь к sd_configs (для чтения targets)
-	render        *render.Client           // клиент render-сервиса (nil если не настроен)
+	render        *render.Client            // клиент render-сервиса (nil если не настроен)
 }
 
 // New создаёт нового Telegram бота
