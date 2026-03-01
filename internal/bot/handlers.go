@@ -178,15 +178,9 @@ func (b *Bot) handleStart(c tele.Context) error {
 	// Актуализируем username и first_name в БД и Remnawave
 	b.syncUserInfo(c)
 
-	// Модератор получает клавиатуру с кнопкой приглашений
-	keyboard := UserMenuKeyboard()
-	if b.isModerator(telegramID) {
-		keyboard = UserMenuKeyboardModerator()
-	}
-
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: keyboard,
+		ReplyMarkup: b.userKeyboard(telegramID),
 	})
 }
 
@@ -411,7 +405,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	msg := fmt.Sprintf(MsgAccountCreated, remnawaveUser.SubscriptionURL)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(telegramID),
 	})
 }
 
@@ -465,7 +459,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	msg := FormatUserStatus(remnawaveUser)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(telegramID),
 	})
 }
 
@@ -488,7 +482,7 @@ func (b *Bot) handleConnect(c tele.Context) error {
 	msg := fmt.Sprintf(MsgSubscriptionLink, remnawaveUser.SubscriptionURL)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(telegramID),
 	})
 }
 
@@ -497,7 +491,7 @@ func (b *Bot) handleDonate(c tele.Context) error {
 	msg := fmt.Sprintf(MsgDonate, b.config.DonateText)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(c.Sender().ID),
 	})
 }
 
@@ -521,7 +515,7 @@ func (b *Bot) handleBack(c tele.Context) error {
 
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(c.Sender().ID),
 	})
 }
 
@@ -529,7 +523,7 @@ func (b *Bot) handleBack(c tele.Context) error {
 func (b *Bot) handleUserMode(c tele.Context) error {
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(c.Sender().ID),
 	})
 }
 
@@ -582,6 +576,14 @@ func (b *Bot) handleInstructionMac(c tele.Context) error {
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: InstructionsKeyboard(),
 	})
+}
+
+// userKeyboard возвращает правильную клавиатуру для пользователя (с учётом роли модератора)
+func (b *Bot) userKeyboard(telegramID int64) *tele.ReplyMarkup {
+	if b.isModerator(telegramID) {
+		return UserMenuKeyboardModerator()
+	}
+	return UserMenuKeyboard()
 }
 
 // getBotUsername возвращает username бота для формирования deep link

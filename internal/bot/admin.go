@@ -452,7 +452,7 @@ func (b *Bot) processAddModerator(c tele.Context, text string) error {
 
 	err = b.db.AddModerator(telegramID, c.Sender().ID)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "add moderator") {
+		if strings.Contains(err.Error(), "UNIQUE") {
 			return c.Send("❌ Этот пользователь уже является модератором", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
 		}
 		slog.Error("Failed to add moderator", "error", err)
