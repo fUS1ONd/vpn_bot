@@ -29,7 +29,7 @@ type Bot struct {
 	db            *database.DB
 	remnawave     *remnawave.Client
 	config        *config.Config
-	userStates    map[int64]string
+	userStates    *stateMap
 	metricsClient *monitoring.MetricsClient // клиент метрик VM
 	dashboardMgr  *dashboardManager         // менеджер сессий дашборда
 	sdConfigsPath string                    // путь к sd_configs (для чтения targets)
@@ -53,7 +53,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		db:            db,
 		remnawave:     remnawaveClient,
 		config:        cfg,
-		userStates:    make(map[int64]string),
+		userStates:    newStateMap(),
 		metricsClient: monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
 		dashboardMgr:  newDashboardManager(),
 		sdConfigsPath: cfg.SDConfigsPath,
@@ -107,7 +107,7 @@ func (b *Bot) Run() {
 // handleMediaMessage обрабатывает медиа-сообщения (для рассылки)
 func (b *Bot) handleMediaMessage(c tele.Context) error {
 	telegramID := c.Sender().ID
-	state := b.userStates[telegramID]
+	state := b.userStates.Get(telegramID)
 
 	switch state {
 	case StateWaitBroadcastAll:
@@ -141,7 +141,7 @@ func (b *Bot) handleStart(c tele.Context) error {
 
 	// Новый пользователь — требуется инвайт
 	if user == nil {
-		b.userStates[telegramID] = StateWaitInvite
+		b.userStates.Set(telegramID, StateWaitInvite)
 		return c.Send(MsgWelcomeInvite, &tele.SendOptions{
 			ParseMode: tele.ModeHTML,
 		})
@@ -149,7 +149,7 @@ func (b *Bot) handleStart(c tele.Context) error {
 
 	// Существующий пользователь — синхронизируем данные
 	// Очищаем состояние ожидания инвайта, если оно было (чтобы не блокировать доступ)
-	delete(b.userStates, telegramID)
+	b.userStates.Delete(telegramID)
 
 	// Актуализируем username и first_name в БД и Remnawave
 	b.syncUserInfo(c)
@@ -163,21 +163,21 @@ func (b *Bot) handleStart(c tele.Context) error {
 // handleTextMessage роутер текстовых сообщений
 func (b *Bot) handleTextMessage(c tele.Context) error {
 	telegramID := c.Sender().ID
-	state := b.userStates[telegramID]
+	state := b.userStates.Get(telegramID)
 	text := c.Text()
 
 	// Обработка состояний
 	switch state {
 	case StateWaitInvite:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено. Для начала отправьте /start")
 		}
 		return b.processInviteCode(c, text)
 
 	case StateWaitBroadcastAll:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
 		}
 		if b.isAdmin(c) {
@@ -186,7 +186,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 
 	case StateWaitBroadcastActive:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
 		}
 		if b.isAdmin(c) {
@@ -195,7 +195,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 
 	case StateWaitAddTraffic:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
 		}
 		if b.isAdmin(c) {
@@ -204,7 +204,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 
 	case StateWaitBanUser:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
 		}
 		if b.isAdmin(c) {
@@ -213,7 +213,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 
 	case StateWaitDeleteInvite:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
 		}
 		if b.isAdmin(c) {
@@ -326,7 +326,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	go b.notifyAdminNewUser(telegramID, username, c.Sender().FirstName)
 
 	// Очищаем состояние
-	delete(b.userStates, telegramID)
+	b.userStates.Delete(telegramID)
 
 	// Отправляем приветствие
 	msg := fmt.Sprintf(MsgAccountCreated, remnawaveUser.SubscriptionURL)
@@ -432,7 +432,7 @@ func (b *Bot) handleInstructionsMenu(c tele.Context) error {
 
 // handleBack возвращает в главное меню
 func (b *Bot) handleBack(c tele.Context) error {
-	delete(b.userStates, c.Sender().ID)
+	b.userStates.Delete(c.Sender().ID)
 
 	// Проверяем, зарегистрирован ли пользователь
 	user, _ := b.db.GetUserByTelegramID(c.Sender().ID)

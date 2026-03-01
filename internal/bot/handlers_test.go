@@ -43,7 +43,7 @@ func TestHandleStart(t *testing.T) {
 	b := &Bot{
 		db:         db,
 		config:     cfg,
-		userStates: make(map[int64]string),
+		userStates: newStateMap(),
 	}
 
 	t.Run("NewUser", func(t *testing.T) {
@@ -56,7 +56,7 @@ func TestHandleStart(t *testing.T) {
 		// Проверяем, что бот запросил инвайт
 		assert.Equal(t, MsgWelcomeInvite, ctx.sentMsg)
 		// Проверяем, что установлено состояние ожидания
-		assert.Equal(t, StateWaitInvite, b.userStates[user.ID])
+		assert.Equal(t, StateWaitInvite, b.userStates.Get(user.ID))
 	})
 
 	t.Run("ExistingUser", func(t *testing.T) {
@@ -69,7 +69,7 @@ func TestHandleStart(t *testing.T) {
 		ctx := &MockContext{sender: user}
 
 		// Симулируем "зависшее" состояние (например, если юзер был добавлен вручную или произошел сбой)
-		b.userStates[userID] = StateWaitInvite
+		b.userStates.Set(userID, StateWaitInvite)
 
 		err = b.handleStart(ctx)
 		assert.NoError(t, err)
@@ -78,7 +78,7 @@ func TestHandleStart(t *testing.T) {
 		assert.Equal(t, MsgWelcomeBack, ctx.sentMsg)
 
 		// Проверяем, что состояние сброшено
-		_, hasState := b.userStates[userID]
-		assert.False(t, hasState, "Состояние должно быть сброшено для существующего пользователя")
+		state := b.userStates.Get(userID)
+		assert.Equal(t, "", state, "Состояние должно быть сброшено для существующего пользователя")
 	})
 }

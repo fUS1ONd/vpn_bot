@@ -68,7 +68,7 @@ func (b *Bot) handleAddTrafficRequest(c tele.Context) error {
 		return nil
 	}
 
-	b.userStates[c.Sender().ID] = StateWaitAddTraffic
+	b.userStates.Set(c.Sender().ID, StateWaitAddTraffic)
 	return c.Send(MsgEnterAddTraffic, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: CancelKeyboard(),
@@ -77,7 +77,7 @@ func (b *Bot) handleAddTrafficRequest(c tele.Context) error {
 
 // processAddTraffic обрабатывает добавление трафика
 func (b *Bot) processAddTraffic(c tele.Context, text string) error {
-	delete(b.userStates, c.Sender().ID)
+	b.userStates.Delete(c.Sender().ID)
 
 	// Формат: telegram_id GB
 	parts := strings.Fields(text)
@@ -130,7 +130,7 @@ func (b *Bot) handleBanUserRequest(c tele.Context) error {
 		return nil
 	}
 
-	b.userStates[c.Sender().ID] = StateWaitBanUser
+	b.userStates.Set(c.Sender().ID, StateWaitBanUser)
 	return c.Send(MsgEnterBanUser, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: CancelKeyboard(),
@@ -139,7 +139,7 @@ func (b *Bot) handleBanUserRequest(c tele.Context) error {
 
 // processBanUser обрабатывает бан пользователя
 func (b *Bot) processBanUser(c tele.Context, text string) error {
-	delete(b.userStates, c.Sender().ID)
+	b.userStates.Delete(c.Sender().ID)
 
 	telegramID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
 	if err != nil {
@@ -220,7 +220,7 @@ func (b *Bot) handleBroadcastActiveRequest(c tele.Context) error {
 		}
 	}
 
-	b.userStates[c.Sender().ID] = StateWaitBroadcastActive
+	b.userStates.Set(c.Sender().ID, StateWaitBroadcastActive)
 	return c.Send(fmt.Sprintf(MsgAdminEnterBroadcast, activeCount), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: CancelKeyboard(),
@@ -229,7 +229,7 @@ func (b *Bot) handleBroadcastActiveRequest(c tele.Context) error {
 
 // processBroadcastMessage отправляет рассылку только активным пользователям
 func (b *Bot) processBroadcastMessage(c tele.Context, _ bool) error {
-	delete(b.userStates, c.Sender().ID)
+	b.userStates.Delete(c.Sender().ID)
 
 	// Получаем всех активных пользователей из Remnawave
 	remnawaveUsers, err := b.remnawave.GetAllUsers()
@@ -362,7 +362,7 @@ func (b *Bot) handleDeleteInviteRequest(c tele.Context) error {
 		return nil
 	}
 
-	b.userStates[c.Sender().ID] = StateWaitDeleteInvite
+	b.userStates.Set(c.Sender().ID, StateWaitDeleteInvite)
 	return c.Send("<b>🗑 Удаление инвайт-кода</b>\n\nВведите код для удаления:", &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: CancelKeyboard(),
@@ -371,7 +371,7 @@ func (b *Bot) handleDeleteInviteRequest(c tele.Context) error {
 
 // processDeleteInvite обрабатывает удаление инвайта
 func (b *Bot) processDeleteInvite(c tele.Context, code string) error {
-	delete(b.userStates, c.Sender().ID)
+	b.userStates.Delete(c.Sender().ID)
 
 	code = strings.TrimSpace(code)
 
