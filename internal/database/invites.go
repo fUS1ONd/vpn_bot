@@ -10,13 +10,15 @@ import (
 
 // InviteWithUser содержит информацию об инвайте вместе с данными пользователя, который его активировал
 type InviteWithUser struct {
-	Code          string
-	CreatedBy     int64
-	UsedBy        *int64
-	UsedAt        *time.Time
-	CreatedAt     time.Time
-	UserUsername  string // Username пользователя, который активировал код
-	UserFirstName string // First name пользователя, который активировал код
+	Code             string
+	CreatedBy        int64
+	UsedBy           *int64
+	UsedAt           *time.Time
+	CreatedAt        time.Time
+	UserUsername     string // Username пользователя, который активировал код
+	UserFirstName    string // First name пользователя, который активировал код
+	CreatorUsername  string // Username автора кода
+	CreatorFirstName string // First name автора кода
 }
 
 // CreateInvite создаёт новый инвайт
@@ -176,14 +178,16 @@ func (db *DB) CountUnusedInvites() (int, error) {
 	return count, nil
 }
 
-// GetAllInvitesWithUsers получает все инвайты с информацией о пользователях
+// GetAllInvitesWithUsers получает все инвайты с информацией о пользователях и авторах
 func (db *DB) GetAllInvitesWithUsers() ([]InviteWithUser, error) {
 	query := `
 		SELECT
 			i.code, i.created_by, i.used_by, i.used_at, i.created_at,
-			u.username, u.first_name
+			u.username, u.first_name,
+			c.username, c.first_name
 		FROM invites i
 		LEFT JOIN users u ON i.used_by = u.telegram_id
+		LEFT JOIN users c ON i.created_by = c.telegram_id
 		ORDER BY i.created_at DESC
 	`
 
@@ -199,10 +203,12 @@ func (db *DB) GetAllInvitesWithUsers() ([]InviteWithUser, error) {
 		var usedBy sql.NullInt64
 		var usedAt sql.NullTime
 		var username, firstName sql.NullString
+		var creatorUsername, creatorFirstName sql.NullString
 
 		err := rows.Scan(
 			&inv.Code, &inv.CreatedBy, &usedBy, &usedAt, &inv.CreatedAt,
 			&username, &firstName,
+			&creatorUsername, &creatorFirstName,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan invite: %w", err)
@@ -219,6 +225,12 @@ func (db *DB) GetAllInvitesWithUsers() ([]InviteWithUser, error) {
 		}
 		if firstName.Valid {
 			inv.UserFirstName = firstName.String
+		}
+		if creatorUsername.Valid {
+			inv.CreatorUsername = creatorUsername.String
+		}
+		if creatorFirstName.Valid {
+			inv.CreatorFirstName = creatorFirstName.String
 		}
 
 		invites = append(invites, inv)

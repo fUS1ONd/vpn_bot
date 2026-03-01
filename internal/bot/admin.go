@@ -332,31 +332,39 @@ func formatInvitesList(invites []database.InviteWithUser) string {
 		if inv.UsedBy != nil {
 			// Использованный код
 			msg.WriteString("✅ <b>Использован</b>\n")
-			msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
+			fmt.Fprintf(&msg, "🔹 Код: <code>%s</code>\n", inv.Code)
 
 			// Ссылка на пользователя
 			userLink := fmt.Sprintf("<a href=\"tg://user?id=%d\">%d</a>", *inv.UsedBy, *inv.UsedBy)
 			if inv.UserUsername != "" {
-				msg.WriteString(fmt.Sprintf("👤 @%s (%s)", inv.UserUsername, userLink))
+				fmt.Fprintf(&msg, "👤 @%s (%s)", inv.UserUsername, userLink)
 			} else {
-				msg.WriteString(fmt.Sprintf("👤 %s", userLink))
+				fmt.Fprintf(&msg, "👤 %s", userLink)
 			}
 
 			if inv.UserFirstName != "" {
-				msg.WriteString(fmt.Sprintf(" • %s", inv.UserFirstName))
+				fmt.Fprintf(&msg, " • %s", inv.UserFirstName)
 			}
 			msg.WriteString("\n")
 
 			// Дата активации
 			if inv.UsedAt != nil {
-				msg.WriteString(fmt.Sprintf("📅 %s\n", inv.UsedAt.Format("02.01.06 15:04")))
+				fmt.Fprintf(&msg, "📅 %s\n", inv.UsedAt.Format("02.01.06 15:04"))
 			}
 		} else {
 			// Неиспользованный код
 			msg.WriteString("⭕ <b>Не использован</b>\n")
-			msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
-			msg.WriteString(fmt.Sprintf("📅 Создан: %s\n", inv.CreatedAt.Format("02.01.06 15:04")))
+			fmt.Fprintf(&msg, "🔹 Код: <code>%s</code>\n", inv.Code)
+			fmt.Fprintf(&msg, "📅 Создан: %s\n", inv.CreatedAt.Format("02.01.06 15:04"))
 		}
+
+		// Автор кода (модератор или админ)
+		if inv.CreatorUsername != "" {
+			fmt.Fprintf(&msg, "✍️ @%s\n", inv.CreatorUsername)
+		} else if inv.CreatorFirstName != "" {
+			fmt.Fprintf(&msg, "✍️ %s\n", inv.CreatorFirstName)
+		}
+
 		msg.WriteString("\n")
 	}
 
