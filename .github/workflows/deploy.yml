@@ -9,8 +9,39 @@ env:
   DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/vpn-bot
 
 jobs:
+  ci:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Следующие файлы не отформатированы:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Build binary
+        run: go build ./cmd/bot/...
+
+      - name: Run tests
+        run: go test ./...
+
   build-and-push:
     name: Build Docker Image and Push to Docker Hub
+    needs: ci
     runs-on: ubuntu-latest
 
     steps:
