@@ -14,8 +14,10 @@ import (
 
 // Состояния админа
 const (
-	StateWaitBanUser      = "wait_ban_user"      // Ожидание telegram_id для бана
-	StateWaitDeleteInvite = "wait_delete_invite" // Ожидание кода для удаления
+	StateWaitBanUser         = "wait_ban_user"         // Ожидание telegram_id для бана
+	StateWaitDeleteInvite    = "wait_delete_invite"    // Ожидание кода для удаления
+	StateWaitAddModerator    = "wait_add_moderator"    // Ожидание telegram_id для назначения модератора
+	StateWaitRemoveModerator = "wait_remove_moderator" // Ожидание telegram_id для снятия модератора
 )
 
 // isAdmin проверяет, является ли пользователь админом
@@ -55,7 +57,7 @@ func (b *Bot) handleCreateInvite(c tele.Context) error {
 		return c.Send("Ошибка создания инвайта", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	msg := fmt.Sprintf(MsgInviteCreated, invite.Code)
+	msg := fmt.Sprintf(MsgInviteCreated, b.getBotUsername(), invite.Code)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: AdminManageKeyboard(),
@@ -68,7 +70,7 @@ func (b *Bot) handleAddTrafficRequest(c tele.Context) error {
 		return nil
 	}
 
-	b.userStates[c.Sender().ID] = StateWaitAddTraffic
+	b.userStates.Set(c.Sender().ID, StateWaitAddTraffic)
 	return c.Send(MsgEnterAddTraffic, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: CancelKeyboard(),
@@ -77,7 +79,7 @@ func (b *Bot) handleAddTrafficRequest(c tele.Context) error {
 
 // processAddTraffic обрабатывает добавление трафика
 func (b *Bot) processAddTraffic(c tele.Context, text string) error {
-	delete(b.userStates, c.Sender().ID)
+	b.userStates.Delete(c.Sender().ID)
 
 	// Формат: telegram_id GB
 	parts := strings.Fields(text)
@@ -130,7 +132,7 @@ func (b *Bot) handleBanUserRequest(c tele.Context) error {
 		return nil
 	}
 
-	b.userStates[c.Sender().ID] = StateWaitBanUser
+	b.userStates.Set(c.Sender().ID, StateWaitBanUser)
 	return c.Send(MsgEnterBanUser, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: CancelKeyboard(),
@@ -139,7 +141,7 @@ func (b *Bot) handleBanUserRequest(c tele.Context) error {
 
 // processBanUser обрабатывает бан пользователя
 func (b *Bot) processBanUser(c tele.Context, text string) error {
-	delete(b.userStates, c.Sender().ID)
+	b.userStates.Delete(c.Sender().ID)
 
 	telegramID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
 	if err != nil {
@@ -150,6 +152,11 @@ func (b *Bot) processBanUser(c tele.Context, text string) error {
 	user, err := b.db.GetUserByTelegramID(telegramID)
 	if err != nil || user == nil {
 		return c.Send("Пользователь не найден", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	// Каскадное удаление: если пользователь — модератор
+	if b.isModerator(telegramID) {
+		b.cascadeDeleteModerator(telegramID)
 	}
 
 	// Удаляем из Remnawave (отключаем доступ к серверам)
@@ -220,7 +227,7 @@ func (b *Bot) handleBroadcastActiveRequest(c tele.Context) error {
 		}
 	}
 
-	b.userStates[c.Sender().ID] = StateWaitBroadcastActive
+	b.userStates.Set(c.Sender().ID, StateWaitBroadcastActive)
 	return c.Send(fmt.Sprintf(MsgAdminEnterBroadcast, activeCount), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: CancelKeyboard(),
@@ -229,7 +236,7 @@ func (b *Bot) handleBroadcastActiveRequest(c tele.Context) error {
 
 // processBroadcastMessage отправляет рассылку только активным пользователям
 func (b *Bot) processBroadcastMessage(c tele.Context, _ bool) error {
-	delete(b.userStates, c.Sender().ID)
+	b.userStates.Delete(c.Sender().ID)
 
 	// Получаем всех активных пользователей из Remnawave
 	remnawaveUsers, err := b.remnawave.GetAllUsers()
@@ -325,31 +332,39 @@ func formatInvitesList(invites []database.InviteWithUser) string {
 		if inv.UsedBy != nil {
 			// Использованный код
 			msg.WriteString("✅ <b>Использован</b>\n")
-			msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
+			fmt.Fprintf(&msg, "🔹 Код: <code>%s</code>\n", inv.Code)
 
 			// Ссылка на пользователя
 			userLink := fmt.Sprintf("<a href=\"tg://user?id=%d\">%d</a>", *inv.UsedBy, *inv.UsedBy)
 			if inv.UserUsername != "" {
-				msg.WriteString(fmt.Sprintf("👤 @%s (%s)", inv.UserUsername, userLink))
+				fmt.Fprintf(&msg, "👤 @%s (%s)", inv.UserUsername, userLink)
 			} else {
-				msg.WriteString(fmt.Sprintf("👤 %s", userLink))
+				fmt.Fprintf(&msg, "👤 %s", userLink)
 			}
 
 			if inv.UserFirstName != "" {
-				msg.WriteString(fmt.Sprintf(" • %s", inv.UserFirstName))
+				fmt.Fprintf(&msg, " • %s", inv.UserFirstName)
 			}
 			msg.WriteString("\n")
 
 			// Дата активации
 			if inv.UsedAt != nil {
-				msg.WriteString(fmt.Sprintf("📅 %s\n", inv.UsedAt.Format("02.01.06 15:04")))
+				fmt.Fprintf(&msg, "📅 %s\n", inv.UsedAt.Format("02.01.06 15:04"))
 			}
 		} else {
 			// Неиспользованный код
 			msg.WriteString("⭕ <b>Не использован</b>\n")
-			msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
-			msg.WriteString(fmt.Sprintf("📅 Создан: %s\n", inv.CreatedAt.Format("02.01.06 15:04")))
+			fmt.Fprintf(&msg, "🔹 Код: <code>%s</code>\n", inv.Code)
+			fmt.Fprintf(&msg, "📅 Создан: %s\n", inv.CreatedAt.Format("02.01.06 15:04"))
 		}
+
+		// Автор кода (модератор или админ)
+		if inv.CreatorUsername != "" {
+			fmt.Fprintf(&msg, "✍️ @%s\n", inv.CreatorUsername)
+		} else if inv.CreatorFirstName != "" {
+			fmt.Fprintf(&msg, "✍️ %s\n", inv.CreatorFirstName)
+		}
+
 		msg.WriteString("\n")
 	}
 
@@ -362,7 +377,7 @@ func (b *Bot) handleDeleteInviteRequest(c tele.Context) error {
 		return nil
 	}
 
-	b.userStates[c.Sender().ID] = StateWaitDeleteInvite
+	b.userStates.Set(c.Sender().ID, StateWaitDeleteInvite)
 	return c.Send("<b>🗑 Удаление инвайт-кода</b>\n\nВведите код для удаления:", &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: CancelKeyboard(),
@@ -371,7 +386,7 @@ func (b *Bot) handleDeleteInviteRequest(c tele.Context) error {
 
 // processDeleteInvite обрабатывает удаление инвайта
 func (b *Bot) processDeleteInvite(c tele.Context, code string) error {
-	delete(b.userStates, c.Sender().ID)
+	b.userStates.Delete(c.Sender().ID)
 
 	code = strings.TrimSpace(code)
 
@@ -391,5 +406,140 @@ func (b *Bot) processDeleteInvite(c tele.Context, code string) error {
 	return c.Send(fmt.Sprintf("✅ Код <code>%s</code> удалён", code), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: AdminManageKeyboard(),
+	})
+}
+
+// --- Управление модераторами ---
+
+// handleAdminModeratorMenu показывает меню управления модераторами
+func (b *Bot) handleAdminModeratorMenu(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+	return c.Send("<b>👥 Модераторы</b>\n\nВыберите действие:", &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminModeratorKeyboard(),
+	})
+}
+
+// handleAdminAddModeratorRequest запрашивает telegram_id для назначения модератора
+func (b *Bot) handleAdminAddModeratorRequest(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	b.userStates.Set(c.Sender().ID, StateWaitAddModerator)
+	return c.Send("<b>➕ Назначить модератора</b>\n\nВведите telegram_id зарегистрированного пользователя:", &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: CancelKeyboard(),
+	})
+}
+
+// processAddModerator обрабатывает назначение модератора
+func (b *Bot) processAddModerator(c tele.Context, text string) error {
+	b.userStates.Delete(c.Sender().ID)
+
+	telegramID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
+	if err != nil {
+		return c.Send("Неверный telegram_id", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
+	}
+
+	// Проверяем что пользователь существует
+	user, err := b.db.GetUserByTelegramID(telegramID)
+	if err != nil || user == nil {
+		return c.Send("❌ Пользователь не найден в БД бота", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
+	}
+
+	err = b.db.AddModerator(telegramID, c.Sender().ID)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return c.Send("❌ Этот пользователь уже является модератором", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
+		}
+		slog.Error("Failed to add moderator", "error", err)
+		return c.Send("Ошибка назначения модератора", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
+	}
+
+	msg := fmt.Sprintf("✅ Пользователь <code>%d</code> (@%s) назначен модератором", telegramID, user.Username)
+	return c.Send(msg, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminModeratorKeyboard(),
+	})
+}
+
+// handleAdminListModerators показывает список модераторов
+func (b *Bot) handleAdminListModerators(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	mods, err := b.db.GetAllModerators()
+	if err != nil {
+		slog.Error("Failed to get moderators", "error", err)
+		return c.Send("Ошибка получения списка модераторов", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
+	}
+
+	if len(mods) == 0 {
+		return c.Send("📋 Модераторов пока нет", &tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: AdminModeratorKeyboard(),
+		})
+	}
+
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "<b>📋 Модераторы (%d)</b>\n\n", len(mods))
+
+	for _, mod := range mods {
+		if mod.Username != "" {
+			fmt.Fprintf(&msg, "👤 @%s", mod.Username)
+		} else {
+			msg.WriteString("👤 без username")
+		}
+		if mod.FirstName != "" {
+			fmt.Fprintf(&msg, " • %s", mod.FirstName)
+		}
+		msg.WriteString("\n")
+		fmt.Fprintf(&msg, "🆔 <code>%d</code>\n", mod.TelegramID)
+		fmt.Fprintf(&msg, "📨 Приглашено: %d\n\n", mod.InvitesCount)
+	}
+
+	return c.Send(msg.String(), &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminModeratorKeyboard(),
+	})
+}
+
+// handleAdminRemoveModeratorRequest запрашивает telegram_id для снятия модератора
+func (b *Bot) handleAdminRemoveModeratorRequest(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	b.userStates.Set(c.Sender().ID, StateWaitRemoveModerator)
+	return c.Send("<b>➖ Снять модератора</b>\n\nВведите telegram_id модератора:", &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: CancelKeyboard(),
+	})
+}
+
+// processRemoveModerator обрабатывает снятие модератора
+func (b *Bot) processRemoveModerator(c tele.Context, text string) error {
+	b.userStates.Delete(c.Sender().ID)
+
+	telegramID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
+	if err != nil {
+		return c.Send("Неверный telegram_id", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
+	}
+
+	if !b.isModerator(telegramID) {
+		return c.Send("❌ Этот пользователь не является модератором", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
+	}
+
+	// Каскадное удаление инвайтов и снятие роли
+	b.cascadeDeleteModerator(telegramID)
+
+	msg := fmt.Sprintf("✅ Модератор <code>%d</code> снят. Неиспользованные инвайты удалены.", telegramID)
+	return c.Send(msg, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminModeratorKeyboard(),
 	})
 }

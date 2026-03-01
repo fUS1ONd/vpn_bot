@@ -83,6 +83,13 @@ func migrate(conn *sql.DB) error {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 
+		// Таблица модераторов
+		`CREATE TABLE IF NOT EXISTS moderators (
+			telegram_id INTEGER PRIMARY KEY,
+			added_by INTEGER NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+
 		// Индексы
 		`CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid)`,
 		`CREATE INDEX IF NOT EXISTS idx_invites_used_by ON invites(used_by)`,

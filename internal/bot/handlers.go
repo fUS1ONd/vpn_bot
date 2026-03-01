@@ -29,7 +29,7 @@ type Bot struct {
 	db            *database.DB
 	remnawave     *remnawave.Client
 	config        *config.Config
-	userStates    map[int64]string
+	userStates    *stateMap
 	metricsClient *monitoring.MetricsClient // клиент метрик VM
 	dashboardMgr  *dashboardManager         // менеджер сессий дашборда
 	sdConfigsPath string                    // путь к sd_configs (для чтения targets)
@@ -53,7 +53,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		db:            db,
 		remnawave:     remnawaveClient,
 		config:        cfg,
-		userStates:    make(map[int64]string),
+		userStates:    newStateMap(),
 		metricsClient: monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
 		dashboardMgr:  newDashboardManager(),
 		sdConfigsPath: cfg.SDConfigsPath,
@@ -107,7 +107,7 @@ func (b *Bot) Run() {
 // handleMediaMessage обрабатывает медиа-сообщения (для рассылки)
 func (b *Bot) handleMediaMessage(c tele.Context) error {
 	telegramID := c.Sender().ID
-	state := b.userStates[telegramID]
+	state := b.userStates.Get(telegramID)
 
 	switch state {
 	case StateWaitBroadcastAll:
@@ -141,7 +141,31 @@ func (b *Bot) handleStart(c tele.Context) error {
 
 	// Новый пользователь — требуется инвайт
 	if user == nil {
-		b.userStates[telegramID] = StateWaitInvite
+		// Проверяем deep link payload (из ссылки /start <code>)
+		payload := ""
+		if msg := c.Message(); msg != nil {
+			payload = strings.TrimSpace(msg.Payload)
+		}
+
+		if payload != "" {
+			// Пытаемся автоматически активировать код из deep link
+			err := b.processInviteCode(c, payload)
+			if err != nil {
+				return err
+			}
+			// Если processInviteCode показал ошибку (код не найден/использован),
+			// ставим StateWaitInvite чтобы юзер мог ввести код вручную
+			if b.userStates.Get(telegramID) == "" {
+				// Код невалиден — processInviteCode отправил ошибку, ставим ожидание
+				existsNow, _ := b.db.UserExists(telegramID)
+				if !existsNow {
+					b.userStates.Set(telegramID, StateWaitInvite)
+				}
+			}
+			return nil
+		}
+
+		b.userStates.Set(telegramID, StateWaitInvite)
 		return c.Send(MsgWelcomeInvite, &tele.SendOptions{
 			ParseMode: tele.ModeHTML,
 		})
@@ -149,35 +173,35 @@ func (b *Bot) handleStart(c tele.Context) error {
 
 	// Существующий пользователь — синхронизируем данные
 	// Очищаем состояние ожидания инвайта, если оно было (чтобы не блокировать доступ)
-	delete(b.userStates, telegramID)
+	b.userStates.Delete(telegramID)
 
 	// Актуализируем username и first_name в БД и Remnawave
 	b.syncUserInfo(c)
 
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(telegramID),
 	})
 }
 
 // handleTextMessage роутер текстовых сообщений
 func (b *Bot) handleTextMessage(c tele.Context) error {
 	telegramID := c.Sender().ID
-	state := b.userStates[telegramID]
+	state := b.userStates.Get(telegramID)
 	text := c.Text()
 
 	// Обработка состояний
 	switch state {
 	case StateWaitInvite:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено. Для начала отправьте /start")
 		}
 		return b.processInviteCode(c, text)
 
 	case StateWaitBroadcastAll:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
 		}
 		if b.isAdmin(c) {
@@ -186,7 +210,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 
 	case StateWaitBroadcastActive:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
 		}
 		if b.isAdmin(c) {
@@ -195,7 +219,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 
 	case StateWaitAddTraffic:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
 		}
 		if b.isAdmin(c) {
@@ -204,7 +228,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 
 	case StateWaitBanUser:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
 		}
 		if b.isAdmin(c) {
@@ -213,11 +237,36 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 
 	case StateWaitDeleteInvite:
 		if text == BtnCancel {
-			delete(b.userStates, telegramID)
+			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
 		}
 		if b.isAdmin(c) {
 			return b.processDeleteInvite(c, text)
+		}
+
+	case StateWaitModDeleteInvite:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+		}
+		return b.processModeratorDeleteInvite(c, text)
+
+	case StateWaitAddModerator:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processAddModerator(c, text)
+		}
+
+	case StateWaitRemoveModerator:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processRemoveModerator(c, text)
 		}
 
 	}
@@ -245,6 +294,30 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleDeleteInviteRequest(c)
 		case BtnBroadcastActive:
 			return b.handleBroadcastActiveRequest(c)
+		case BtnAdminModerators:
+			return b.handleAdminModeratorMenu(c)
+		case BtnAdminAddModerator:
+			return b.handleAdminAddModeratorRequest(c)
+		case BtnAdminListMods:
+			return b.handleAdminListModerators(c)
+		case BtnAdminRemoveMod:
+			return b.handleAdminRemoveModeratorRequest(c)
+		}
+	}
+
+	// Кнопки модератора
+	if b.isModerator(telegramID) {
+		switch text {
+		case BtnModInvites:
+			return b.handleModeratorMenu(c)
+		case BtnModCreate:
+			return b.handleModeratorCreateInvite(c)
+		case BtnModView:
+			return b.handleModeratorViewInvites(c)
+		case BtnModDelete:
+			return b.handleModeratorDeleteInviteRequest(c)
+		case BtnModBack:
+			return b.handleModeratorBack(c)
 		}
 	}
 
@@ -326,13 +399,13 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	go b.notifyAdminNewUser(telegramID, username, c.Sender().FirstName)
 
 	// Очищаем состояние
-	delete(b.userStates, telegramID)
+	b.userStates.Delete(telegramID)
 
 	// Отправляем приветствие
 	msg := fmt.Sprintf(MsgAccountCreated, remnawaveUser.SubscriptionURL)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(telegramID),
 	})
 }
 
@@ -386,7 +459,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	msg := FormatUserStatus(remnawaveUser)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(telegramID),
 	})
 }
 
@@ -409,7 +482,7 @@ func (b *Bot) handleConnect(c tele.Context) error {
 	msg := fmt.Sprintf(MsgSubscriptionLink, remnawaveUser.SubscriptionURL)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(telegramID),
 	})
 }
 
@@ -418,7 +491,7 @@ func (b *Bot) handleDonate(c tele.Context) error {
 	msg := fmt.Sprintf(MsgDonate, b.config.DonateText)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(c.Sender().ID),
 	})
 }
 
@@ -432,7 +505,7 @@ func (b *Bot) handleInstructionsMenu(c tele.Context) error {
 
 // handleBack возвращает в главное меню
 func (b *Bot) handleBack(c tele.Context) error {
-	delete(b.userStates, c.Sender().ID)
+	b.userStates.Delete(c.Sender().ID)
 
 	// Проверяем, зарегистрирован ли пользователь
 	user, _ := b.db.GetUserByTelegramID(c.Sender().ID)
@@ -442,7 +515,7 @@ func (b *Bot) handleBack(c tele.Context) error {
 
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(c.Sender().ID),
 	})
 }
 
@@ -450,7 +523,7 @@ func (b *Bot) handleBack(c tele.Context) error {
 func (b *Bot) handleUserMode(c tele.Context) error {
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboard(),
+		ReplyMarkup: b.userKeyboard(c.Sender().ID),
 	})
 }
 
@@ -503,6 +576,22 @@ func (b *Bot) handleInstructionMac(c tele.Context) error {
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: InstructionsKeyboard(),
 	})
+}
+
+// userKeyboard возвращает правильную клавиатуру для пользователя (с учётом роли модератора)
+func (b *Bot) userKeyboard(telegramID int64) *tele.ReplyMarkup {
+	if b.isModerator(telegramID) {
+		return UserMenuKeyboardModerator()
+	}
+	return UserMenuKeyboard()
+}
+
+// getBotUsername возвращает username бота для формирования deep link
+func (b *Bot) getBotUsername() string {
+	if b.bot != nil && b.bot.Me != nil {
+		return b.bot.Me.Username
+	}
+	return "bot"
 }
 
 // syncUserInfo синхронизирует username и first_name пользователя с БД и Remnawave
