@@ -259,58 +259,86 @@ func (b *Bot) handleViewInvites(c tele.Context) error {
 		})
 	}
 
-	msg := formatInvitesList(invites)
-	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminManageKeyboard(),
-	})
+	chunks := FormatInvitesListChunked(invites, 4000)
+	for i, chunk := range chunks {
+		opts := &tele.SendOptions{ParseMode: tele.ModeHTML}
+		// Клавиатуру показываем только в последнем сообщении
+		if i == len(chunks)-1 {
+			opts.ReplyMarkup = AdminManageKeyboard()
+		}
+		if err := c.Send(chunk, opts); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// formatInvitesList форматирует список инвайтов для отображения
-func formatInvitesList(invites []database.InviteWithUser) string {
-	var msg strings.Builder
-	msg.WriteString("<b>📋 Список инвайт-кодов</b>\n\n")
-
-	for _, inv := range invites {
-		if inv.UsedBy != nil {
-			// Использованный код
-			msg.WriteString("✅ <b>Использован</b>\n")
-			fmt.Fprintf(&msg, "🔹 Код: <code>%s</code>\n", inv.Code)
-
-			// Ссылка на пользователя
-			userLink := fmt.Sprintf("<a href=\"tg://user?id=%d\">%d</a>", *inv.UsedBy, *inv.UsedBy)
-			if inv.UserUsername != "" {
-				fmt.Fprintf(&msg, "👤 @%s (%s)", inv.UserUsername, userLink)
-			} else {
-				fmt.Fprintf(&msg, "👤 %s", userLink)
-			}
-
-			if inv.UserFirstName != "" {
-				fmt.Fprintf(&msg, " • %s", inv.UserFirstName)
-			}
-			msg.WriteString("\n")
-
-			// Дата активации
-			if inv.UsedAt != nil {
-				fmt.Fprintf(&msg, "📅 %s\n", inv.UsedAt.Format("02.01.06 15:04"))
-			}
-		} else {
-			// Неиспользованный код
-			msg.WriteString("⭕ <b>Не использован</b>\n")
-			fmt.Fprintf(&msg, "🔹 Код: <code>%s</code>\n", inv.Code)
-			fmt.Fprintf(&msg, "📅 Создан: %s\n", inv.CreatedAt.Format("02.01.06 15:04"))
-		}
-
-		// Автор кода (модератор или админ)
-		if inv.CreatorUsername != "" {
-			fmt.Fprintf(&msg, "✍️ @%s\n", inv.CreatorUsername)
-		} else if inv.CreatorFirstName != "" {
-			fmt.Fprintf(&msg, "✍️ %s\n", inv.CreatorFirstName)
-		}
-
-		msg.WriteString("\n")
+// FormatInvitesListChunked разбивает список инвайтов на части, не превышающие maxLen символов
+func FormatInvitesListChunked(invites []database.InviteWithUser, maxLen int) []string {
+	if len(invites) == 0 {
+		return nil
 	}
 
+	var chunks []string
+	var current strings.Builder
+	current.WriteString("<b>📋 Список инвайт-кодов</b>\n\n")
+
+	for _, inv := range invites {
+		entry := formatInviteEntry(inv)
+
+		// Если добавление записи превысит лимит — сохраняем текущий чанк и начинаем новый
+		if current.Len()+len(entry) > maxLen && current.Len() > 0 {
+			chunks = append(chunks, current.String())
+			current.Reset()
+			current.WriteString("<b>📋 Список инвайт-кодов (продолжение)</b>\n\n")
+		}
+
+		current.WriteString(entry)
+	}
+
+	if current.Len() > 0 {
+		chunks = append(chunks, current.String())
+	}
+
+	return chunks
+}
+
+// formatInviteEntry форматирует один инвайт для списка
+func formatInviteEntry(inv database.InviteWithUser) string {
+	var msg strings.Builder
+	if inv.UsedBy != nil {
+		msg.WriteString("✅ <b>Использован</b>\n")
+		msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
+
+		userLink := fmt.Sprintf("<a href=\"tg://user?id=%d\">%d</a>", *inv.UsedBy, *inv.UsedBy)
+		if inv.UserUsername != "" {
+			msg.WriteString(fmt.Sprintf("👤 @%s (%s)", inv.UserUsername, userLink))
+		} else {
+			msg.WriteString(fmt.Sprintf("👤 %s", userLink))
+		}
+
+		if inv.UserFirstName != "" {
+			msg.WriteString(fmt.Sprintf(" • %s", inv.UserFirstName))
+		}
+		msg.WriteString("\n")
+
+		if inv.UsedAt != nil {
+			msg.WriteString(fmt.Sprintf("📅 %s\n", inv.UsedAt.Format("02.01.06 15:04")))
+		}
+	} else {
+		msg.WriteString("⭕ <b>Не использован</b>\n")
+		msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
+		msg.WriteString(fmt.Sprintf("📅 Создан: %s\n", inv.CreatedAt.Format("02.01.06 15:04")))
+	}
+
+	// Автор кода (модератор или админ)
+	if inv.CreatorUsername != "" {
+		fmt.Fprintf(&msg, "✍️ @%s\n", inv.CreatorUsername)
+	} else if inv.CreatorFirstName != "" {
+		fmt.Fprintf(&msg, "✍️ %s\n", inv.CreatorFirstName)
+	}
+
+	msg.WriteString("\n")
 	return msg.String()
 }
 
