@@ -86,6 +86,11 @@ func (b *Bot) processBanUser(c tele.Context, text string) error {
 		return c.Send("Неверный telegram_id", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
+	// Защита от само-бана
+	if telegramID == b.config.AdminID {
+		return c.Send("❌ Нельзя забанить себя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
 	// Находим пользователя в БД
 	user, err := b.db.GetUserByTelegramID(telegramID)
 	if err != nil || user == nil {
