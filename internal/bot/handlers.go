@@ -18,7 +18,6 @@ import (
 const (
 	StateNone                = ""
 	StateWaitInvite          = "wait_invite"           // Ожидание инвайт-кода
-	StateWaitBroadcastAll    = "wait_broadcast_all"    // Ожидание сообщения для рассылки всем
 	StateWaitBroadcastActive = "wait_broadcast_active" // Ожидание сообщения для рассылки активным
 )
 
@@ -108,15 +107,8 @@ func (b *Bot) handleMediaMessage(c tele.Context) error {
 	telegramID := c.Sender().ID
 	state := b.userStates.Get(telegramID)
 
-	switch state {
-	case StateWaitBroadcastAll:
-		if b.isAdmin(c) {
-			return b.processBroadcastMessage(c, false)
-		}
-	case StateWaitBroadcastActive:
-		if b.isAdmin(c) {
-			return b.processBroadcastMessage(c, true)
-		}
+	if state == StateWaitBroadcastActive && b.isAdmin(c) {
+		return b.processBroadcastMessage(c)
 	}
 
 	return nil
@@ -198,22 +190,13 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		}
 		return b.processInviteCode(c, text)
 
-	case StateWaitBroadcastAll:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
-		}
-		if b.isAdmin(c) {
-			return b.processBroadcastMessage(c, false)
-		}
-
 	case StateWaitBroadcastActive:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
 		}
 		if b.isAdmin(c) {
-			return b.processBroadcastMessage(c, true)
+			return b.processBroadcastMessage(c)
 		}
 
 	case StateWaitBanUser:

@@ -172,8 +172,8 @@ func (b *Bot) handleBroadcastActiveRequest(c tele.Context) error {
 	})
 }
 
-// processBroadcastMessage отправляет рассылку только активным пользователям
-func (b *Bot) processBroadcastMessage(c tele.Context, _ bool) error {
+// processBroadcastMessage отправляет рассылку активным пользователям
+func (b *Bot) processBroadcastMessage(c tele.Context) error {
 	b.userStates.Delete(c.Sender().ID)
 
 	// Получаем всех активных пользователей из Remnawave
