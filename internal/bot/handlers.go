@@ -342,19 +342,11 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	telegramID := c.Sender().ID
 	code = strings.TrimSpace(code)
 
-	// Проверяем инвайт
-	invite, err := b.db.GetInviteByCode(code)
+	// Атомарно забираем инвайт (защита от race condition — два пользователя с одним кодом)
+	err := b.db.ClaimInvite(code, telegramID)
 	if err != nil {
-		slog.Error("Failed to get invite", "error", err)
-		return c.Send("Произошла ошибка. Попробуйте позже.")
-	}
-
-	if invite == nil {
-		return c.Send("❌ Инвайт-код не найден. Попробуйте ещё раз:")
-	}
-
-	if invite.UsedBy != nil {
-		return c.Send("❌ Этот инвайт-код уже использован. Попробуйте другой:")
+		slog.Warn("Failed to claim invite", "code", code, "error", err)
+		return c.Send("❌ Инвайт-код не найден или уже использован. Попробуйте другой:")
 	}
 
 	// Создаём пользователя в Remnawave
@@ -366,6 +358,8 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	remnawaveUser, err := b.remnawave.CreateUser(telegramID, username)
 	if err != nil {
 		slog.Error("Failed to create user in Remnawave", "error", err)
+		// Откатываем инвайт — пользователь не создан
+		_ = b.db.UnclaimInvite(code)
 		return c.Send("Ошибка создания аккаунта. Попробуйте позже или обратитесь к администратору.")
 	}
 
@@ -373,14 +367,10 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	_, err = b.db.CreateUser(telegramID, username, c.Sender().FirstName, remnawaveUser.UUID)
 	if err != nil {
 		slog.Error("Failed to create user in DB", "error", err)
-		// Пытаемся удалить из Remnawave если не смогли сохранить в БД
+		// Откатываем: удаляем из Remnawave и освобождаем инвайт
 		_ = b.remnawave.DeleteUser(remnawaveUser.UUID)
+		_ = b.db.UnclaimInvite(code)
 		return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
-	}
-
-	// Помечаем инвайт как использованный
-	if err := b.db.UseInvite(code, telegramID); err != nil {
-		slog.Error("Failed to mark invite as used", "error", err)
 	}
 
 	// Отправляем уведомление админу о новом пользователе (асинхронно)

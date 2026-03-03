@@ -63,7 +63,41 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	return &invite, nil
 }
 
+// ClaimInvite атомарно помечает инвайт как использованный (защита от race condition)
+func (db *DB) ClaimInvite(code string, usedBy int64) error {
+	result, err := db.conn.Exec(
+		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL`,
+		usedBy, code,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to claim invite: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get affected rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("invite not found or already used")
+	}
+
+	return nil
+}
+
+// UnclaimInvite откатывает claim инвайта (если создание пользователя не удалось)
+func (db *DB) UnclaimInvite(code string) error {
+	_, err := db.conn.Exec(
+		`UPDATE invites SET used_by = NULL, used_at = NULL WHERE code = ?`,
+		code,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to unclaim invite: %w", err)
+	}
+	return nil
+}
+
 // UseInvite помечает инвайт как использованный с временем активации
+// Deprecated: используй ClaimInvite для атомарной операции
 func (db *DB) UseInvite(code string, usedBy int64) error {
 	result, err := db.conn.Exec(
 		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL`,
