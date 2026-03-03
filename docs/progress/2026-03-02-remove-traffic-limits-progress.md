@@ -4,7 +4,7 @@
 
 **Дата выполнения:** 2026-03-03
 
-**Статус:** 🟡 В процессе (выполнен батч задач 1-3)
+**Статус:** ✅ Выполнено
 
 ---
 
@@ -32,7 +32,21 @@
 
 ---
 
-## TDD-верификация батча
+### Task 4: Обновить отображение трафика — только использованный за месяц
+
+- ✅ Убраны строки про лимит и сброс из `MsgAccountCreated`
+- ✅ `FormatUserStatus` теперь показывает только `Трафик за месяц: X.XX GB`
+- ✅ Убрано вычисление процента/лимита (включая edge case `TrafficLimitBytes=0`)
+
+### Task 5: Финальная верификация и обновление документации
+
+- ✅ Обновлены `CLAUDE.md`, `AGENTS.md`, `README.md` под безлимитную модель трафика
+- ✅ Добавлены тесты на новый формат сообщений в `internal/bot/messages_test.go`
+- ✅ Выполнены `make fmt` и `make tests`
+
+---
+
+## TDD-верификация
 
 Добавлены RED→GREEN тесты:
 - `internal/remnawave/client_test.go`: `TestCreateUserSetsUnlimitedTraffic`
@@ -40,11 +54,7 @@
 
 Команды:
 - `GOCACHE=/tmp/go-build go test ./internal/remnawave ./internal/bot -run 'TestCreateUserSetsUnlimitedTraffic|TestAdminManageKeyboardDoesNotContainAddTrafficButton' -count=1` ✅
+- `GOCACHE=/tmp/go-build go test ./internal/bot -run 'TestFormatUserStatusShowsUsedTrafficPerMonthWithoutLimit|TestMsgAccountCreatedHasNoTrafficLimitDetails' -count=1` ✅
 - `GOCACHE=/tmp/go-build go build ./...` ✅
-
----
-
-## Осталось
-
-- ⏳ Task 4: обновить отображение трафика (только использованный за месяц)
-- ⏳ Task 5: финальная верификация (`make fmt`, `make tests`) и обновление документации
+- `GOCACHE=/tmp/go-build make fmt` ✅
+- `GOCACHE=/tmp/go-build make tests` ✅

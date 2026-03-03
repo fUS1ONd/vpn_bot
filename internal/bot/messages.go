@@ -22,9 +22,6 @@ const (
 
 Добро пожаловать! Ваш VPN-доступ активирован.
 
-<b>Лимит трафика:</b> 30 GB / месяц
-<b>Сброс трафика:</b> 1-го числа каждого месяца
-
 <b>Ссылка для подключения:</b>
 <code>%s</code>
 
@@ -188,17 +185,11 @@ func FormatUserStatus(user *remnawave.User) string {
 	msg := fmt.Sprintf("<b>👤 Ваш статус</b>\n\n")
 	msg += fmt.Sprintf("<b>Статус:</b> %s %s\n", statusEmoji, statusText)
 
-	// Трафик
+	// Использованный трафик за текущий месяц
 	if user.UserTraffic != nil {
 		usedGB := float64(user.UserTraffic.UsedTrafficBytes) / (1024 * 1024 * 1024)
-		limitGB := float64(user.TrafficLimitBytes) / (1024 * 1024 * 1024)
-		percent := float64(user.UserTraffic.UsedTrafficBytes) / float64(user.TrafficLimitBytes) * 100
-
-		msg += fmt.Sprintf("\n<b>Трафик:</b>\n")
-		msg += fmt.Sprintf("%.2f GB / %.0f GB (%.0f%%)\n", usedGB, limitGB, percent)
+		msg += fmt.Sprintf("\n<b>Трафик за месяц:</b> %.2f GB\n", usedGB)
 	}
-
-	msg += "\n<b>Сброс трафика:</b> 1-го числа месяца\n"
 
 	if user.Status == remnawave.StatusActive {
 		msg += fmt.Sprintf("\n<b>Ссылка подписки:</b>\n<code>%s</code>", user.SubscriptionURL)
