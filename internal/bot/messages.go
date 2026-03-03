@@ -142,13 +142,6 @@ const (
 Нажмите на ссылку ниже, чтобы активировать доступ:
 👉 https://t.me/%s?start=%s`
 
-	MsgEnterAddTraffic = `<b>📊 Добавить трафик</b>
-
-Введите данные через пробел:
-<code>telegram_id GB</code>
-
-Пример: <code>123456789 10</code>`
-
 	MsgEnterBanUser = `<b>🚫 Забанить пользователя</b>
 
 Введите telegram_id пользователя:`

@@ -20,7 +20,6 @@ const (
 	StateWaitInvite          = "wait_invite"           // Ожидание инвайт-кода
 	StateWaitBroadcastAll    = "wait_broadcast_all"    // Ожидание сообщения для рассылки всем
 	StateWaitBroadcastActive = "wait_broadcast_active" // Ожидание сообщения для рассылки активным
-	StateWaitAddTraffic      = "wait_add_traffic"      // Ожидание данных для добавления трафика
 )
 
 // Bot представляет Telegram бота
@@ -217,15 +216,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processBroadcastMessage(c, true)
 		}
 
-	case StateWaitAddTraffic:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
-		}
-		if b.isAdmin(c) {
-			return b.processAddTraffic(c, text)
-		}
-
 	case StateWaitBanUser:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
@@ -284,8 +274,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleAdminStart(c)
 		case BtnAdminCreateInvite:
 			return b.handleCreateInvite(c)
-		case BtnAdminAddTraffic:
-			return b.handleAddTrafficRequest(c)
 		case BtnAdminBanUser:
 			return b.handleBanUserRequest(c)
 		case BtnAdminViewInvites:

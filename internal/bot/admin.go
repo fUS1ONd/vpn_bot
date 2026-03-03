@@ -64,68 +64,6 @@ func (b *Bot) handleCreateInvite(c tele.Context) error {
 	})
 }
 
-// handleAddTrafficRequest запрашивает данные для добавления трафика
-func (b *Bot) handleAddTrafficRequest(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	b.userStates.Set(c.Sender().ID, StateWaitAddTraffic)
-	return c.Send(MsgEnterAddTraffic, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: CancelKeyboard(),
-	})
-}
-
-// processAddTraffic обрабатывает добавление трафика
-func (b *Bot) processAddTraffic(c tele.Context, text string) error {
-	b.userStates.Delete(c.Sender().ID)
-
-	// Формат: telegram_id GB
-	parts := strings.Fields(text)
-	if len(parts) != 2 {
-		return c.Send("Неверный формат. Используйте: telegram_id GB", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	telegramID, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		return c.Send("Неверный telegram_id", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	gb, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil || gb <= 0 {
-		return c.Send("Неверное количество GB", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	// Находим пользователя
-	user, err := b.db.GetUserByTelegramID(telegramID)
-	if err != nil || user == nil {
-		return c.Send("Пользователь не найден", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	// Получаем текущий лимит из Remnawave
-	remnawaveUser, err := b.remnawave.GetUser(user.RemnawaveUUID)
-	if err != nil {
-		slog.Error("Failed to get user from Remnawave", "error", err)
-		return c.Send("Ошибка получения данных пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	// Добавляем трафик к текущему лимиту
-	newLimit := remnawaveUser.TrafficLimitBytes + (gb * 1024 * 1024 * 1024)
-	err = b.remnawave.UpdateUserTraffic(user.RemnawaveUUID, newLimit)
-	if err != nil {
-		slog.Error("Failed to update traffic", "error", err)
-		return c.Send("Ошибка обновления лимита трафика", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	msg := fmt.Sprintf("✅ Добавлено %d GB пользователю %d\nНовый лимит: %.1f GB",
-		gb, telegramID, float64(newLimit)/(1024*1024*1024))
-	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminManageKeyboard(),
-	})
-}
-
 // handleBanUserRequest запрашивает telegram_id для бана
 func (b *Bot) handleBanUserRequest(c tele.Context) error {
 	if !b.isAdmin(c) {

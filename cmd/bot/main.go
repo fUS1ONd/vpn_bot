@@ -64,9 +64,6 @@ func main() {
 		cancel()
 	}()
 
-	// Запуск фонового scheduler для сброса лимитов (1-го числа месяца)
-	go telegramBot.StartScheduler(ctx)
-
 	// Запуск фоновой синхронизации targets.json для мониторинга нод
 	go monitoring.StartSyncLoop(ctx, remnawaveClient, cfg.SDConfigsPath)
 
