@@ -48,7 +48,7 @@ func TestProcessBanUserRejectsSelfBan(t *testing.T) {
 	b := &Bot{
 		db:         db,
 		config:     &config.Config{AdminID: adminID},
-		userStates: NewUserStates(),
+		userStates: newStateMap(),
 	}
 
 	ctx := &MockContext{sender: &tele.User{ID: adminID}}
