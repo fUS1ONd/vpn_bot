@@ -74,6 +74,7 @@ make logs            # Показать логи
    Никогда не рапортуй о завершении задачи, если `make tests` или `make fmt` выдают ошибки. Исправь их сам.
 
 В этом репозитории разрешается делать коммиты, чтобы фиксировать последовательные изменения чаще
+
 ## Правило названий коммитов
 
 Используй формат: `<type>: <краткое описание>`
@@ -92,32 +93,6 @@ make logs            # Показать логи
 6. **Актуализация данных** — при каждом /start бот обновляет username и first_name в БД и синхронизирует username с Remnawave
 7. **Удаление кодов** — можно удалять только неиспользованные коды (защита истории активаций)
 8. **Субтитры** — опционально, требует запущенный render-сервис. Голосовое → видео с субтитрами, кружок → кружок с субтитрами
-
-## Структура БД
-
-### Таблица `users`
-
-```sql
-CREATE TABLE users (
-    telegram_id INTEGER PRIMARY KEY,
-    username TEXT,
-    first_name TEXT,                    -- имя из Telegram (автоматически обновляется)
-    remnawave_uuid TEXT UNIQUE NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### Таблица `invites`
-
-```sql
-CREATE TABLE invites (
-    code TEXT PRIMARY KEY,
-    created_by INTEGER NOT NULL,
-    used_by INTEGER,                    -- NULL если не использован
-    used_at TIMESTAMP,                  -- время активации кода
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
 
 ## Мониторинг нод
 
