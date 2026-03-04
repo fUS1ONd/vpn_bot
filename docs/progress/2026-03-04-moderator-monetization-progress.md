@@ -91,6 +91,20 @@
 ### Fix 4 — хрупкая проверка 403 через strings.Contains
 - ✅ `logSchedulerSendError`: заменён `strings.Contains(err.Error(), "403")` на `errors.Is(tele.ErrBlockedByUser / ErrUserIsDeactivated / ErrNotStartedByUser)`.
 
+### Fix 5 — автокик переоткрывал инвайт (критично для монетизации)
+- ✅ Добавлена колонка `kicked_at TIMESTAMP` в таблицу `invites` (ALTER TABLE миграция).
+- ✅ Добавлена функция `MarkInviteKickedByTelegramID` — проставляет `kicked_at`, не трогает `used_by`.
+- ✅ `ClaimInvite` обновлён: отклоняет инвайты с `kicked_at IS NOT NULL`.
+- ✅ `handleAutoKick` вызывает `MarkInviteKickedByTelegramID` вместо `ResetInviteUsageByTelegramID`.
+- Эффект: кикнутый пользователь не может зайти по старой ссылке без нового инвайта от модератора.
+
+### Fix 6 — состояние диалога продления не сбрасывалось в терминальных ветках
+- ✅ В `processModExtendID` добавлен `b.userStates.Delete(moderatorID)` перед каждым `return` с `ModeratorMenuKeyboard`:
+  - ошибка БД при проверке владения;
+  - `dbUser == nil` (пользователь удалён);
+  - 404 от Remnawave;
+  - `CalculateExtendedExpireAt` вернул ошибку (слишком рано продлевать).
+
 ## Отклонения от плана
 
 1. В шаге выбора подписчика для продления используется ввод `telegram_id` из списка, без отдельной нумерации строк. Это сохраняет целевой UX (продление по ID) и упрощает проверку владения подписчиком.
