@@ -94,32 +94,6 @@ make logs            # Показать логи
 7. **Удаление кодов** — можно удалять только неиспользованные коды (защита истории активаций)
 8. **Субтитры** — опционально, требует запущенный render-сервис. Голосовое → видео с субтитрами, кружок → кружок с субтитрами
 
-## Структура БД
-
-### Таблица `users`
-
-```sql
-CREATE TABLE users (
-    telegram_id INTEGER PRIMARY KEY,
-    username TEXT,
-    first_name TEXT,                    -- имя из Telegram (автоматически обновляется)
-    remnawave_uuid TEXT UNIQUE NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### Таблица `invites`
-
-```sql
-CREATE TABLE invites (
-    code TEXT PRIMARY KEY,
-    created_by INTEGER NOT NULL,
-    used_by INTEGER,                    -- NULL если не использован
-    used_at TIMESTAMP,                  -- время активации кода
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
 ## Мониторинг нод
 
 ### Архитектура

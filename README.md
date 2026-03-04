@@ -26,21 +26,9 @@ make up
 ```
 
 Просмотр логов:
+
 ```bash
 make logs
-```
-
-### Локальная разработка
-
-```bash
-go mod download
-go run cmd/bot/main.go
-```
-
-Или собрать бинарник:
-```bash
-go build -o vpn-bot cmd/bot/main.go
-./vpn-bot
 ```
 
 ## Конфигурация
@@ -71,12 +59,14 @@ RENDER_API_KEY=ключ_render_сервиса
 ## Как работает
 
 **Пользователь:**
+
 1. Пишет `/start` боту
 2. Вводит инвайт-код
 3. Бот создаёт аккаунт в Remnawave (без лимита, с месячным сбросом счётчика трафика)
 4. Пользователь может управлять подключениями
 
 **Админ (кнопка "📋 Управление"):**
+
 - **🎟 Создать инвайт** — генерирует коды
 - **📋 Коды** — список всех кодов (статус, кто активировал, дата)
 - **🗑 Удалить код** — удаляет неиспользованные коды
@@ -85,64 +75,19 @@ RENDER_API_KEY=ключ_render_сервиса
 
 При активации кода админ получает уведомление с информацией о новом пользователе (Telegram ID, username, имя).
 
-## База данных
-
-SQLite с двумя таблицами:
-
-**users** — связь Telegram ID и Remnawave UUID:
-```sql
-CREATE TABLE users (
-    telegram_id INTEGER PRIMARY KEY,
-    username TEXT,
-    first_name TEXT,                    -- имя из Telegram
-    remnawave_uuid TEXT UNIQUE NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-**invites** — управление инвайт-кодами:
-```sql
-CREATE TABLE invites (
-    code TEXT PRIMARY KEY,
-    created_by INTEGER NOT NULL,
-    used_by INTEGER,
-    used_at TIMESTAMP,                  -- время активации
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-## Docker команды
-
-```bash
-make up              # Запустить бота
-make down            # Остановить
-make restart         # Перезагрузить
-make logs            # Логи в реал-тайме
-make clean           # Остановить и удалить контейнеры
-make shell           # Оболочка в контейнере
-```
-
-Или прямо Docker Compose:
-```bash
-docker compose up -d --build
-docker compose logs -f vpn-bot
-docker compose down
-```
-
 ## Разработка
 
 ```bash
-# Тесты
-go test ./...
-
-# Анализ кода
-go vet ./...
-
-# Собрать миграцию
-go build -o migrator cmd/migrator/main.go
+go mod download     # Установить зависимости
+make down           # Остановить бота
+make up             # Пересобрать докер с ботом
+make tests          # Запустить тесты
+make fmt            # Проверить код
+make logs           # Показать логи
 ```
 
 **Структура:**
+
 ```
 vpn_bot/
 ├── cmd/bot/           → Основное приложение
@@ -157,44 +102,7 @@ vpn_bot/
 └── docker-compose.yml
 ```
 
-## Миграция
-
-Перенос пользователей из старой БД:
-
-```bash
-go build -o migrator cmd/migrator/main.go
-
-# Предпросмотр (без изменений)
-./migrator --dry-run --old-db /path/to/old.db
-
-# Выполнить
-./migrator --live --old-db /path/to/old.db
-```
-
-Переносит только активных пользователей, логирует в `migration_YYYY-MM-DD.log`.
-
-## Проблемы
-
-| Проблема | Решение |
-|----------|---------|
-| Бот не отвечает | Проверь `BOT_TOKEN` в `.env`, перезагрузи `make restart` |
-| Не работает регистрация | Проверь `REMNAWAVE_API_TOKEN` и `REMNAWAVE_URL` в логах |
-| Трафик не сбрасывается | Проверь `trafficLimitStrategy=MONTH` у пользователя в Remnawave |
-| Проблемы БД | Резервная копия: `make backup`, логи: `make logs` |
-
-## Безопасность
-
-- Никогда не коммитируй `.env` в Git
-- Используй надёжные API-токены
-- Ограничь админ-доступ
-- Делай резервные копии: `make backup`
-
 ## Дополнительно
 
-- **CLAUDE.md** — детальная архитектура
+- **CLAUDE.md** и **AGENTS.md** - инструкция по работе с репозиторием и workflow
 - **Remnawave** — https://remnawave.com
-
----
-
-**Версия:** 2.0 (Remnawave)
-**Repository:** https://github.com/fus1ond/vpn_bot
