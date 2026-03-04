@@ -15,8 +15,8 @@ import (
 
 // Состояния модератора
 const (
-	StateWaitModDeleteInvite = "wait_mod_delete_invite" // Модератор ждёт код для удаления
-	StateWaitModExtendID     = "wait_mod_extend_id"     // Ожидание telegram_id подписчика для продления
+	StateWaitModDeleteInvite  = "wait_mod_delete_invite"  // Модератор ждёт код для удаления
+	StateWaitModExtendID      = "wait_mod_extend_id"      // Ожидание telegram_id подписчика для продления
 	StateWaitModExtendConfirm = "wait_mod_extend_confirm" // Ожидание подтверждения продления
 )
 

@@ -37,13 +37,13 @@ const (
 	BtnBroadcastActive = "📢 Рассылка активным"
 
 	// Кнопки модератора
-	BtnModInvites = "🎟 Приглашения"
-	BtnModCreate  = "📨 Создать приглашение"
-	BtnModView    = "📋 Мои приглашения"
+	BtnModInvites     = "🎟 Приглашения"
+	BtnModCreate      = "📨 Создать приглашение"
+	BtnModView        = "📋 Мои приглашения"
 	BtnModSubscribers = "👥 Мои подписчики"
 	BtnModExtend      = "⏳ Продлить подписку"
-	BtnModDelete  = "🗑 Удалить приглашение"
-	BtnModBack    = "🔙 В меню"
+	BtnModDelete      = "🗑 Удалить приглашение"
+	BtnModBack        = "🔙 В меню"
 
 	// Админ-кнопки управления модераторами
 	BtnAdminModerators   = "👥 Модераторы"

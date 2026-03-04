@@ -3,8 +3,8 @@ package bot
 import (
 	"fmt"
 	"log/slog"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/config"
