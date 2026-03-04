@@ -12,11 +12,9 @@
 
 ### Task 1: Race condition в `userStates`
 
-- ✅ Создан `internal/bot/user_states.go` — обёртка над `sync.Map`
-- ✅ Заменён `map[int64]string` на `*UserStates` в структуре `Bot`
-- ✅ Обновлены все точки доступа в `handlers.go` и `admin.go`
-- ✅ Обновлены существующие тесты под новый API
-- ✅ Добавлен тест `TestUserStatesConcurrentAccess` с `-race`
+- ✅ При ребейзе на main скипнут — main уже содержал `internal/bot/state_map.go` с `sync.RWMutex`
+- ✅ Структура `Bot` использует `*stateMap` (из main), все точки доступа через `.Get()`, `.Set()`, `.Delete()`
+- ✅ Тесты обновлены под API `stateMap` (`newStateMap()` вместо `NewUserStates()`)
 
 ### Task 2: TOCTOU на инвайт-код
 
@@ -56,7 +54,7 @@
 
 | Тест | Что проверяет |
 |------|--------------|
-| `TestUserStatesConcurrentAccess` | Конкурентный доступ к userStates без паники |
+| `TestStateMap*` (из main, `state_map_test.go`) | Конкурентный доступ к stateMap без паники |
 | `TestClaimInviteAtomicity` | Двойной claim одного инвайта невозможен |
 | `TestClaimInviteNonExistent` | Claim несуществующего кода |
 | `TestProcessBanUserRejectsSelfBan` | Админ не может забанить себя |
@@ -81,8 +79,11 @@
 - `cmd/bot/main.go` — вызов reconcile сразу после инициализации БД, логирование если были откаты
 
 **Тесты (TDD):**
-- `TestReconcileOrphanedInvites` — "зависший" инвайт откатывается
-- `TestReconcileOrphanedInvites_SkipsValidClaims` — валидный инвайт не трогается
+- `TestReconcileOrphanedInvites` — "зависший" инвайт (нет пользователя, claimed < 1 часа) откатывается
+- `TestReconcileOrphanedInvites_SkipsValidClaims` — инвайт активного пользователя не трогается
+- `TestReconcileOrphanedInvites_SkipsBannedUserInvites` — инвайт забаненного (claimed > 1 часа назад) не трогается
+
+**Исправление P1 (code review chatgpt-codex-connector):** первоначальная реализация откатывала ВСЕ инвайты без пользователя в `users`, включая инвайты забаненных. Исправлено добавлением условия `AND used_at >= datetime('now', '-1 hour')` — откатываются только свежие claims (< 1 часа), которые могут быть следствием краша при регистрации.
 
 - `make fmt` ✅
 - `make tests` ✅

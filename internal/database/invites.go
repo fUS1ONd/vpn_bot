@@ -84,8 +84,10 @@ func (db *DB) ClaimInvite(code string, usedBy int64) error {
 	return nil
 }
 
-// ReconcileOrphanedInvites откатывает инвайты, помеченные как использованные,
-// но без соответствующего пользователя в таблице users (защита от краша между ClaimInvite и CreateUser).
+// ReconcileOrphanedInvites откатывает инвайты, застрявшие в состоянии "в процессе регистрации":
+// claimed недавно (< 1 часа) но без соответствующего пользователя в users.
+// Это защита от краша между ClaimInvite и CreateUser.
+// Старые claimed-инвайты без пользователя не трогаются — они могут относиться к забаненным пользователям.
 // Возвращает количество откаченных инвайтов.
 func (db *DB) ReconcileOrphanedInvites() (int, error) {
 	result, err := db.conn.Exec(`
@@ -93,6 +95,7 @@ func (db *DB) ReconcileOrphanedInvites() (int, error) {
 		SET used_by = NULL, used_at = NULL
 		WHERE used_by IS NOT NULL
 		  AND used_by NOT IN (SELECT telegram_id FROM users)
+		  AND used_at >= datetime('now', '-1 hour')
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to reconcile orphaned invites: %w", err)

@@ -91,6 +91,44 @@ func TestReconcileOrphanedInvites_SkipsValidClaims(t *testing.T) {
 	assert.NotNil(t, inv.UsedBy, "Инвайт должен остаться использованным")
 }
 
+// TestReconcileOrphanedInvites_SkipsBannedUserInvites проверяет, что инвайты забаненных
+// пользователей не откатываются (claimed давно — не в-процессе регистрации)
+func TestReconcileOrphanedInvites_SkipsBannedUserInvites(t *testing.T) {
+	dbFile := "test_reconcile_banned.db"
+	db, err := New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	// Создаём пользователя, claim-им его инвайт, потом "баним" (удаляем из users)
+	_, err = db.CreateUser(111, "user111", "User", "uuid-111")
+	require.NoError(t, err)
+
+	invite, err := db.CreateInvite(999)
+	require.NoError(t, err)
+	err = db.ClaimInvite(invite.Code, 111)
+	require.NoError(t, err)
+
+	// Имитируем бан — удаляем пользователя из users
+	err = db.DeleteUser(111)
+	require.NoError(t, err)
+
+	// Состариваем used_at — симулируем что инвайт был claimed давно (> 1 часа назад)
+	_, err = db.Conn().Exec(`UPDATE invites SET used_at = datetime('now', '-2 hours') WHERE code = ?`, invite.Code)
+	require.NoError(t, err)
+
+	// Reconcile НЕ должен трогать этот инвайт — он был claimed давно (не в-процессе)
+	count, err := db.ReconcileOrphanedInvites()
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count, "Инвайт забаненного пользователя не должен откатываться")
+
+	inv, err := db.GetInviteByCode(invite.Code)
+	require.NoError(t, err)
+	assert.NotNil(t, inv.UsedBy, "Исторический инвайт должен остаться использованным")
+}
+
 // TestClaimInviteNonExistent проверяет claim несуществующего кода
 func TestClaimInviteNonExistent(t *testing.T) {
 	dbFile := "test_claim_nonexist.db"
