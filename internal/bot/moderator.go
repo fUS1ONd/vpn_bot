@@ -248,6 +248,7 @@ func (b *Bot) processModExtendID(c tele.Context, text string) error {
 	owned, err := b.db.IsSubscriberOfModerator(moderatorID, targetID)
 	if err != nil {
 		slog.Error("Failed to verify subscriber ownership", "error", err, "moderator_id", moderatorID, "target_id", targetID)
+		b.userStates.Delete(moderatorID)
 		return c.Send("Ошибка проверки подписчика", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 	}
 	if !owned {
@@ -260,12 +261,14 @@ func (b *Bot) processModExtendID(c tele.Context, text string) error {
 		return c.Send("Ошибка получения данных подписчика", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
 	}
 	if dbUser == nil {
+		b.userStates.Delete(moderatorID)
 		return c.Send("❌ Пользователь уже удалён из системы.", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 	}
 
 	remUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
 	if err != nil {
 		if strings.Contains(err.Error(), "API error 404") {
+			b.userStates.Delete(moderatorID)
 			return c.Send("❌ Пользователь уже удалён из системы.", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 		}
 		slog.Error("Failed to get user from Remnawave", "error", err, "target_id", targetID)
@@ -274,6 +277,7 @@ func (b *Bot) processModExtendID(c tele.Context, text string) error {
 
 	newExpireAt, err := remnawave.CalculateExtendedExpireAt(remUser.ExpireAt, time.Now().UTC(), 30)
 	if err != nil {
+		b.userStates.Delete(moderatorID)
 		return c.Send(err.Error(), &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 	}
 

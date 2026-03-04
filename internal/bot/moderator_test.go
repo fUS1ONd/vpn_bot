@@ -491,6 +491,70 @@ func TestBanModerator_CascadeDelete(t *testing.T) {
 	assert.Empty(t, invites)
 }
 
+// --- Тест очистки состояния в терминальных ветках processModExtendID ---
+
+// TestProcessModExtendID_ClearsStateOnTerminalErrors проверяет что при ошибках,
+// которые возвращают пользователя в главное меню, состояние диалога сбрасывается.
+// Без этого следующее сообщение модератора снова парсится как telegram_id.
+func TestProcessModExtendID_ClearsStateOnTerminalErrors(t *testing.T) {
+	b, db, _, modID := setupModeratorTestBot(t)
+
+	t.Run("dbUser==nil очищает состояние", func(t *testing.T) {
+		// Создаём инвайт с used_by=9001, но без записи в users
+		inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+		require.NoError(t, err)
+		require.NoError(t, db.ClaimInvite(inv.Code, 9001))
+		// Намеренно НЕ создаём пользователя 9001 в users — GetUserByTelegramID вернёт nil
+
+		b.userStates.Set(modID, StateWaitModExtendID)
+
+		ctx := &MockContext{sender: &tele.User{ID: modID}, message: &tele.Message{Text: "9001"}}
+		require.NoError(t, b.processModExtendID(ctx, "9001"))
+
+		assert.Empty(t, b.userStates.Get(modID), "состояние должно быть очищено когда пользователь удалён")
+	})
+
+	t.Run("подписка слишком далеко в будущем очищает состояние", func(t *testing.T) {
+		_, err := db.CreateUser(9002, "future", "Future", "uuid-9002")
+		require.NoError(t, err)
+		inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+		require.NoError(t, err)
+		require.NoError(t, db.ClaimInvite(inv.Code, 9002))
+
+		// Remnawave: подписка истекает через 60 дней (>30) — слишком рано продлевать
+		client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+		client.SetHTTPClient(&http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if strings.Contains(r.URL.Path, "uuid-9002") {
+					payload, _ := json.Marshal(map[string]any{
+						"response": map[string]any{
+							"uuid":      "uuid-9002",
+							"username":  "future",
+							"status":    remnawave.StatusActive,
+							"expireAt":  time.Now().UTC().AddDate(0, 0, 60).Format(time.RFC3339),
+							"createdAt": time.Now().UTC().Format(time.RFC3339),
+						},
+					})
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(string(payload))),
+						Header:     make(http.Header),
+					}, nil
+				}
+				return nil, fmt.Errorf("unexpected: %s", r.URL.Path)
+			}),
+		})
+		b.remnawave = client
+
+		b.userStates.Set(modID, StateWaitModExtendID)
+
+		ctx := &MockContext{sender: &tele.User{ID: modID}, message: &tele.Message{Text: "9002"}}
+		require.NoError(t, b.processModExtendID(ctx, "9002"))
+
+		assert.Empty(t, b.userStates.Get(modID), "состояние должно быть очищено когда подписка ещё не может быть продлена")
+	})
+}
+
 // --- Тест batch API для handleModSubscribers ---
 
 // TestHandleModSubscribers_UsesBatchAPI проверяет, что handleModSubscribers использует
