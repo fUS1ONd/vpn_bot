@@ -13,6 +13,7 @@ import (
 
 func TestCreateUserSetsUnlimitedTraffic(t *testing.T) {
 	var capturedRequest CreateUserRequest
+	expectedExpireAt := time.Date(2026, time.March, 10, 12, 0, 0, 0, time.UTC)
 
 	client := NewClient("https://panel.example.com", "test-token", "")
 	client.http = &http.Client{
@@ -49,7 +50,7 @@ func TestCreateUserSetsUnlimitedTraffic(t *testing.T) {
 		}),
 	}
 
-	user, err := client.CreateUser(12345, "alice")
+	user, err := client.CreateUser(12345, "alice", expectedExpireAt)
 	require.NoError(t, err)
 	require.NotNil(t, user)
 
@@ -57,11 +58,122 @@ func TestCreateUserSetsUnlimitedTraffic(t *testing.T) {
 	require.Equal(t, "alice", capturedRequest.Username)
 	require.Equal(t, int64(0), capturedRequest.TrafficLimitBytes)
 	require.Equal(t, TrafficStrategyMonth, capturedRequest.TrafficLimitStrategy)
-	require.Equal(t, "2099-01-01T00:00:00Z", capturedRequest.ExpireAt)
+	require.Equal(t, expectedExpireAt.Format(time.RFC3339), capturedRequest.ExpireAt)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+func TestCalculateExtendedExpireAt(t *testing.T) {
+	now := time.Date(2026, time.March, 4, 12, 0, 0, 0, time.UTC)
+
+	t.Run("Продление активной подписки в пределах окна", func(t *testing.T) {
+		current := now.AddDate(0, 0, 5)
+		next, err := CalculateExtendedExpireAt(current, now, 30)
+		require.NoError(t, err)
+		require.Equal(t, current.AddDate(0, 0, 30), next)
+	})
+
+	t.Run("Продление истёкшей подписки", func(t *testing.T) {
+		current := now.AddDate(0, 0, -1)
+		next, err := CalculateExtendedExpireAt(current, now, 30)
+		require.NoError(t, err)
+		require.Equal(t, now.AddDate(0, 0, 30), next)
+	})
+
+	t.Run("Слишком раннее продление запрещено", func(t *testing.T) {
+		current := now.AddDate(0, 0, 40)
+		_, err := CalculateExtendedExpireAt(current, now, 30)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "уже продлена")
+	})
+}
+
+func TestExtendUserSubscription_EnableAndPatch(t *testing.T) {
+	client := NewClient("https://panel.example.com", "test-token", "")
+
+	var patchReq UpdateUserRequest
+	var gotEnable bool
+	var gotPatch bool
+
+	client.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-1":
+				payload := `{"response":{"uuid":"uuid-1","username":"alice","status":"EXPIRED","expireAt":"2026-03-01T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPost && r.URL.Path == "/api/users/uuid-1/actions/enable":
+				gotEnable = true
+				payload := `{"response":{"success":true}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/users":
+				gotPatch = true
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&patchReq))
+				payload := `{"response":{"uuid":"uuid-1"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+				return nil, nil
+			}
+		}),
+	}
+
+	err := client.ExtendUserSubscription("uuid-1", 30)
+	require.NoError(t, err)
+	require.True(t, gotEnable)
+	require.True(t, gotPatch)
+	require.NotNil(t, patchReq.ExpireAt)
+}
+
+func TestExtendUserSubscription_RejectTooEarly(t *testing.T) {
+	client := NewClient("https://panel.example.com", "test-token", "")
+
+	var gotPatch bool
+	client.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-2":
+				payload := `{"response":{"uuid":"uuid-2","username":"bob","status":"ACTIVE","expireAt":"2099-01-10T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/users":
+				gotPatch = true
+				payload := `{"response":{"uuid":"uuid-2"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				payload := `{"response":{"ok":true}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			}
+		}),
+	}
+
+	err := client.ExtendUserSubscription("uuid-2", 30)
+	require.Error(t, err)
+	require.False(t, gotPatch)
 }

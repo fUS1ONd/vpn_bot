@@ -21,16 +21,31 @@ type InviteWithUser struct {
 	CreatorFirstName string // First name автора кода
 }
 
+// Subscriber содержит подписчика модератора.
+// Поля профиля могут быть nil, если пользователь удалён из users.
+type Subscriber struct {
+	TelegramID    int64
+	Username      *string
+	FirstName     *string
+	RemnawaveUUID *string
+}
+
 // CreateInvite создаёт новый инвайт
 func (db *DB) CreateInvite(createdBy int64) (*Invite, error) {
+	return db.CreateInviteWithExpiry(createdBy, nil)
+}
+
+// CreateInviteWithExpiry создаёт новый инвайт с опциональным сроком действия.
+// expireDays = nil означает бессрочный инвайт.
+func (db *DB) CreateInviteWithExpiry(createdBy int64, expireDays *int) (*Invite, error) {
 	code, err := generateInviteCode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate invite code: %w", err)
 	}
 
 	_, err = db.conn.Exec(
-		`INSERT INTO invites (code, created_by) VALUES (?, ?)`,
-		code, createdBy,
+		`INSERT INTO invites (code, created_by, expire_days) VALUES (?, ?, ?)`,
+		code, createdBy, expireDays,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create invite: %w", err)
@@ -43,11 +58,14 @@ func (db *DB) CreateInvite(createdBy int64) (*Invite, error) {
 func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	var invite Invite
 	var usedBy sql.NullInt64
+	var usedAt sql.NullTime
+	var expireDays sql.NullInt64
+	var kickedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT code, created_by, used_by, created_at FROM invites WHERE code = ?`,
+		`SELECT code, created_by, used_by, used_at, expire_days, kicked_at, created_at FROM invites WHERE code = ?`,
 		code,
-	).Scan(&invite.Code, &invite.CreatedBy, &usedBy, &invite.CreatedAt)
+	).Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &kickedAt, &invite.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -59,14 +77,26 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	if usedBy.Valid {
 		invite.UsedBy = &usedBy.Int64
 	}
+	if usedAt.Valid {
+		invite.UsedAt = &usedAt.Time
+	}
+	if expireDays.Valid {
+		v := int(expireDays.Int64)
+		invite.ExpireDays = &v
+	}
+	if kickedAt.Valid {
+		invite.KickedAt = &kickedAt.Time
+	}
 
 	return &invite, nil
 }
 
-// ClaimInvite атомарно помечает инвайт как использованный (защита от race condition)
+// ClaimInvite атомарно помечает инвайт как использованный (защита от race condition).
+// Отклоняет инвайт если он уже использован или помечен как кикнутый (kicked_at IS NOT NULL).
 func (db *DB) ClaimInvite(code string, usedBy int64) error {
 	result, err := db.conn.Exec(
-		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL`,
+		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP
+		 WHERE code = ? AND used_by IS NULL AND kicked_at IS NULL`,
 		usedBy, code,
 	)
 	if err != nil {
@@ -159,7 +189,7 @@ func (db *DB) IsInviteValid(code string) (bool, error) {
 // GetAllInvites получает все инвайты
 func (db *DB) GetAllInvites() ([]Invite, error) {
 	rows, err := db.conn.Query(
-		`SELECT code, created_by, used_by, created_at FROM invites ORDER BY created_at DESC`,
+		`SELECT code, created_by, used_by, used_at, expire_days, created_at FROM invites ORDER BY created_at DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query invites: %w", err)
@@ -170,13 +200,22 @@ func (db *DB) GetAllInvites() ([]Invite, error) {
 	for rows.Next() {
 		var invite Invite
 		var usedBy sql.NullInt64
+		var usedAt sql.NullTime
+		var expireDays sql.NullInt64
 
-		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &invite.CreatedAt); err != nil {
+		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &invite.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan invite: %w", err)
 		}
 
 		if usedBy.Valid {
 			invite.UsedBy = &usedBy.Int64
+		}
+		if usedAt.Valid {
+			invite.UsedAt = &usedAt.Time
+		}
+		if expireDays.Valid {
+			v := int(expireDays.Int64)
+			invite.ExpireDays = &v
 		}
 
 		invites = append(invites, invite)
@@ -192,7 +231,7 @@ func (db *DB) GetAllInvites() ([]Invite, error) {
 // GetUnusedInvites получает неиспользованные инвайты
 func (db *DB) GetUnusedInvites() ([]Invite, error) {
 	rows, err := db.conn.Query(
-		`SELECT code, created_by, used_by, created_at FROM invites WHERE used_by IS NULL ORDER BY created_at DESC`,
+		`SELECT code, created_by, used_by, used_at, expire_days, created_at FROM invites WHERE used_by IS NULL ORDER BY created_at DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query invites: %w", err)
@@ -203,9 +242,18 @@ func (db *DB) GetUnusedInvites() ([]Invite, error) {
 	for rows.Next() {
 		var invite Invite
 		var usedBy sql.NullInt64
+		var usedAt sql.NullTime
+		var expireDays sql.NullInt64
 
-		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &invite.CreatedAt); err != nil {
+		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &invite.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan invite: %w", err)
+		}
+		if usedAt.Valid {
+			invite.UsedAt = &usedAt.Time
+		}
+		if expireDays.Valid {
+			v := int(expireDays.Int64)
+			invite.ExpireDays = &v
 		}
 
 		invites = append(invites, invite)
@@ -377,6 +425,144 @@ func (db *DB) GetInvitesWithUsersByCreator(createdBy int64) ([]InviteWithUser, e
 	}
 
 	return invites, nil
+}
+
+// GetInviteByUsedBy получает инвайт, которым был зарегистрирован пользователь.
+func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
+	var invite Invite
+	var usedByNullable sql.NullInt64
+	var usedAt sql.NullTime
+	var expireDays sql.NullInt64
+	var kickedAt sql.NullTime
+
+	err := db.conn.QueryRow(
+		`SELECT code, created_by, used_by, used_at, expire_days, kicked_at, created_at
+		 FROM invites
+		 WHERE used_by = ? AND kicked_at IS NULL
+		 ORDER BY used_at DESC
+		 LIMIT 1`,
+		usedBy,
+	).Scan(&invite.Code, &invite.CreatedBy, &usedByNullable, &usedAt, &expireDays, &kickedAt, &invite.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get invite by used_by: %w", err)
+	}
+
+	if usedByNullable.Valid {
+		invite.UsedBy = &usedByNullable.Int64
+	}
+	if usedAt.Valid {
+		invite.UsedAt = &usedAt.Time
+	}
+	if expireDays.Valid {
+		v := int(expireDays.Int64)
+		invite.ExpireDays = &v
+	}
+	if kickedAt.Valid {
+		invite.KickedAt = &kickedAt.Time
+	}
+
+	return &invite, nil
+}
+
+// GetSubscribersByModerator возвращает подписчиков, приглашённых модератором.
+// Пользователи без записи в users также возвращаются (LEFT JOIN).
+func (db *DB) GetSubscribersByModerator(moderatorID int64) ([]Subscriber, error) {
+	rows, err := db.conn.Query(
+		`SELECT i.used_by, u.username, u.first_name, u.remnawave_uuid
+		 FROM invites i
+		 LEFT JOIN users u ON i.used_by = u.telegram_id
+		 WHERE i.created_by = ? AND i.used_by IS NOT NULL
+		 ORDER BY i.used_at DESC, i.created_at DESC`,
+		moderatorID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query subscribers by moderator: %w", err)
+	}
+	defer rows.Close()
+
+	var subscribers []Subscriber
+	for rows.Next() {
+		var sub Subscriber
+		var usedBy sql.NullInt64
+		var username sql.NullString
+		var firstName sql.NullString
+		var remnawaveUUID sql.NullString
+
+		if err := rows.Scan(&usedBy, &username, &firstName, &remnawaveUUID); err != nil {
+			return nil, fmt.Errorf("failed to scan subscriber: %w", err)
+		}
+
+		if !usedBy.Valid {
+			continue
+		}
+		sub.TelegramID = usedBy.Int64
+		if username.Valid {
+			v := username.String
+			sub.Username = &v
+		}
+		if firstName.Valid {
+			v := firstName.String
+			sub.FirstName = &v
+		}
+		if remnawaveUUID.Valid {
+			v := remnawaveUUID.String
+			sub.RemnawaveUUID = &v
+		}
+		subscribers = append(subscribers, sub)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return subscribers, nil
+}
+
+// IsSubscriberOfModerator проверяет, что подписчик был приглашён конкретным модератором.
+func (db *DB) IsSubscriberOfModerator(moderatorID, subscriberID int64) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRow(
+		`SELECT EXISTS(
+			SELECT 1 FROM invites
+			WHERE created_by = ? AND used_by = ? AND kicked_at IS NULL
+		)`,
+		moderatorID, subscriberID,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check subscriber owner: %w", err)
+	}
+	return exists, nil
+}
+
+// MarkInviteKickedByTelegramID проставляет kicked_at для инвайта пользователя при автокике.
+// Инвайт остаётся «использованным» (used_by не обнуляется) — история активации сохраняется.
+// ClaimInvite отклонит такой инвайт при попытке повторного использования.
+func (db *DB) MarkInviteKickedByTelegramID(telegramID int64) error {
+	_, err := db.conn.Exec(
+		`UPDATE invites SET kicked_at = CURRENT_TIMESTAMP WHERE used_by = ?`,
+		telegramID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark invite as kicked: %w", err)
+	}
+	return nil
+}
+
+// ResetInviteUsageByTelegramID освобождает использованный инвайт пользователя.
+func (db *DB) ResetInviteUsageByTelegramID(telegramID int64) error {
+	_, err := db.conn.Exec(
+		`UPDATE invites
+		 SET used_by = NULL, used_at = NULL
+		 WHERE used_by = ?`,
+		telegramID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to reset invite usage: %w", err)
+	}
+	return nil
 }
 
 // DeleteUnusedInviteByOwner удаляет только свой неиспользованный инвайт

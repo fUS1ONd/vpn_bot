@@ -124,7 +124,11 @@ func main() {
 			username = fmt.Sprintf("tg_%d", oldUser.TelegramID)
 		}
 
-		remnawaveUser, err := remnawaveClient.CreateUser(oldUser.TelegramID, username)
+		remnawaveUser, err := remnawaveClient.CreateUser(
+			oldUser.TelegramID,
+			username,
+			time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC),
+		)
 		if err != nil {
 			logLine := fmt.Sprintf("[ERROR] telegram_id=%d — API error: %v\n", oldUser.TelegramID, err)
 			fmt.Print(logLine)

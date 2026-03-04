@@ -51,7 +51,7 @@ func (b *Bot) handleCreateInvite(c tele.Context) error {
 	}
 
 	// Создаём инвайт (код генерируется автоматически в БД)
-	invite, err := b.db.CreateInvite(c.Sender().ID)
+	invite, err := b.db.CreateInviteWithExpiry(c.Sender().ID, nil)
 	if err != nil {
 		slog.Error("Failed to create invite", "error", err)
 		return c.Send("Ошибка создания инвайта", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
@@ -97,6 +97,12 @@ func (b *Bot) processBanUser(c tele.Context, text string) error {
 		return c.Send("Пользователь не найден", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
+	// Фиксируем перманентный бан.
+	if err := b.db.BanUser(telegramID, c.Sender().ID); err != nil {
+		slog.Error("Failed to persist user ban", "error", err, "telegram_id", telegramID)
+		return c.Send("Ошибка сохранения бана", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
 	// Каскадное удаление: если пользователь — модератор
 	if b.isModerator(telegramID) {
 		b.cascadeDeleteModerator(telegramID)
@@ -114,6 +120,11 @@ func (b *Bot) processBanUser(c tele.Context, text string) error {
 	if err != nil {
 		slog.Error("Failed to delete user from DB", "error", err)
 		return c.Send("Ошибка удаления пользователя из БД", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	// Очищаем маркеры отправленных уведомлений.
+	if err := b.db.ClearNotifications(telegramID); err != nil {
+		slog.Error("Failed to clear notifications for banned user", "error", err, "telegram_id", telegramID)
 	}
 
 	msg := fmt.Sprintf("🚫 Пользователь %d забанен\n• Удалён из БД бота\n• Удалён из Remnawave", telegramID)
@@ -421,6 +432,18 @@ func (b *Bot) processAddModerator(c tele.Context, text string) error {
 		return c.Send("❌ Пользователь не найден в БД бота", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
 	}
 
+	// Назначать модератором можно только бессрочных пользователей (админский инвайт).
+	invite, err := b.db.GetInviteByUsedBy(telegramID)
+	if err != nil {
+		slog.Error("Failed to get invite for moderator validation", "error", err, "telegram_id", telegramID)
+		return c.Send("Ошибка проверки приглашения пользователя", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
+	}
+	if invite != nil && invite.ExpireDays != nil {
+		return c.Send("❌ Этот пользователь приглашён по месячному инвайту. Назначить модератором можно только пользователя с бессрочным (админским) приглашением.", &tele.SendOptions{
+			ReplyMarkup: AdminModeratorKeyboard(),
+		})
+	}
+
 	err = b.db.AddModerator(telegramID, c.Sender().ID)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
@@ -472,6 +495,90 @@ func (b *Bot) handleAdminListModerators(c tele.Context) error {
 		fmt.Fprintf(&msg, "🆔 <code>%d</code>\n", mod.TelegramID)
 		fmt.Fprintf(&msg, "📨 Приглашено: %d\n\n", mod.InvitesCount)
 	}
+
+	return c.Send(msg.String(), &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminModeratorKeyboard(),
+	})
+}
+
+// handleAdminModStats показывает сводную статистику модераторов.
+func (b *Bot) handleAdminModStats(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	mods, err := b.db.GetAllModerators()
+	if err != nil {
+		slog.Error("Failed to load moderators for stats", "error", err)
+		return c.Send("Ошибка получения списка модераторов", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
+	}
+	if len(mods) == 0 {
+		return c.Send("📊 Модераторов пока нет", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
+	}
+
+	remUsers, err := b.remnawave.GetAllUsers()
+	if err != nil {
+		slog.Error("Failed to load users from Remnawave for moderator stats", "error", err)
+		return c.Send("Ошибка получения статистики из панели", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
+	}
+
+	byTelegramID := make(map[int64]remnawave.User, len(remUsers))
+	for _, user := range remUsers {
+		if user.TelegramID == nil || *user.TelegramID == 0 {
+			continue
+		}
+		byTelegramID[*user.TelegramID] = user
+	}
+
+	now := time.Now().UTC()
+	totalActive := 0
+	totalExpired := 0
+
+	var msg strings.Builder
+	msg.WriteString("<b>📊 Статистика модераторов</b>\n\n")
+
+	for _, mod := range mods {
+		subs, err := b.db.GetSubscribersByModerator(mod.TelegramID)
+		if err != nil {
+			slog.Error("Failed to load subscribers for moderator stats", "error", err, "moderator_id", mod.TelegramID)
+			continue
+		}
+
+		active := 0
+		expired := 0
+		for _, sub := range subs {
+			remUser, ok := byTelegramID[sub.TelegramID]
+			if !ok {
+				continue
+			}
+			if remUser.Status == remnawave.StatusExpired || remUser.ExpireAt.Before(now) {
+				expired++
+			} else {
+				active++
+			}
+		}
+
+		totalActive += active
+		totalExpired += expired
+
+		name := fmt.Sprintf("<code>%d</code>", mod.TelegramID)
+		if mod.Username != "" {
+			name = "@" + mod.Username
+		}
+
+		fmt.Fprintf(&msg, "👤 %s", name)
+		if mod.FirstName != "" {
+			fmt.Fprintf(&msg, " • %s", mod.FirstName)
+		}
+		msg.WriteString("\n")
+		fmt.Fprintf(&msg, "   ✅ Активных: %d\n", active)
+		fmt.Fprintf(&msg, "   ⏰ Истекших: %d\n", expired)
+		fmt.Fprintf(&msg, "   👥 Всего приглашено: %d\n\n", len(subs))
+	}
+
+	msg.WriteString("───\n")
+	fmt.Fprintf(&msg, "Итого: ✅ %d активных │ ⏰ %d истекших", totalActive, totalExpired)
 
 	return c.Send(msg.String(), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,

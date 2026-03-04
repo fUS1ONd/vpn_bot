@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/config"
@@ -32,6 +33,8 @@ type Bot struct {
 	dashboardMgr  *dashboardManager         // менеджер сессий дашборда
 	sdConfigsPath string                    // путь к sd_configs (для чтения targets)
 	render        *render.Client            // клиент render-сервиса (nil если не настроен)
+	modExtendMu   sync.RWMutex
+	modExtendData map[int64]modExtendSession // pending-данные продления для модератора
 }
 
 // New создаёт нового Telegram бота
@@ -55,6 +58,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		metricsClient: monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
 		dashboardMgr:  newDashboardManager(),
 		sdConfigsPath: cfg.SDConfigsPath,
+		modExtendData: make(map[int64]modExtendSession),
 	}
 
 	// Middleware для логирования
@@ -121,6 +125,11 @@ func (b *Bot) handleStart(c tele.Context) error {
 	// Проверка на админа
 	if telegramID == b.config.AdminID {
 		return b.handleAdminStart(c)
+	}
+
+	// Блокированные пользователи не допускаются к боту.
+	if banned, err := b.db.IsBanned(telegramID); err == nil && banned {
+		return c.Send("🚫 Ваш аккаунт заблокирован. Доступ запрещён.")
 	}
 
 	// Проверяем, зарегистрирован ли пользователь
@@ -224,6 +233,22 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		}
 		return b.processModeratorDeleteInvite(c, text)
 
+	case StateWaitModExtendID:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearModExtendSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+		}
+		return b.processModExtendID(c, text)
+
+	case StateWaitModExtendConfirm:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearModExtendSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+		}
+		return b.processModExtendConfirm(c, text)
+
 	case StateWaitAddModerator:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
@@ -273,6 +298,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleAdminListModerators(c)
 		case BtnAdminRemoveMod:
 			return b.handleAdminRemoveModeratorRequest(c)
+		case BtnAdminModStats:
+			return b.handleAdminModStats(c)
 		}
 	}
 
@@ -287,6 +314,10 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleModeratorViewInvites(c)
 		case BtnModDelete:
 			return b.handleModeratorDeleteInviteRequest(c)
+		case BtnModSubscribers:
+			return b.handleModSubscribers(c)
+		case BtnModExtend:
+			return b.handleModExtend(c)
 		case BtnModBack:
 			return b.handleModeratorBack(c)
 		}
@@ -332,13 +363,25 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		return c.Send("❌ Инвайт-код не найден или уже использован. Попробуйте другой:")
 	}
 
+	invite, err := b.db.GetInviteByCode(code)
+	if err != nil || invite == nil {
+		slog.Error("Failed to load invite after claim", "code", code, "error", err)
+		_ = b.db.UnclaimInvite(code)
+		return c.Send("Ошибка обработки приглашения. Попробуйте позже.")
+	}
+
 	// Создаём пользователя в Remnawave
 	username := c.Sender().Username
 	if username == "" {
 		username = fmt.Sprintf("tg_%d", telegramID)
 	}
 
-	remnawaveUser, err := b.remnawave.CreateUser(telegramID, username)
+	expireAt := time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC)
+	if invite.ExpireDays != nil {
+		expireAt = time.Now().UTC().AddDate(0, 0, *invite.ExpireDays)
+	}
+
+	remnawaveUser, err := b.remnawave.CreateUser(telegramID, username, expireAt)
 	if err != nil {
 		slog.Error("Failed to create user in Remnawave", "error", err)
 		// Откатываем инвайт — пользователь не создан
@@ -357,7 +400,9 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	}
 
 	// Отправляем уведомление админу о новом пользователе (асинхронно)
-	go b.notifyAdminNewUser(telegramID, username, c.Sender().FirstName)
+	if b.bot != nil {
+		go b.notifyAdminNewUser(telegramID, username, c.Sender().FirstName)
+	}
 
 	// Очищаем состояние
 	b.userStates.Delete(telegramID)

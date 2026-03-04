@@ -21,6 +21,136 @@ func setupTestDBInvites(t *testing.T) *DB {
 	return db
 }
 
+func TestCreateInviteWithExpiry(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	t.Run("Бессрочный инвайт", func(t *testing.T) {
+		inv, err := db.CreateInviteWithExpiry(100, nil)
+		require.NoError(t, err)
+		require.NotNil(t, inv)
+		assert.Nil(t, inv.ExpireDays)
+	})
+
+	t.Run("Месячный инвайт", func(t *testing.T) {
+		days := 30
+		inv, err := db.CreateInviteWithExpiry(100, &days)
+		require.NoError(t, err)
+		require.NotNil(t, inv)
+		require.NotNil(t, inv.ExpireDays)
+		assert.Equal(t, 30, *inv.ExpireDays)
+	})
+}
+
+func TestGetInviteByUsedBy(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	invite, err := db.CreateInvite(100)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(invite.Code, 555))
+
+	got, err := db.GetInviteByUsedBy(555)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, invite.Code, got.Code)
+	require.NotNil(t, got.UsedBy)
+	assert.Equal(t, int64(555), *got.UsedBy)
+
+	notFound, err := db.GetInviteByUsedBy(777)
+	require.NoError(t, err)
+	assert.Nil(t, notFound)
+}
+
+func TestGetSubscribersByModerator(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	// Подписчик, который остался в users
+	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300")
+	require.NoError(t, err)
+	inv1, err := db.CreateInviteWithExpiry(100, intPtr(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv1.Code, 300))
+
+	// Подписчик, удалённый из users
+	_, err = db.CreateUser(301, "gone", "Gone", "uuid-301")
+	require.NoError(t, err)
+	inv2, err := db.CreateInviteWithExpiry(100, intPtr(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv2.Code, 301))
+	require.NoError(t, db.DeleteUser(301))
+
+	subs, err := db.GetSubscribersByModerator(100)
+	require.NoError(t, err)
+	require.Len(t, subs, 2)
+
+	seen := map[int64]Subscriber{}
+	for _, sub := range subs {
+		seen[sub.TelegramID] = sub
+	}
+
+	alive := seen[300]
+	require.NotNil(t, alive.Username)
+	require.NotNil(t, alive.FirstName)
+	require.NotNil(t, alive.RemnawaveUUID)
+	assert.Equal(t, "alive", *alive.Username)
+
+	deleted := seen[301]
+	assert.Nil(t, deleted.Username)
+	assert.Nil(t, deleted.FirstName)
+	assert.Nil(t, deleted.RemnawaveUUID)
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
+func TestGetInviteByUsedBy_AfterKickAndRejoin(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	// Модератор A приглашает пользователя 555
+	days := 30
+	inv1, err := db.CreateInviteWithExpiry(100, &days)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv1.Code, 555))
+
+	// Автокик: помечаем старый инвайт кикнутым
+	require.NoError(t, db.MarkInviteKickedByTelegramID(555))
+
+	// Модератор B приглашает того же пользователя 555 снова
+	inv2, err := db.CreateInviteWithExpiry(200, &days)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv2.Code, 555))
+
+	// GetInviteByUsedBy должен вернуть НОВЫЙ инвайт от модератора B, не старый от A
+	got, err := db.GetInviteByUsedBy(555)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, inv2.Code, got.Code, "должен вернуть актуальный (не кикнутый) инвайт")
+	assert.Equal(t, int64(200), got.CreatedBy, "куратор должен быть модератор B (200), не A (100)")
+}
+
+// TestMarkInviteKicked_PreventsReuse проверяет, что после автокика пользователь не может
+// зайти по старой ссылке-инвайту без получения нового от модератора.
+func TestMarkInviteKicked_PreventsReuse(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	inv, err := db.CreateInvite(1)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, 2))
+
+	// После автокика помечаем инвайт
+	require.NoError(t, db.MarkInviteKickedByTelegramID(2))
+
+	// Инвайт должен существовать с used_by != NULL (история сохранена)
+	found, err := db.GetInviteByCode(inv.Code)
+	require.NoError(t, err)
+	require.NotNil(t, found)
+	assert.NotNil(t, found.UsedBy, "used_by должен остаться — история активации сохраняется")
+
+	// ClaimInvite должен отклонить кикнутый инвайт
+	err = db.ClaimInvite(inv.Code, 3)
+	assert.Error(t, err, "повторное использование кикнутого инвайта должно вернуть ошибку")
+}
+
 func TestGetInvitesWithUsersByCreator(t *testing.T) {
 	db := setupTestDBInvites(t)
 
@@ -164,4 +294,32 @@ func TestDeleteUnusedInvitesByCreator(t *testing.T) {
 		}
 		assert.Equal(t, 1, mod2Count)
 	})
+}
+
+func TestIsSubscriberOfModerator_AfterKickAndRejoin(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	// Модератор A (100) приглашает пользователя 555
+	days := 30
+	inv1, err := db.CreateInviteWithExpiry(100, &days)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv1.Code, 555))
+
+	// Автокик
+	require.NoError(t, db.MarkInviteKickedByTelegramID(555))
+
+	// Модератор B (200) приглашает того же пользователя 555 снова
+	inv2, err := db.CreateInviteWithExpiry(200, &days)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv2.Code, 555))
+
+	// Модератор A НЕ должен считаться куратором пользователя 555
+	isSubOfA, err := db.IsSubscriberOfModerator(100, 555)
+	require.NoError(t, err)
+	assert.False(t, isSubOfA, "старый модератор A не должен иметь прав на продление после перехода подписчика к B")
+
+	// Модератор B ДОЛЖЕН считаться куратором
+	isSubOfB, err := db.IsSubscriberOfModerator(200, 555)
+	require.NoError(t, err)
+	assert.True(t, isSubOfB, "новый модератор B должен иметь права на продление")
 }
