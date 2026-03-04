@@ -78,6 +78,9 @@ func main() {
 	alertSender := bot.NewBotAlertSender(telegramBot)
 	go monitoring.StartAlerter(ctx, telegramBot.MetricsClient(), cfg.SDConfigsPath, alertSender)
 
+	// Запуск ежедневного scheduler подписок (уведомления и автокик).
+	go telegramBot.StartScheduler(ctx)
+
 	// Запуск бота (блокирующий вызов)
 	telegramBot.Run()
 

@@ -1,13 +1,18 @@
 package bot
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tele "gopkg.in/telebot.v3"
@@ -196,10 +201,94 @@ func TestModeratorDeleteInvite_NotOwned(t *testing.T) {
 		"Сообщение должно содержать ошибку об отказе: %s", sentStr)
 }
 
+func TestHandleModSubscribers(t *testing.T) {
+	b, db, _, modID := setupModeratorTestBot(t)
+
+	// Активный подписчик
+	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300")
+	require.NoError(t, err)
+	inv1, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv1.Code, 300))
+
+	// Удалённый подписчик
+	_, err = db.CreateUser(301, "gone", "Gone", "uuid-301")
+	require.NoError(t, err)
+	inv2, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv2.Code, 301))
+	require.NoError(t, db.DeleteUser(301))
+
+	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-300" {
+				payload, err := json.Marshal(map[string]any{
+					"response": map[string]any{
+						"uuid":      "uuid-300",
+						"username":  "alive",
+						"status":    remnawave.StatusActive,
+						"expireAt":  time.Now().UTC().AddDate(0, 0, 10).Format(time.RFC3339),
+						"createdAt": time.Now().UTC().Format(time.RFC3339),
+					},
+				})
+				require.NoError(t, err)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(payload))),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}),
+	})
+	b.remnawave = client
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: modID, Username: "moderator"},
+		message: &tele.Message{},
+	}
+
+	err = b.handleModSubscribers(ctx)
+	require.NoError(t, err)
+
+	sentStr, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, sentStr, "Мои подписчики")
+	assert.Contains(t, sentStr, "ID: <code>300</code>")
+	assert.Contains(t, sentStr, "удалён")
+}
+
+func TestHandleModExtend_StartsDialog(t *testing.T) {
+	b, db, _, modID := setupModeratorTestBot(t)
+	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300")
+	require.NoError(t, err)
+	inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, 300))
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: modID, Username: "moderator"},
+		message: &tele.Message{},
+	}
+
+	err = b.handleModExtend(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, StateWaitModExtendID, b.userStates.Get(modID))
+
+	sentStr, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, sentStr, "telegram_id")
+}
+
+func intPtrBot(v int) *int {
+	return &v
+}
+
 // --- Тесты роутинга модератора ---
 
 func TestHandleTextMessage_ModeratorButtons(t *testing.T) {
-	b, _, _, modID := setupModeratorTestBot(t)
+	b, db, _, modID := setupModeratorTestBot(t)
 
 	user := &tele.User{ID: modID, Username: "moderator"}
 
@@ -224,6 +313,22 @@ func TestHandleTextMessage_ModeratorButtons(t *testing.T) {
 		}
 		err := b.handleTextMessage(ctx)
 		assert.NoError(t, err)
+	})
+
+	t.Run("Кнопка_Продлить_ставит_состояние", func(t *testing.T) {
+		_, err := db.CreateUser(8080, "sub8080", "Sub", "uuid-8080")
+		require.NoError(t, err)
+		inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+		require.NoError(t, err)
+		require.NoError(t, db.ClaimInvite(inv.Code, 8080))
+
+		ctx := &MockContext{
+			sender:  user,
+			message: &tele.Message{Text: BtnModExtend},
+		}
+		err = b.handleTextMessage(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, StateWaitModExtendID, b.userStates.Get(modID))
 	})
 }
 
@@ -277,6 +382,33 @@ func TestAdminAddModerator_NotRegistered(t *testing.T) {
 	sentStr, ok := ctx.sentMsg.(string)
 	assert.True(t, ok)
 	assert.Contains(t, sentStr, "не найден")
+}
+
+func TestAdminAddModerator_RejectsMonthlyInviteUser(t *testing.T) {
+	b, db, adminID, modID := setupModeratorTestBot(t)
+
+	_, err := db.CreateUser(201, "monthly_user", "Месячный", "uuid-201")
+	require.NoError(t, err)
+	inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, 201))
+
+	admin := &tele.User{ID: adminID, Username: "admin"}
+	ctx := &MockContext{
+		sender:  admin,
+		message: &tele.Message{Text: "201"},
+	}
+
+	err = b.processAddModerator(ctx, "201")
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "месячному инвайту")
+
+	isMod, err := db.IsModerator(201)
+	require.NoError(t, err)
+	assert.False(t, isMod)
 }
 
 func TestAdminRemoveModerator(t *testing.T) {

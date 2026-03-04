@@ -23,3 +23,30 @@ func TestAdminManageKeyboardDoesNotContainAddTrafficButton(t *testing.T) {
 	assert.Contains(t, buttons, BtnAdminBanUser)
 	assert.Contains(t, buttons, BtnAdminBack)
 }
+
+func TestModeratorMenuKeyboardContainsSubscriptionButtons(t *testing.T) {
+	keyboard := ModeratorMenuKeyboard()
+
+	var buttons []string
+	for _, row := range keyboard.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+
+	assert.Contains(t, buttons, BtnModSubscribers)
+	assert.Contains(t, buttons, BtnModExtend)
+}
+
+func TestAdminModeratorKeyboardContainsStatsButton(t *testing.T) {
+	keyboard := AdminModeratorKeyboard()
+
+	var buttons []string
+	for _, row := range keyboard.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+
+	assert.Contains(t, buttons, BtnAdminModStats)
+}

@@ -3,9 +3,11 @@ package remnawave
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -21,6 +23,11 @@ const (
 	StatusLimited = "LIMITED"
 	// StatusExpired — истёк срок действия
 	StatusExpired = "EXPIRED"
+)
+
+var (
+	// ErrUserNotFound возвращается, когда пользователь отсутствует в панели.
+	ErrUserNotFound = errors.New("user not found")
 )
 
 // Client — HTTP-клиент для Remnawave API
@@ -242,6 +249,68 @@ func (c *Client) DeleteUser(uuid string) error {
 	return err
 }
 
+// EnableUser включает ранее выключенного пользователя.
+func (c *Client) EnableUser(uuid string) error {
+	_, err := c.doRequest("POST", "/api/users/"+uuid+"/actions/enable", nil)
+	return err
+}
+
+// CalculateExtendedExpireAt рассчитывает новую дату окончания подписки.
+func CalculateExtendedExpireAt(currentExpireAt, now time.Time, days int) (time.Time, error) {
+	current := currentExpireAt.UTC()
+	refNow := now.UTC()
+	limit := refNow.AddDate(0, 0, days)
+
+	if current.After(limit) {
+		return time.Time{}, fmt.Errorf("❌ Подписка уже продлена до %s. Продлить можно не раньше чем за %d дней до истечения.", current.Format("02.01.06"), days)
+	}
+
+	if current.After(refNow) {
+		return current.AddDate(0, 0, days), nil
+	}
+
+	return refNow.AddDate(0, 0, days), nil
+}
+
+// ExtendUserSubscription продлевает подписку пользователя на указанное количество дней.
+func (c *Client) ExtendUserSubscription(uuid string, days int) error {
+	user, err := c.GetUser(uuid)
+	if err != nil {
+		if isNotFoundAPIError(err) {
+			return fmt.Errorf("❌ Пользователь уже удалён из системы.")
+		}
+		return fmt.Errorf("failed to get user before extend: %w", err)
+	}
+
+	newExpireAt, err := CalculateExtendedExpireAt(user.ExpireAt, time.Now().UTC(), days)
+	if err != nil {
+		return err
+	}
+
+	if user.Status == StatusExpired || user.Status == StatusDisabled {
+		if err := c.EnableUser(uuid); err != nil {
+			return fmt.Errorf("failed to enable user: %w", err)
+		}
+	}
+
+	expireAt := newExpireAt.UTC().Format(time.RFC3339)
+	req := UpdateUserRequest{
+		UUID:     uuid,
+		ExpireAt: &expireAt,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal update request: %w", err)
+	}
+
+	if _, err := c.doRequest("PATCH", "/api/users", body); err != nil {
+		return fmt.Errorf("failed to update user expireAt: %w", err)
+	}
+
+	return nil
+}
+
 // GetAllNodes получает список всех нод
 func (c *Client) GetAllNodes() ([]Node, error) {
 	resp, err := c.doRequest("GET", "/api/nodes", nil)
@@ -309,4 +378,8 @@ func (c *Client) doRequest(method, path string, body []byte) ([]byte, error) {
 	}
 
 	return respBody, nil
+}
+
+func isNotFoundAPIError(err error) bool {
+	return strings.Contains(err.Error(), "API error 404")
 }

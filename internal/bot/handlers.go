@@ -3,6 +3,7 @@ package bot
 import (
 	"fmt"
 	"log/slog"
+	"sync"
 	"strings"
 	"time"
 
@@ -32,6 +33,8 @@ type Bot struct {
 	dashboardMgr  *dashboardManager         // менеджер сессий дашборда
 	sdConfigsPath string                    // путь к sd_configs (для чтения targets)
 	render        *render.Client            // клиент render-сервиса (nil если не настроен)
+	modExtendMu   sync.RWMutex
+	modExtendData map[int64]modExtendSession // pending-данные продления для модератора
 }
 
 // New создаёт нового Telegram бота
@@ -55,6 +58,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		metricsClient: monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
 		dashboardMgr:  newDashboardManager(),
 		sdConfigsPath: cfg.SDConfigsPath,
+		modExtendData: make(map[int64]modExtendSession),
 	}
 
 	// Middleware для логирования
@@ -121,6 +125,11 @@ func (b *Bot) handleStart(c tele.Context) error {
 	// Проверка на админа
 	if telegramID == b.config.AdminID {
 		return b.handleAdminStart(c)
+	}
+
+	// Блокированные пользователи не допускаются к боту.
+	if banned, err := b.db.IsBanned(telegramID); err == nil && banned {
+		return c.Send("🚫 Ваш аккаунт заблокирован. Доступ запрещён.")
 	}
 
 	// Проверяем, зарегистрирован ли пользователь
@@ -224,6 +233,22 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		}
 		return b.processModeratorDeleteInvite(c, text)
 
+	case StateWaitModExtendID:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearModExtendSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+		}
+		return b.processModExtendID(c, text)
+
+	case StateWaitModExtendConfirm:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearModExtendSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+		}
+		return b.processModExtendConfirm(c, text)
+
 	case StateWaitAddModerator:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
@@ -273,6 +298,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleAdminListModerators(c)
 		case BtnAdminRemoveMod:
 			return b.handleAdminRemoveModeratorRequest(c)
+		case BtnAdminModStats:
+			return b.handleAdminModStats(c)
 		}
 	}
 
@@ -287,6 +314,10 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleModeratorViewInvites(c)
 		case BtnModDelete:
 			return b.handleModeratorDeleteInviteRequest(c)
+		case BtnModSubscribers:
+			return b.handleModSubscribers(c)
+		case BtnModExtend:
+			return b.handleModExtend(c)
 		case BtnModBack:
 			return b.handleModeratorBack(c)
 		}

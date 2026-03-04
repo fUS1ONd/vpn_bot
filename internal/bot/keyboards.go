@@ -40,6 +40,8 @@ const (
 	BtnModInvites = "🎟 Приглашения"
 	BtnModCreate  = "📨 Создать приглашение"
 	BtnModView    = "📋 Мои приглашения"
+	BtnModSubscribers = "👥 Мои подписчики"
+	BtnModExtend      = "⏳ Продлить подписку"
 	BtnModDelete  = "🗑 Удалить приглашение"
 	BtnModBack    = "🔙 В меню"
 
@@ -47,6 +49,7 @@ const (
 	BtnAdminModerators   = "👥 Модераторы"
 	BtnAdminAddModerator = "➕ Назначить модератора"
 	BtnAdminListMods     = "📋 Список модераторов"
+	BtnAdminModStats     = "📊 Статистика"
 	BtnAdminRemoveMod    = "➖ Снять модератора"
 )
 
@@ -121,7 +124,8 @@ func ModeratorMenuKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnModCreate)),
-		menu.Row(menu.Text(BtnModView)),
+		menu.Row(menu.Text(BtnModView), menu.Text(BtnModSubscribers)),
+		menu.Row(menu.Text(BtnModExtend)),
 		menu.Row(menu.Text(BtnModDelete)),
 		menu.Row(menu.Text(BtnModBack)),
 	)
@@ -133,7 +137,7 @@ func AdminModeratorKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnAdminAddModerator)),
-		menu.Row(menu.Text(BtnAdminListMods)),
+		menu.Row(menu.Text(BtnAdminListMods), menu.Text(BtnAdminModStats)),
 		menu.Row(menu.Text(BtnAdminRemoveMod)),
 		menu.Row(menu.Text(BtnAdminBack)),
 	)

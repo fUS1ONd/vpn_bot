@@ -175,6 +175,24 @@ func TestHandleStart(t *testing.T) {
 		// Должен быть установлен StateWaitInvite чтобы юзер мог ввести код текстом
 		assert.Equal(t, StateWaitInvite, b.userStates.Get(user.ID))
 	})
+
+	t.Run("BannedUser", func(t *testing.T) {
+		userID := int64(666)
+		require.NoError(t, db.BanUser(userID, 999999))
+
+		user := &tele.User{ID: userID, Username: "banned"}
+		ctx := &MockContext{
+			sender:  user,
+			message: &tele.Message{},
+		}
+
+		err := b.handleStart(ctx)
+		require.NoError(t, err)
+
+		msg, ok := ctx.sentMsg.(string)
+		require.True(t, ok)
+		assert.Contains(t, msg, "заблокирован")
+	})
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
