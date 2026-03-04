@@ -73,6 +73,24 @@
 - ✅ Обновлены `README.md` и `CLAUDE.md`.
 - ✅ Добавлен этот progress-файл.
 
+## Post-review фиксы (2026-03-04, коммит ea6cdf1)
+
+По результатам code review выявлены и устранены баги:
+
+### Fix 1 — утечка состояния при ошибке продления
+- ✅ `processModExtendConfirm`: при ошибке `ExtendUserSubscription` теперь очищаются `userStates` и `modExtendData` перед возвратом.
+  - Без фикса: следующее сообщение модератора снова попадало в обработчик подтверждения.
+
+### Fix 2 — N+1 запросов в «Мои подписчики»
+- ✅ `handleModSubscribers`: заменены N поштучных `GetUser(uuid)` на один `GetAllUsers()` + `map[uuid]User` lookup.
+  - Единый batch-запрос, как в `handleAdminModStats` и scheduler.
+
+### Fix 3 — 404 при автокике логировался как Warn
+- ✅ `handleAutoKick`: добавлена функция `isAutoKickNotFoundError`; при 404 от Remnawave (пользователь уже удалён администратором вручную) логируется на уровне `Debug` вместо `Warn`.
+
+### Fix 4 — хрупкая проверка 403 через strings.Contains
+- ✅ `logSchedulerSendError`: заменён `strings.Contains(err.Error(), "403")` на `errors.Is(tele.ErrBlockedByUser / ErrUserIsDeactivated / ErrNotStartedByUser)`.
+
 ## Отклонения от плана
 
 1. В шаге выбора подписчика для продления используется ввод `telegram_id` из списка, без отдельной нумерации строк. Это сохраняет целевой UX (продление по ID) и упрощает проверку владения подписчиком.
