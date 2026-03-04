@@ -105,6 +105,20 @@
   - 404 от Remnawave;
   - `CalculateExtendedExpireAt` вернул ошибку (слишком рано продлевать).
 
+### Fix 7 — некорректный поиск инвайта после автокика и повторного захода
+
+По результатам code review (chatgpt-codex-connector) выявлены и устранены два SQL-бага:
+
+**P2 — `GetInviteByUsedBy` без фильтра `kicked_at` и без `ORDER BY`**
+- Если пользователь был кикнут и вернулся по новому инвайту, в таблице два ряда с одним `used_by`. `LIMIT 1` без сортировки возвращал произвольный — мог вернуть старый инвайт бывшего куратора.
+- Фикс: добавлен `AND kicked_at IS NULL ORDER BY used_at DESC` в запрос `GetInviteByUsedBy`.
+- Добавлен тест `TestGetInviteByUsedBy_AfterKickAndRejoin`.
+
+**P1 — `IsSubscriberOfModerator` не фильтровал кикнутые инвайты (утечка прав)**
+- Старый модератор A мог продлить подписку пользователя, перешедшего к модератору B, потому что `EXISTS` находил его старый кикнутый инвайт.
+- Фикс: добавлен `AND kicked_at IS NULL` в `IsSubscriberOfModerator`.
+- Добавлен тест `TestIsSubscriberOfModerator_AfterKickAndRejoin`.
+
 ## Отклонения от плана
 
 1. В шаге выбора подписчика для продления используется ввод `telegram_id` из списка, без отдельной нумерации строк. Это сохраняет целевой UX (продление по ID) и упрощает проверку владения подписчиком.
