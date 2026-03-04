@@ -171,8 +171,8 @@ func (b *Bot) handleAutoKick(telegramID int64, userUUID string) {
 		slog.Warn("Scheduler failed to delete user from DB during auto-kick", "error", err, "telegram_id", telegramID)
 	}
 
-	if err := b.db.ResetInviteUsageByTelegramID(telegramID); err != nil {
-		slog.Warn("Scheduler failed to reset invite usage during auto-kick", "error", err, "telegram_id", telegramID)
+	if err := b.db.MarkInviteKickedByTelegramID(telegramID); err != nil {
+		slog.Warn("Scheduler failed to mark invite as kicked during auto-kick", "error", err, "telegram_id", telegramID)
 	}
 
 	if err := b.db.ClearNotifications(telegramID); err != nil {

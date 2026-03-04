@@ -60,11 +60,12 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	var usedBy sql.NullInt64
 	var usedAt sql.NullTime
 	var expireDays sql.NullInt64
+	var kickedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT code, created_by, used_by, used_at, expire_days, created_at FROM invites WHERE code = ?`,
+		`SELECT code, created_by, used_by, used_at, expire_days, kicked_at, created_at FROM invites WHERE code = ?`,
 		code,
-	).Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &invite.CreatedAt)
+	).Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &kickedAt, &invite.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -83,14 +84,19 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 		v := int(expireDays.Int64)
 		invite.ExpireDays = &v
 	}
+	if kickedAt.Valid {
+		invite.KickedAt = &kickedAt.Time
+	}
 
 	return &invite, nil
 }
 
-// ClaimInvite атомарно помечает инвайт как использованный (защита от race condition)
+// ClaimInvite атомарно помечает инвайт как использованный (защита от race condition).
+// Отклоняет инвайт если он уже использован или помечен как кикнутый (kicked_at IS NOT NULL).
 func (db *DB) ClaimInvite(code string, usedBy int64) error {
 	result, err := db.conn.Exec(
-		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL`,
+		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP
+		 WHERE code = ? AND used_by IS NULL AND kicked_at IS NULL`,
 		usedBy, code,
 	)
 	if err != nil {
@@ -427,14 +433,15 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 	var usedByNullable sql.NullInt64
 	var usedAt sql.NullTime
 	var expireDays sql.NullInt64
+	var kickedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT code, created_by, used_by, used_at, expire_days, created_at
+		`SELECT code, created_by, used_by, used_at, expire_days, kicked_at, created_at
 		 FROM invites
 		 WHERE used_by = ?
 		 LIMIT 1`,
 		usedBy,
-	).Scan(&invite.Code, &invite.CreatedBy, &usedByNullable, &usedAt, &expireDays, &invite.CreatedAt)
+	).Scan(&invite.Code, &invite.CreatedBy, &usedByNullable, &usedAt, &expireDays, &kickedAt, &invite.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -451,6 +458,9 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 	if expireDays.Valid {
 		v := int(expireDays.Int64)
 		invite.ExpireDays = &v
+	}
+	if kickedAt.Valid {
+		invite.KickedAt = &kickedAt.Time
 	}
 
 	return &invite, nil
@@ -524,6 +534,20 @@ func (db *DB) IsSubscriberOfModerator(moderatorID, subscriberID int64) (bool, er
 		return false, fmt.Errorf("failed to check subscriber owner: %w", err)
 	}
 	return exists, nil
+}
+
+// MarkInviteKickedByTelegramID проставляет kicked_at для инвайта пользователя при автокике.
+// Инвайт остаётся «использованным» (used_by не обнуляется) — история активации сохраняется.
+// ClaimInvite отклонит такой инвайт при попытке повторного использования.
+func (db *DB) MarkInviteKickedByTelegramID(telegramID int64) error {
+	_, err := db.conn.Exec(
+		`UPDATE invites SET kicked_at = CURRENT_TIMESTAMP WHERE used_by = ?`,
+		telegramID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark invite as kicked: %w", err)
+	}
+	return nil
 }
 
 // ResetInviteUsageByTelegramID освобождает использованный инвайт пользователя.

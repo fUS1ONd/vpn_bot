@@ -103,6 +103,29 @@ func intPtr(v int) *int {
 	return &v
 }
 
+// TestMarkInviteKicked_PreventsReuse проверяет, что после автокика пользователь не может
+// зайти по старой ссылке-инвайту без получения нового от модератора.
+func TestMarkInviteKicked_PreventsReuse(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	inv, err := db.CreateInvite(1)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, 2))
+
+	// После автокика помечаем инвайт
+	require.NoError(t, db.MarkInviteKickedByTelegramID(2))
+
+	// Инвайт должен существовать с used_by != NULL (история сохранена)
+	found, err := db.GetInviteByCode(inv.Code)
+	require.NoError(t, err)
+	require.NotNil(t, found)
+	assert.NotNil(t, found.UsedBy, "used_by должен остаться — история активации сохраняется")
+
+	// ClaimInvite должен отклонить кикнутый инвайт
+	err = db.ClaimInvite(inv.Code, 3)
+	assert.Error(t, err, "повторное использование кикнутого инвайта должно вернуть ошибку")
+}
+
 func TestGetInvitesWithUsersByCreator(t *testing.T) {
 	db := setupTestDBInvites(t)
 

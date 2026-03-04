@@ -31,6 +31,7 @@ type Invite struct {
 	UsedBy     *int64
 	UsedAt     *time.Time // Время активации кода
 	ExpireDays *int       // NULL = бессрочный инвайт
+	KickedAt   *time.Time // Время автокика — инвайт нельзя переиспользовать
 	CreatedAt  time.Time
 }
 
@@ -128,6 +129,8 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE invites ADD COLUMN used_at TIMESTAMP`,
 		// Миграция: добавление срока действия инвайта в днях (NULL = бессрочно)
 		`ALTER TABLE invites ADD COLUMN expire_days INTEGER`,
+		// Миграция: метка автокика — инвайт нельзя использовать повторно, но история сохраняется
+		`ALTER TABLE invites ADD COLUMN kicked_at TIMESTAMP`,
 	}
 
 	for _, m := range alterMigrations {

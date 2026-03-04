@@ -76,11 +76,12 @@ func TestHandleAutoKick_404IsNotFatalError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, dbUser, "пользователь должен быть удалён из БД даже если Remnawave вернул 404")
 
-	// Инвайт должен быть сброшен (used_by = NULL)
+	// Инвайт должен быть помечен как кикнутый: used_by остаётся (история), kicked_at проставлен
 	invite, err := db.GetInviteByCode(inv.Code)
 	require.NoError(t, err)
 	require.NotNil(t, invite)
-	assert.Nil(t, invite.UsedBy, "used_by в инвайте должен быть сброшен")
+	assert.NotNil(t, invite.UsedBy, "used_by должен остаться — история активации сохраняется")
+	assert.NotNil(t, invite.KickedAt, "kicked_at должен быть проставлен после автокика")
 }
 
 // TestHandleAutoKick_SkipsAlreadyDeletedInRemnawave проверяет, что функция классификации
