@@ -38,6 +38,13 @@ func main() {
 	}
 	defer db.Close()
 
+	// Откат инвайтов, зависших после краша (claimed но пользователь не создан)
+	if count, err := db.ReconcileOrphanedInvites(); err != nil {
+		slog.Error("Failed to reconcile orphaned invites", "error", err)
+	} else if count > 0 {
+		slog.Warn("Reconciled orphaned invites on startup", "count", count)
+	}
+
 	// Создание клиента Remnawave API
 	remnawaveClient := remnawave.NewClient(
 		cfg.RemnawaveURL,
@@ -63,9 +70,6 @@ func main() {
 		slog.Info("Shutdown signal received, stopping bot...")
 		cancel()
 	}()
-
-	// Запуск фонового scheduler для сброса лимитов (1-го числа месяца)
-	go telegramBot.StartScheduler(ctx)
 
 	// Запуск фоновой синхронизации targets.json для мониторинга нод
 	go monitoring.StartSyncLoop(ctx, remnawaveClient, cfg.SDConfigsPath)

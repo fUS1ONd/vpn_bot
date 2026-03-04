@@ -10,9 +10,6 @@ import (
 )
 
 const (
-	// TrafficLimit30GB — лимит трафика 30 ГБ в байтах
-	TrafficLimit30GB = 32212254720
-
 	// TrafficStrategyMonth — стратегия сброса трафика раз в месяц
 	TrafficStrategyMonth = "MONTH"
 
@@ -100,10 +97,9 @@ type CreateUserRequest struct {
 
 // UpdateUserRequest — запрос на обновление пользователя
 type UpdateUserRequest struct {
-	UUID              string  `json:"uuid"`
-	Username          *string `json:"username,omitempty"`
-	TrafficLimitBytes *int64  `json:"trafficLimitBytes,omitempty"`
-	Status            string  `json:"status,omitempty"`
+	UUID     string  `json:"uuid"`
+	Username *string `json:"username,omitempty"`
+	Status   string  `json:"status,omitempty"`
 }
 
 // apiResponse — обёртка ответа API
@@ -116,7 +112,7 @@ func (c *Client) CreateUser(telegramID int64, username string) (*User, error) {
 	req := CreateUserRequest{
 		Username:             username,
 		TelegramID:           telegramID,
-		TrafficLimitBytes:    TrafficLimit30GB,
+		TrafficLimitBytes:    0,
 		TrafficLimitStrategy: TrafficStrategyMonth,
 		ExpireAt:             "2099-01-01T00:00:00Z", // Бессрочно
 	}
@@ -208,22 +204,6 @@ func (c *Client) GetAllUsers() ([]User, error) {
 	}
 
 	return result.Response.Users, nil
-}
-
-// UpdateUserTraffic обновляет лимит трафика пользователя
-func (c *Client) UpdateUserTraffic(uuid string, trafficLimitBytes int64) error {
-	req := UpdateUserRequest{
-		UUID:              uuid,
-		TrafficLimitBytes: &trafficLimitBytes,
-	}
-
-	body, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	_, err = c.doRequest("PATCH", "/api/users", body)
-	return err
 }
 
 // UpdateUsername обновляет username пользователя в панели Remnawave

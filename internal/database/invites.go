@@ -63,7 +63,66 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	return &invite, nil
 }
 
+// ClaimInvite атомарно помечает инвайт как использованный (защита от race condition)
+func (db *DB) ClaimInvite(code string, usedBy int64) error {
+	result, err := db.conn.Exec(
+		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL`,
+		usedBy, code,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to claim invite: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get affected rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("invite not found or already used")
+	}
+
+	return nil
+}
+
+// ReconcileOrphanedInvites откатывает инвайты, застрявшие в состоянии "в процессе регистрации":
+// claimed недавно (< 1 часа) но без соответствующего пользователя в users.
+// Это защита от краша между ClaimInvite и CreateUser.
+// Старые claimed-инвайты без пользователя не трогаются — они могут относиться к забаненным пользователям.
+// Возвращает количество откаченных инвайтов.
+func (db *DB) ReconcileOrphanedInvites() (int, error) {
+	result, err := db.conn.Exec(`
+		UPDATE invites
+		SET used_by = NULL, used_at = NULL
+		WHERE used_by IS NOT NULL
+		  AND used_by NOT IN (SELECT telegram_id FROM users)
+		  AND used_at >= datetime('now', '-1 hour')
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to reconcile orphaned invites: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get affected rows: %w", err)
+	}
+
+	return int(rows), nil
+}
+
+// UnclaimInvite откатывает claim инвайта (если создание пользователя не удалось)
+func (db *DB) UnclaimInvite(code string) error {
+	_, err := db.conn.Exec(
+		`UPDATE invites SET used_by = NULL, used_at = NULL WHERE code = ?`,
+		code,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to unclaim invite: %w", err)
+	}
+	return nil
+}
+
 // UseInvite помечает инвайт как использованный с временем активации
+// Deprecated: используй ClaimInvite для атомарной операции
 func (db *DB) UseInvite(code string, usedBy int64) error {
 	result, err := db.conn.Exec(
 		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL`,

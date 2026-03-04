@@ -64,68 +64,6 @@ func (b *Bot) handleCreateInvite(c tele.Context) error {
 	})
 }
 
-// handleAddTrafficRequest запрашивает данные для добавления трафика
-func (b *Bot) handleAddTrafficRequest(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	b.userStates.Set(c.Sender().ID, StateWaitAddTraffic)
-	return c.Send(MsgEnterAddTraffic, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: CancelKeyboard(),
-	})
-}
-
-// processAddTraffic обрабатывает добавление трафика
-func (b *Bot) processAddTraffic(c tele.Context, text string) error {
-	b.userStates.Delete(c.Sender().ID)
-
-	// Формат: telegram_id GB
-	parts := strings.Fields(text)
-	if len(parts) != 2 {
-		return c.Send("Неверный формат. Используйте: telegram_id GB", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	telegramID, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		return c.Send("Неверный telegram_id", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	gb, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil || gb <= 0 {
-		return c.Send("Неверное количество GB", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	// Находим пользователя
-	user, err := b.db.GetUserByTelegramID(telegramID)
-	if err != nil || user == nil {
-		return c.Send("Пользователь не найден", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	// Получаем текущий лимит из Remnawave
-	remnawaveUser, err := b.remnawave.GetUser(user.RemnawaveUUID)
-	if err != nil {
-		slog.Error("Failed to get user from Remnawave", "error", err)
-		return c.Send("Ошибка получения данных пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	// Добавляем трафик к текущему лимиту
-	newLimit := remnawaveUser.TrafficLimitBytes + (gb * 1024 * 1024 * 1024)
-	err = b.remnawave.UpdateUserTraffic(user.RemnawaveUUID, newLimit)
-	if err != nil {
-		slog.Error("Failed to update traffic", "error", err)
-		return c.Send("Ошибка обновления лимита трафика", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
-	msg := fmt.Sprintf("✅ Добавлено %d GB пользователю %d\nНовый лимит: %.1f GB",
-		gb, telegramID, float64(newLimit)/(1024*1024*1024))
-	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminManageKeyboard(),
-	})
-}
-
 // handleBanUserRequest запрашивает telegram_id для бана
 func (b *Bot) handleBanUserRequest(c tele.Context) error {
 	if !b.isAdmin(c) {
@@ -146,6 +84,11 @@ func (b *Bot) processBanUser(c tele.Context, text string) error {
 	telegramID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
 	if err != nil {
 		return c.Send("Неверный telegram_id", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	// Защита от само-бана
+	if telegramID == b.config.AdminID {
+		return c.Send("❌ Нельзя забанить себя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
 	// Находим пользователя в БД
@@ -234,8 +177,8 @@ func (b *Bot) handleBroadcastActiveRequest(c tele.Context) error {
 	})
 }
 
-// processBroadcastMessage отправляет рассылку только активным пользователям
-func (b *Bot) processBroadcastMessage(c tele.Context, _ bool) error {
+// processBroadcastMessage отправляет рассылку активным пользователям
+func (b *Bot) processBroadcastMessage(c tele.Context) error {
 	b.userStates.Delete(c.Sender().ID)
 
 	// Получаем всех активных пользователей из Remnawave
@@ -316,58 +259,86 @@ func (b *Bot) handleViewInvites(c tele.Context) error {
 		})
 	}
 
-	msg := formatInvitesList(invites)
-	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminManageKeyboard(),
-	})
+	chunks := FormatInvitesListChunked(invites, 4000)
+	for i, chunk := range chunks {
+		opts := &tele.SendOptions{ParseMode: tele.ModeHTML}
+		// Клавиатуру показываем только в последнем сообщении
+		if i == len(chunks)-1 {
+			opts.ReplyMarkup = AdminManageKeyboard()
+		}
+		if err := c.Send(chunk, opts); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// formatInvitesList форматирует список инвайтов для отображения
-func formatInvitesList(invites []database.InviteWithUser) string {
-	var msg strings.Builder
-	msg.WriteString("<b>📋 Список инвайт-кодов</b>\n\n")
-
-	for _, inv := range invites {
-		if inv.UsedBy != nil {
-			// Использованный код
-			msg.WriteString("✅ <b>Использован</b>\n")
-			fmt.Fprintf(&msg, "🔹 Код: <code>%s</code>\n", inv.Code)
-
-			// Ссылка на пользователя
-			userLink := fmt.Sprintf("<a href=\"tg://user?id=%d\">%d</a>", *inv.UsedBy, *inv.UsedBy)
-			if inv.UserUsername != "" {
-				fmt.Fprintf(&msg, "👤 @%s (%s)", inv.UserUsername, userLink)
-			} else {
-				fmt.Fprintf(&msg, "👤 %s", userLink)
-			}
-
-			if inv.UserFirstName != "" {
-				fmt.Fprintf(&msg, " • %s", inv.UserFirstName)
-			}
-			msg.WriteString("\n")
-
-			// Дата активации
-			if inv.UsedAt != nil {
-				fmt.Fprintf(&msg, "📅 %s\n", inv.UsedAt.Format("02.01.06 15:04"))
-			}
-		} else {
-			// Неиспользованный код
-			msg.WriteString("⭕ <b>Не использован</b>\n")
-			fmt.Fprintf(&msg, "🔹 Код: <code>%s</code>\n", inv.Code)
-			fmt.Fprintf(&msg, "📅 Создан: %s\n", inv.CreatedAt.Format("02.01.06 15:04"))
-		}
-
-		// Автор кода (модератор или админ)
-		if inv.CreatorUsername != "" {
-			fmt.Fprintf(&msg, "✍️ @%s\n", inv.CreatorUsername)
-		} else if inv.CreatorFirstName != "" {
-			fmt.Fprintf(&msg, "✍️ %s\n", inv.CreatorFirstName)
-		}
-
-		msg.WriteString("\n")
+// FormatInvitesListChunked разбивает список инвайтов на части, не превышающие maxLen символов
+func FormatInvitesListChunked(invites []database.InviteWithUser, maxLen int) []string {
+	if len(invites) == 0 {
+		return nil
 	}
 
+	var chunks []string
+	var current strings.Builder
+	current.WriteString("<b>📋 Список инвайт-кодов</b>\n\n")
+
+	for _, inv := range invites {
+		entry := formatInviteEntry(inv)
+
+		// Если добавление записи превысит лимит — сохраняем текущий чанк и начинаем новый
+		if current.Len()+len(entry) > maxLen && current.Len() > 0 {
+			chunks = append(chunks, current.String())
+			current.Reset()
+			current.WriteString("<b>📋 Список инвайт-кодов (продолжение)</b>\n\n")
+		}
+
+		current.WriteString(entry)
+	}
+
+	if current.Len() > 0 {
+		chunks = append(chunks, current.String())
+	}
+
+	return chunks
+}
+
+// formatInviteEntry форматирует один инвайт для списка
+func formatInviteEntry(inv database.InviteWithUser) string {
+	var msg strings.Builder
+	if inv.UsedBy != nil {
+		msg.WriteString("✅ <b>Использован</b>\n")
+		msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
+
+		userLink := fmt.Sprintf("<a href=\"tg://user?id=%d\">%d</a>", *inv.UsedBy, *inv.UsedBy)
+		if inv.UserUsername != "" {
+			msg.WriteString(fmt.Sprintf("👤 @%s (%s)", inv.UserUsername, userLink))
+		} else {
+			msg.WriteString(fmt.Sprintf("👤 %s", userLink))
+		}
+
+		if inv.UserFirstName != "" {
+			msg.WriteString(fmt.Sprintf(" • %s", inv.UserFirstName))
+		}
+		msg.WriteString("\n")
+
+		if inv.UsedAt != nil {
+			msg.WriteString(fmt.Sprintf("📅 %s\n", inv.UsedAt.Format("02.01.06 15:04")))
+		}
+	} else {
+		msg.WriteString("⭕ <b>Не использован</b>\n")
+		msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
+		msg.WriteString(fmt.Sprintf("📅 Создан: %s\n", inv.CreatedAt.Format("02.01.06 15:04")))
+	}
+
+	// Автор кода (модератор или админ)
+	if inv.CreatorUsername != "" {
+		fmt.Fprintf(&msg, "✍️ @%s\n", inv.CreatorUsername)
+	} else if inv.CreatorFirstName != "" {
+		fmt.Fprintf(&msg, "✍️ %s\n", inv.CreatorFirstName)
+	}
+
+	msg.WriteString("\n")
 	return msg.String()
 }
 
