@@ -103,6 +103,31 @@ func intPtr(v int) *int {
 	return &v
 }
 
+func TestGetInviteByUsedBy_AfterKickAndRejoin(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	// Модератор A приглашает пользователя 555
+	days := 30
+	inv1, err := db.CreateInviteWithExpiry(100, &days)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv1.Code, 555))
+
+	// Автокик: помечаем старый инвайт кикнутым
+	require.NoError(t, db.MarkInviteKickedByTelegramID(555))
+
+	// Модератор B приглашает того же пользователя 555 снова
+	inv2, err := db.CreateInviteWithExpiry(200, &days)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv2.Code, 555))
+
+	// GetInviteByUsedBy должен вернуть НОВЫЙ инвайт от модератора B, не старый от A
+	got, err := db.GetInviteByUsedBy(555)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, inv2.Code, got.Code, "должен вернуть актуальный (не кикнутый) инвайт")
+	assert.Equal(t, int64(200), got.CreatedBy, "куратор должен быть модератор B (200), не A (100)")
+}
+
 // TestMarkInviteKicked_PreventsReuse проверяет, что после автокика пользователь не может
 // зайти по старой ссылке-инвайту без получения нового от модератора.
 func TestMarkInviteKicked_PreventsReuse(t *testing.T) {
@@ -269,4 +294,32 @@ func TestDeleteUnusedInvitesByCreator(t *testing.T) {
 		}
 		assert.Equal(t, 1, mod2Count)
 	})
+}
+
+func TestIsSubscriberOfModerator_AfterKickAndRejoin(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	// Модератор A (100) приглашает пользователя 555
+	days := 30
+	inv1, err := db.CreateInviteWithExpiry(100, &days)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv1.Code, 555))
+
+	// Автокик
+	require.NoError(t, db.MarkInviteKickedByTelegramID(555))
+
+	// Модератор B (200) приглашает того же пользователя 555 снова
+	inv2, err := db.CreateInviteWithExpiry(200, &days)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv2.Code, 555))
+
+	// Модератор A НЕ должен считаться куратором пользователя 555
+	isSubOfA, err := db.IsSubscriberOfModerator(100, 555)
+	require.NoError(t, err)
+	assert.False(t, isSubOfA, "старый модератор A не должен иметь прав на продление после перехода подписчика к B")
+
+	// Модератор B ДОЛЖЕН считаться куратором
+	isSubOfB, err := db.IsSubscriberOfModerator(200, 555)
+	require.NoError(t, err)
+	assert.True(t, isSubOfB, "новый модератор B должен иметь права на продление")
 }

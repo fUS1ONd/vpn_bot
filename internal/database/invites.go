@@ -438,7 +438,8 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 	err := db.conn.QueryRow(
 		`SELECT code, created_by, used_by, used_at, expire_days, kicked_at, created_at
 		 FROM invites
-		 WHERE used_by = ?
+		 WHERE used_by = ? AND kicked_at IS NULL
+		 ORDER BY used_at DESC
 		 LIMIT 1`,
 		usedBy,
 	).Scan(&invite.Code, &invite.CreatedBy, &usedByNullable, &usedAt, &expireDays, &kickedAt, &invite.CreatedAt)
@@ -526,7 +527,7 @@ func (db *DB) IsSubscriberOfModerator(moderatorID, subscriberID int64) (bool, er
 	err := db.conn.QueryRow(
 		`SELECT EXISTS(
 			SELECT 1 FROM invites
-			WHERE created_by = ? AND used_by = ?
+			WHERE created_by = ? AND used_by = ? AND kicked_at IS NULL
 		)`,
 		moderatorID, subscriberID,
 	).Scan(&exists)
