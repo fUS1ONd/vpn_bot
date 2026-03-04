@@ -21,6 +21,88 @@ func setupTestDBInvites(t *testing.T) *DB {
 	return db
 }
 
+func TestCreateInviteWithExpiry(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	t.Run("Бессрочный инвайт", func(t *testing.T) {
+		inv, err := db.CreateInviteWithExpiry(100, nil)
+		require.NoError(t, err)
+		require.NotNil(t, inv)
+		assert.Nil(t, inv.ExpireDays)
+	})
+
+	t.Run("Месячный инвайт", func(t *testing.T) {
+		days := 30
+		inv, err := db.CreateInviteWithExpiry(100, &days)
+		require.NoError(t, err)
+		require.NotNil(t, inv)
+		require.NotNil(t, inv.ExpireDays)
+		assert.Equal(t, 30, *inv.ExpireDays)
+	})
+}
+
+func TestGetInviteByUsedBy(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	invite, err := db.CreateInvite(100)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(invite.Code, 555))
+
+	got, err := db.GetInviteByUsedBy(555)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, invite.Code, got.Code)
+	require.NotNil(t, got.UsedBy)
+	assert.Equal(t, int64(555), *got.UsedBy)
+
+	notFound, err := db.GetInviteByUsedBy(777)
+	require.NoError(t, err)
+	assert.Nil(t, notFound)
+}
+
+func TestGetSubscribersByModerator(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	// Подписчик, который остался в users
+	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300")
+	require.NoError(t, err)
+	inv1, err := db.CreateInviteWithExpiry(100, intPtr(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv1.Code, 300))
+
+	// Подписчик, удалённый из users
+	_, err = db.CreateUser(301, "gone", "Gone", "uuid-301")
+	require.NoError(t, err)
+	inv2, err := db.CreateInviteWithExpiry(100, intPtr(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv2.Code, 301))
+	require.NoError(t, db.DeleteUser(301))
+
+	subs, err := db.GetSubscribersByModerator(100)
+	require.NoError(t, err)
+	require.Len(t, subs, 2)
+
+	seen := map[int64]Subscriber{}
+	for _, sub := range subs {
+		seen[sub.TelegramID] = sub
+	}
+
+	alive := seen[300]
+	require.NotNil(t, alive.Username)
+	require.NotNil(t, alive.FirstName)
+	require.NotNil(t, alive.RemnawaveUUID)
+	assert.Equal(t, "alive", *alive.Username)
+
+	deleted := seen[301]
+	assert.Nil(t, deleted.Username)
+	assert.Nil(t, deleted.FirstName)
+	assert.Nil(t, deleted.RemnawaveUUID)
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
 func TestGetInvitesWithUsersByCreator(t *testing.T) {
 	db := setupTestDBInvites(t)
 

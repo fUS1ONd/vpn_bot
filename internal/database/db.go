@@ -26,11 +26,12 @@ type User struct {
 
 // Invite представляет запись инвайта
 type Invite struct {
-	Code      string
-	CreatedBy int64
-	UsedBy    *int64
-	UsedAt    *time.Time // Время активации кода
-	CreatedAt time.Time
+	Code       string
+	CreatedBy  int64
+	UsedBy     *int64
+	UsedAt     *time.Time // Время активации кода
+	ExpireDays *int       // NULL = бессрочный инвайт
+	CreatedAt  time.Time
 }
 
 // New создаёт новое подключение к БД и инициализирует схему
@@ -80,6 +81,8 @@ func migrate(conn *sql.DB) error {
 			code TEXT PRIMARY KEY,
 			created_by INTEGER NOT NULL,
 			used_by INTEGER,
+			used_at TIMESTAMP,
+			expire_days INTEGER,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 
@@ -88,6 +91,22 @@ func migrate(conn *sql.DB) error {
 			telegram_id INTEGER PRIMARY KEY,
 			added_by INTEGER NOT NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+
+		// Таблица банов (перманентные блокировки)
+		`CREATE TABLE IF NOT EXISTS banned_users (
+			telegram_id INTEGER PRIMARY KEY,
+			banned_by INTEGER NOT NULL,
+			reason TEXT,
+			banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+
+		// Таблица отправленных уведомлений по подписке
+		`CREATE TABLE IF NOT EXISTS notifications_sent (
+			telegram_id INTEGER NOT NULL,
+			type TEXT NOT NULL,
+			sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (telegram_id, type)
 		)`,
 
 		// Индексы
@@ -107,6 +126,8 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE users ADD COLUMN first_name TEXT`,
 		// Миграция: добавление поля used_at в таблицу invites
 		`ALTER TABLE invites ADD COLUMN used_at TIMESTAMP`,
+		// Миграция: добавление срока действия инвайта в днях (NULL = бессрочно)
+		`ALTER TABLE invites ADD COLUMN expire_days INTEGER`,
 	}
 
 	for _, m := range alterMigrations {
