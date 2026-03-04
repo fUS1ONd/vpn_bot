@@ -13,6 +13,7 @@ import (
 
 func TestCreateUserSetsUnlimitedTraffic(t *testing.T) {
 	var capturedRequest CreateUserRequest
+	expectedExpireAt := time.Date(2026, time.March, 10, 12, 0, 0, 0, time.UTC)
 
 	client := NewClient("https://panel.example.com", "test-token", "")
 	client.http = &http.Client{
@@ -49,7 +50,7 @@ func TestCreateUserSetsUnlimitedTraffic(t *testing.T) {
 		}),
 	}
 
-	user, err := client.CreateUser(12345, "alice")
+	user, err := client.CreateUser(12345, "alice", expectedExpireAt)
 	require.NoError(t, err)
 	require.NotNil(t, user)
 
@@ -57,7 +58,7 @@ func TestCreateUserSetsUnlimitedTraffic(t *testing.T) {
 	require.Equal(t, "alice", capturedRequest.Username)
 	require.Equal(t, int64(0), capturedRequest.TrafficLimitBytes)
 	require.Equal(t, TrafficStrategyMonth, capturedRequest.TrafficLimitStrategy)
-	require.Equal(t, "2099-01-01T00:00:00Z", capturedRequest.ExpireAt)
+	require.Equal(t, expectedExpireAt.Format(time.RFC3339), capturedRequest.ExpireAt)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

@@ -100,6 +100,7 @@ type UpdateUserRequest struct {
 	UUID     string  `json:"uuid"`
 	Username *string `json:"username,omitempty"`
 	Status   string  `json:"status,omitempty"`
+	ExpireAt *string `json:"expireAt,omitempty"`
 }
 
 // apiResponse — обёртка ответа API
@@ -107,14 +108,14 @@ type apiResponse struct {
 	Response json.RawMessage `json:"response"`
 }
 
-// CreateUser создаёт нового пользователя в Remnawave
-func (c *Client) CreateUser(telegramID int64, username string) (*User, error) {
+// CreateUser создаёт нового пользователя в Remnawave.
+func (c *Client) CreateUser(telegramID int64, username string, expireAt time.Time) (*User, error) {
 	req := CreateUserRequest{
 		Username:             username,
 		TelegramID:           telegramID,
 		TrafficLimitBytes:    0,
 		TrafficLimitStrategy: TrafficStrategyMonth,
-		ExpireAt:             "2099-01-01T00:00:00Z", // Бессрочно
+		ExpireAt:             expireAt.UTC().Format(time.RFC3339),
 	}
 
 	// Добавляем сквад если указан
@@ -143,6 +144,13 @@ func (c *Client) CreateUser(telegramID int64, username string) (*User, error) {
 	}
 
 	return &user, nil
+}
+
+// SetHTTPClient переопределяет HTTP-клиент (используется в тестах).
+func (c *Client) SetHTTPClient(httpClient *http.Client) {
+	if httpClient != nil {
+		c.http = httpClient
+	}
 }
 
 // GetUser получает данные пользователя по UUID

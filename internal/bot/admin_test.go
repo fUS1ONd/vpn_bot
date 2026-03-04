@@ -13,6 +13,36 @@ import (
 	tele "gopkg.in/telebot.v3"
 )
 
+func TestHandleCreateInvite_AdminInviteIsUnlimited(t *testing.T) {
+	dbFile := "test_admin_invite_expiry.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999999)
+	b := &Bot{
+		db:         db,
+		config:     &config.Config{AdminID: adminID},
+		userStates: newStateMap(),
+	}
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: adminID, Username: "admin"},
+		message: &tele.Message{},
+	}
+
+	err = b.handleCreateInvite(ctx)
+	require.NoError(t, err)
+
+	invites, err := db.GetAllInvites()
+	require.NoError(t, err)
+	require.Len(t, invites, 1)
+	assert.Nil(t, invites[0].ExpireDays)
+}
+
 // TestFormatInvitesListChunking проверяет разбиение длинного списка инвайтов на части
 func TestFormatInvitesListChunking(t *testing.T) {
 	// Создаём много инвайтов чтобы превысить лимит Telegram (4096 символов)

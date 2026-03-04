@@ -332,13 +332,25 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		return c.Send("❌ Инвайт-код не найден или уже использован. Попробуйте другой:")
 	}
 
+	invite, err := b.db.GetInviteByCode(code)
+	if err != nil || invite == nil {
+		slog.Error("Failed to load invite after claim", "code", code, "error", err)
+		_ = b.db.UnclaimInvite(code)
+		return c.Send("Ошибка обработки приглашения. Попробуйте позже.")
+	}
+
 	// Создаём пользователя в Remnawave
 	username := c.Sender().Username
 	if username == "" {
 		username = fmt.Sprintf("tg_%d", telegramID)
 	}
 
-	remnawaveUser, err := b.remnawave.CreateUser(telegramID, username)
+	expireAt := time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC)
+	if invite.ExpireDays != nil {
+		expireAt = time.Now().UTC().AddDate(0, 0, *invite.ExpireDays)
+	}
+
+	remnawaveUser, err := b.remnawave.CreateUser(telegramID, username, expireAt)
 	if err != nil {
 		slog.Error("Failed to create user in Remnawave", "error", err)
 		// Откатываем инвайт — пользователь не создан
@@ -357,7 +369,9 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	}
 
 	// Отправляем уведомление админу о новом пользователе (асинхронно)
-	go b.notifyAdminNewUser(telegramID, username, c.Sender().FirstName)
+	if b.bot != nil {
+		go b.notifyAdminNewUser(telegramID, username, c.Sender().FirstName)
+	}
 
 	// Очищаем состояние
 	b.userStates.Delete(telegramID)

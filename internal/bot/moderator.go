@@ -35,7 +35,8 @@ func (b *Bot) handleModeratorMenu(c tele.Context) error {
 func (b *Bot) handleModeratorCreateInvite(c tele.Context) error {
 	telegramID := c.Sender().ID
 
-	invite, err := b.db.CreateInvite(telegramID)
+	expireDays := 30
+	invite, err := b.db.CreateInviteWithExpiry(telegramID, &expireDays)
 	if err != nil {
 		slog.Error("Failed to create invite by moderator", "error", err, "moderator_id", telegramID)
 		return c.Send("Ошибка создания приглашения", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
@@ -82,6 +83,7 @@ func (b *Bot) handleModeratorViewInvites(c tele.Context) error {
 			if inv.UserFirstName != "" {
 				fmt.Fprintf(&msg, " • %s", inv.UserFirstName)
 			}
+			fmt.Fprintf(&msg, " • ID: <code>%d</code>", *inv.UsedBy)
 			msg.WriteString("\n")
 
 			if inv.UsedAt != nil {

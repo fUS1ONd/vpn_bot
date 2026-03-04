@@ -81,6 +81,11 @@ func TestModeratorCreateInvite(t *testing.T) {
 	invites, err := db.GetInvitesWithUsersByCreator(modID)
 	assert.NoError(t, err)
 	assert.Len(t, invites, 1)
+	invite, err := db.GetInviteByCode(invites[0].Code)
+	require.NoError(t, err)
+	require.NotNil(t, invite)
+	require.NotNil(t, invite.ExpireDays)
+	assert.Equal(t, 30, *invite.ExpireDays)
 
 	// Проверяем что сообщение содержит deep link
 	sentStr, ok := ctx.sentMsg.(string)
@@ -93,10 +98,11 @@ func TestModeratorViewInvites(t *testing.T) {
 	b, db, _, modID := setupModeratorTestBot(t)
 
 	// Создаём несколько инвайтов от модератора
-	_, err := db.CreateInvite(modID)
+	inv1, err := db.CreateInvite(modID)
 	require.NoError(t, err)
 	_, err = db.CreateInvite(modID)
 	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv1.Code, 501))
 
 	user := &tele.User{ID: modID, Username: "moderator"}
 	ctx := &MockContext{
@@ -110,6 +116,7 @@ func TestModeratorViewInvites(t *testing.T) {
 	sentStr, ok := ctx.sentMsg.(string)
 	assert.True(t, ok)
 	assert.Contains(t, sentStr, "Мои приглашения")
+	assert.Contains(t, sentStr, "ID: <code>501</code>")
 }
 
 func TestModeratorViewInvites_Empty(t *testing.T) {

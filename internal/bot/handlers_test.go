@@ -1,11 +1,17 @@
 package bot
 
 import (
+	"encoding/json"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tele "gopkg.in/telebot.v3"
@@ -168,5 +174,114 @@ func TestHandleStart(t *testing.T) {
 
 		// Должен быть установлен StateWaitInvite чтобы юзер мог ввести код текстом
 		assert.Equal(t, StateWaitInvite, b.userStates.Get(user.ID))
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestProcessInviteCode_UsesInviteExpireDays(t *testing.T) {
+	t.Run("Бессрочный инвайт", func(t *testing.T) {
+		b, db := setupTestBot(t)
+
+		invite, err := db.CreateInviteWithExpiry(999, nil)
+		require.NoError(t, err)
+
+		var captured remnawave.CreateUserRequest
+		client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+		clientHTTP := &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				require.Equal(t, http.MethodPost, r.Method)
+				require.Equal(t, "/api/users", r.URL.Path)
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+
+				payload, err := json.Marshal(map[string]any{
+					"response": map[string]any{
+						"uuid":            "uuid-unlimited",
+						"shortUuid":       "short-unlimited",
+						"username":        "unlimited_user",
+						"status":          remnawave.StatusActive,
+						"subscriptionUrl": "vless://example",
+						"createdAt":       time.Now().UTC().Format(time.RFC3339),
+						"expireAt":        "2099-01-01T00:00:00Z",
+					},
+				})
+				require.NoError(t, err)
+
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(payload))),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		}
+		client.SetHTTPClient(clientHTTP)
+		b.remnawave = client
+
+		ctx := &MockContext{
+			sender:  &tele.User{ID: 7001, Username: "unlimited_user", FirstName: "Unlimited"},
+			message: &tele.Message{},
+		}
+
+		err = b.processInviteCode(ctx, invite.Code)
+		require.NoError(t, err)
+		assert.Equal(t, "2099-01-01T00:00:00Z", captured.ExpireAt)
+	})
+
+	t.Run("Месячный инвайт", func(t *testing.T) {
+		b, db := setupTestBot(t)
+
+		days := 30
+		invite, err := db.CreateInviteWithExpiry(999, &days)
+		require.NoError(t, err)
+
+		var captured remnawave.CreateUserRequest
+		client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+		clientHTTP := &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				require.Equal(t, http.MethodPost, r.Method)
+				require.Equal(t, "/api/users", r.URL.Path)
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+
+				payload, err := json.Marshal(map[string]any{
+					"response": map[string]any{
+						"uuid":            "uuid-limited",
+						"shortUuid":       "short-limited",
+						"username":        "limited_user",
+						"status":          remnawave.StatusActive,
+						"subscriptionUrl": "vless://example",
+						"createdAt":       time.Now().UTC().Format(time.RFC3339),
+						"expireAt":        time.Now().UTC().AddDate(0, 0, 30).Format(time.RFC3339),
+					},
+				})
+				require.NoError(t, err)
+
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(payload))),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		}
+		client.SetHTTPClient(clientHTTP)
+		b.remnawave = client
+
+		before := time.Now().UTC()
+		ctx := &MockContext{
+			sender:  &tele.User{ID: 7002, Username: "limited_user", FirstName: "Limited"},
+			message: &tele.Message{},
+		}
+
+		err = b.processInviteCode(ctx, invite.Code)
+		require.NoError(t, err)
+		after := time.Now().UTC()
+
+		gotExpireAt, err := time.Parse(time.RFC3339, captured.ExpireAt)
+		require.NoError(t, err)
+		assert.False(t, gotExpireAt.Before(before.AddDate(0, 0, 30).Add(-2*time.Second)))
+		assert.False(t, gotExpireAt.After(after.AddDate(0, 0, 30).Add(2*time.Second)))
 	})
 }

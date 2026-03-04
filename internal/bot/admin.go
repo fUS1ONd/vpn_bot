@@ -51,7 +51,7 @@ func (b *Bot) handleCreateInvite(c tele.Context) error {
 	}
 
 	// Создаём инвайт (код генерируется автоматически в БД)
-	invite, err := b.db.CreateInvite(c.Sender().ID)
+	invite, err := b.db.CreateInviteWithExpiry(c.Sender().ID, nil)
 	if err != nil {
 		slog.Error("Failed to create invite", "error", err)
 		return c.Send("Ошибка создания инвайта", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
