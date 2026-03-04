@@ -146,8 +146,8 @@ vpn_bot/
 │   ├── bot/               → Точка входа бота
 │   └── migrator/          → Утилита миграции пользователей из старой БД
 ├── internal/
-│   ├── bot/               → Обработчики, клавиатуры, дашборд, состояния
-│   ├── database/          → SQLite (users, invites, moderators, banned_users, notifications_sent)
+│   ├── bot/               → Обработчики, клавиатуры, дашборд, состояния, scheduler
+│   ├── database/          → SQLite (users, invites, moderators, bans, notifications)
 │   ├── remnawave/         → HTTP-клиент Remnawave API
 │   ├── monitoring/        → Метрики, алерты, service discovery
 │   └── config/            → Загрузка конфигурации
