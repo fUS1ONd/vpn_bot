@@ -4,7 +4,7 @@
 
 **Дата:** 2026-03-03
 
-**Статус:** ✅ Выполнено
+**Статус:** ✅ Выполнено (+ дополнительный фикс 2026-03-04)
 
 ---
 
@@ -63,5 +63,26 @@
 | `TestFormatInvitesListChunking` | Длинный список разбивается на части |
 
 Команды:
+- `make fmt` ✅
+- `make tests` ✅
+
+---
+
+## Дополнительный фикс: Reconcile orphaned invites (2026-03-04)
+
+**Источник:** Code review от chatgpt-codex-connector (P2)
+
+**Проблема:** После `ClaimInvite` бот мог упасть до `CreateUser`. При перезапуске инвайт оставался навсегда помеченным как использованный, хотя пользователь не был создан. Affected signups блокировались до выдачи нового кода вручную.
+
+**Решение:** При старте бота вызывается `db.ReconcileOrphanedInvites()` — откатывает все инвайты с `used_by IS NOT NULL`, у которых нет соответствующей записи в `users`.
+
+**Изменения:**
+- `internal/database/invites.go` — новый метод `ReconcileOrphanedInvites() (int, error)`
+- `cmd/bot/main.go` — вызов reconcile сразу после инициализации БД, логирование если были откаты
+
+**Тесты (TDD):**
+- `TestReconcileOrphanedInvites` — "зависший" инвайт откатывается
+- `TestReconcileOrphanedInvites_SkipsValidClaims` — валидный инвайт не трогается
+
 - `make fmt` ✅
 - `make tests` ✅

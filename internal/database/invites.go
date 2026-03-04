@@ -84,6 +84,28 @@ func (db *DB) ClaimInvite(code string, usedBy int64) error {
 	return nil
 }
 
+// ReconcileOrphanedInvites откатывает инвайты, помеченные как использованные,
+// но без соответствующего пользователя в таблице users (защита от краша между ClaimInvite и CreateUser).
+// Возвращает количество откаченных инвайтов.
+func (db *DB) ReconcileOrphanedInvites() (int, error) {
+	result, err := db.conn.Exec(`
+		UPDATE invites
+		SET used_by = NULL, used_at = NULL
+		WHERE used_by IS NOT NULL
+		  AND used_by NOT IN (SELECT telegram_id FROM users)
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to reconcile orphaned invites: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get affected rows: %w", err)
+	}
+
+	return int(rows), nil
+}
+
 // UnclaimInvite откатывает claim инвайта (если создание пользователя не удалось)
 func (db *DB) UnclaimInvite(code string) error {
 	_, err := db.conn.Exec(
