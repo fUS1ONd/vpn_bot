@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -150,9 +151,20 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 	}
 }
 
+// isAutoKickNotFoundError проверяет, является ли ошибка признаком того,
+// что пользователь уже удалён из Remnawave (например, администратором вручную).
+func isAutoKickNotFoundError(err error) bool {
+	return strings.Contains(err.Error(), "API error 404")
+}
+
 func (b *Bot) handleAutoKick(telegramID int64, userUUID string) {
 	if err := b.remnawave.DeleteUser(userUUID); err != nil {
-		slog.Warn("Scheduler failed to delete user from Remnawave during auto-kick", "error", err, "telegram_id", telegramID)
+		if isAutoKickNotFoundError(err) {
+			// Пользователь уже удалён из Remnawave (например, забанен вручную) — не шумим в логах.
+			slog.Debug("Scheduler auto-kick: user already absent in Remnawave", "telegram_id", telegramID)
+		} else {
+			slog.Warn("Scheduler failed to delete user from Remnawave during auto-kick", "error", err, "telegram_id", telegramID)
+		}
 	}
 
 	if err := b.db.DeleteUser(telegramID); err != nil {
@@ -178,8 +190,16 @@ func (b *Bot) sendSchedulerMessage(telegramID int64, message string) error {
 	return err
 }
 
+// isSchedulerForbiddenError проверяет, заблокировал ли пользователь бот или деактивирован.
+// Использует errors.Is вместо хрупкого strings.Contains("403").
+func isSchedulerForbiddenError(err error) bool {
+	return errors.Is(err, tele.ErrBlockedByUser) ||
+		errors.Is(err, tele.ErrUserIsDeactivated) ||
+		errors.Is(err, tele.ErrNotStartedByUser)
+}
+
 func logSchedulerSendError(msgType string, telegramID int64, err error) {
-	if strings.Contains(strings.ToLower(err.Error()), "403") {
+	if isSchedulerForbiddenError(err) {
 		slog.Warn("Scheduler message skipped: bot blocked by user", "type", msgType, "telegram_id", telegramID, "error", err)
 		return
 	}

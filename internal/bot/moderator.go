@@ -118,6 +118,7 @@ func (b *Bot) handleModeratorViewInvites(c tele.Context) error {
 }
 
 // handleModSubscribers показывает подписчиков модератора и их статусы.
+// Использует batch-запрос к Remnawave для получения всех пользователей сразу.
 func (b *Bot) handleModSubscribers(c tele.Context) error {
 	telegramID := c.Sender().ID
 
@@ -132,6 +133,19 @@ func (b *Bot) handleModSubscribers(c tele.Context) error {
 			ParseMode:   tele.ModeHTML,
 			ReplyMarkup: ModeratorMenuKeyboard(),
 		})
+	}
+
+	// Загружаем всех пользователей из Remnawave одним batch-запросом
+	remUsers, err := b.remnawave.GetAllUsers()
+	if err != nil {
+		slog.Error("Failed to get all users from Remnawave for subscribers list", "error", err, "moderator_id", telegramID)
+		return c.Send("Ошибка получения данных из системы", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+	}
+
+	// Строим lookup-таблицу uuid -> User
+	remByUUID := make(map[string]remnawave.User, len(remUsers))
+	for _, u := range remUsers {
+		remByUUID[u.UUID] = u
 	}
 
 	sort.Slice(subscribers, func(i, j int) bool { return subscribers[i].TelegramID < subscribers[j].TelegramID })
@@ -151,14 +165,11 @@ func (b *Bot) handleModSubscribers(c tele.Context) error {
 			continue
 		}
 
-		remUser, err := b.remnawave.GetUser(*sub.RemnawaveUUID)
-		if err != nil {
-			if strings.Contains(err.Error(), "API error 404") {
-				deletedCount++
-				fmt.Fprintf(&msg, "❌ ID: <code>%d</code> — удалён\n\n", sub.TelegramID)
-				continue
-			}
-			fmt.Fprintf(&msg, "⚠️ ID: <code>%d</code> — ошибка статуса\n\n", sub.TelegramID)
+		remUser, exists := remByUUID[*sub.RemnawaveUUID]
+		if !exists {
+			// Пользователь есть в БД бота, но уже нет в Remnawave
+			deletedCount++
+			fmt.Fprintf(&msg, "❌ ID: <code>%d</code> — удалён\n\n", sub.TelegramID)
 			continue
 		}
 
@@ -313,6 +324,8 @@ func (b *Bot) processModExtendConfirm(c tele.Context, text string) error {
 	}
 
 	if err := b.remnawave.ExtendUserSubscription(session.UserUUID, 30); err != nil {
+		b.userStates.Delete(moderatorID)
+		b.clearModExtendSession(moderatorID)
 		return c.Send(err.Error(), &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 	}
 

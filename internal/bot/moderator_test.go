@@ -222,14 +222,20 @@ func TestHandleModSubscribers(t *testing.T) {
 	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			if r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-300" {
+			// batch-запрос вместо поштучных
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users" {
 				payload, err := json.Marshal(map[string]any{
 					"response": map[string]any{
-						"uuid":      "uuid-300",
-						"username":  "alive",
-						"status":    remnawave.StatusActive,
-						"expireAt":  time.Now().UTC().AddDate(0, 0, 10).Format(time.RFC3339),
-						"createdAt": time.Now().UTC().Format(time.RFC3339),
+						"users": []map[string]any{
+							{
+								"uuid":      "uuid-300",
+								"username":  "alive",
+								"status":    remnawave.StatusActive,
+								"expireAt":  time.Now().UTC().AddDate(0, 0, 10).Format(time.RFC3339),
+								"createdAt": time.Now().UTC().Format(time.RFC3339),
+							},
+						},
+						"total": 1,
 					},
 				})
 				require.NoError(t, err)
@@ -483,6 +489,152 @@ func TestBanModerator_CascadeDelete(t *testing.T) {
 	invites, err := db.GetInvitesWithUsersByCreator(modID)
 	assert.NoError(t, err)
 	assert.Empty(t, invites)
+}
+
+// --- Тест batch API для handleModSubscribers ---
+
+// TestHandleModSubscribers_UsesBatchAPI проверяет, что handleModSubscribers использует
+// один batch-запрос к Remnawave вместо N отдельных GetUser запросов.
+func TestHandleModSubscribers_UsesBatchAPI(t *testing.T) {
+	b, db, _, modID := setupModeratorTestBot(t)
+
+	// Создаём двух подписчиков
+	_, err := db.CreateUser(310, "alice", "Alice", "uuid-310")
+	require.NoError(t, err)
+	inv1, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv1.Code, 310))
+
+	_, err = db.CreateUser(311, "bob", "Bob", "uuid-311")
+	require.NoError(t, err)
+	inv2, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv2.Code, 311))
+
+	// Считаем запросы к API
+	apiCallPaths := []string{}
+	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			apiCallPaths = append(apiCallPaths, r.URL.Path)
+			if r.URL.Path == "/api/users" {
+				// batch-ответ с обоими пользователями
+				payload, _ := json.Marshal(map[string]any{
+					"response": map[string]any{
+						"users": []map[string]any{
+							{"uuid": "uuid-310", "username": "alice", "status": remnawave.StatusActive,
+								"expireAt":  time.Now().UTC().AddDate(0, 0, 10).Format(time.RFC3339),
+								"createdAt": time.Now().UTC().Format(time.RFC3339)},
+							{"uuid": "uuid-311", "username": "bob", "status": remnawave.StatusActive,
+								"expireAt":  time.Now().UTC().AddDate(0, 0, 5).Format(time.RFC3339),
+								"createdAt": time.Now().UTC().Format(time.RFC3339)},
+						},
+						"total": 2,
+					},
+				})
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(payload))),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}),
+	})
+	b.remnawave = client
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: modID, Username: "moderator"},
+		message: &tele.Message{},
+	}
+
+	err = b.handleModSubscribers(ctx)
+	require.NoError(t, err)
+
+	// Проверяем: должен быть ТОЛЬКО один запрос к /api/users (batch), а не /api/users/<uuid>
+	for _, path := range apiCallPaths {
+		assert.NotContains(t, path, "uuid-310", "не должно быть отдельного запроса по uuid")
+		assert.NotContains(t, path, "uuid-311", "не должно быть отдельного запроса по uuid")
+	}
+	assert.Len(t, apiCallPaths, 1, "должен быть ровно один batch-запрос")
+
+	sentStr, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, sentStr, "alice")
+	assert.Contains(t, sentStr, "bob")
+}
+
+// --- Тест утечки состояния при ошибке продления ---
+
+// TestProcessModExtendConfirm_ClearsStateOnExtendError проверяет, что при ошибке
+// продления подписки состояние и сессия очищаются, иначе следующее сообщение
+// модератора снова попадёт в обработчик подтверждения.
+func TestProcessModExtendConfirm_ClearsStateOnExtendError(t *testing.T) {
+	b, db, _, modID := setupModeratorTestBot(t)
+
+	// Создаём подписчика
+	_, err := db.CreateUser(400, "sub400", "Sub", "uuid-400")
+	require.NoError(t, err)
+	inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, 400))
+
+	// Настраиваем Remnawave — первый вызов (preview) успешен, второй (extend) — ошибка
+	callCount := 0
+	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			callCount++
+			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "uuid-400") {
+				payload, _ := json.Marshal(map[string]any{
+					"response": map[string]any{
+						"uuid":      "uuid-400",
+						"username":  "sub400",
+						"status":    remnawave.StatusActive,
+						"expireAt":  time.Now().UTC().AddDate(0, 0, 10).Format(time.RFC3339),
+						"createdAt": time.Now().UTC().Format(time.RFC3339),
+					},
+				})
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(payload))),
+					Header:     make(http.Header),
+				}, nil
+			}
+			// PATCH — симулируем ошибку API при продлении
+			if r.Method == http.MethodPatch {
+				return &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Body:       io.NopCloser(strings.NewReader(`{"error":"internal"}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, fmt.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}),
+	})
+	b.remnawave = client
+
+	// Шаг 1: ввод ID подписчика
+	ctxID := &MockContext{
+		sender:  &tele.User{ID: modID},
+		message: &tele.Message{Text: "400"},
+	}
+	err = b.processModExtendID(ctxID, "400")
+	require.NoError(t, err)
+	require.Equal(t, StateWaitModExtendConfirm, b.userStates.Get(modID))
+
+	// Шаг 2: подтверждение — получаем ошибку API
+	ctxConfirm := &MockContext{
+		sender:  &tele.User{ID: modID},
+		message: &tele.Message{Text: "да"},
+	}
+	err = b.processModExtendConfirm(ctxConfirm, "да")
+	require.NoError(t, err)
+
+	// После ошибки продления: состояние и сессия должны быть очищены
+	assert.Empty(t, b.userStates.Get(modID), "состояние должно быть очищено после ошибки")
+	_, sessionExists := b.getModExtendSession(modID)
+	assert.False(t, sessionExists, "сессия должна быть очищена после ошибки")
 }
 
 // --- Тесты handleStart с меню модератора ---
