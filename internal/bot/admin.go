@@ -14,10 +14,10 @@ import (
 
 // Состояния админа
 const (
-	StateWaitBanUser         = "wait_ban_user"         // Ожидание telegram_id для бана
-	StateWaitDeleteInvite    = "wait_delete_invite"    // Ожидание кода для удаления
-	StateWaitAddModerator    = "wait_add_moderator"    // Ожидание telegram_id для назначения модератора
-	StateWaitRemoveModerator = "wait_remove_moderator" // Ожидание telegram_id для снятия модератора
+	StateWaitBanUser                   = "wait_ban_user"                    // Ожидание telegram_id для бана
+	StateWaitDeleteInvite              = "wait_delete_invite"               // Ожидание кода для удаления
+	StateWaitAddModerator              = "wait_add_moderator"               // Ожидание telegram_id для назначения модератора
+	StateWaitRemoveModerator           = "wait_remove_moderator"            // Ожидание telegram_id для снятия модератора
 	StateWaitSwitchSubscriptionID      = "wait_switch_subscription_id"      // Ожидание telegram_id для смены тарифа
 	StateWaitSwitchSubscriptionConfirm = "wait_switch_subscription_confirm" // Ожидание подтверждения смены тарифа
 )
@@ -298,6 +298,9 @@ func (b *Bot) processBanUser(c tele.Context, text string) error {
 func formatAdminSwitchTargetLabel(user *database.User) string {
 	if user == nil {
 		return "пользователь"
+	}
+	if user.FirstName != "" && user.Username != "" {
+		return fmt.Sprintf("%s (@%s)", user.FirstName, user.Username)
 	}
 	if user.Username != "" {
 		return "@" + user.Username

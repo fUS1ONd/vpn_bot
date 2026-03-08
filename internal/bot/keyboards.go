@@ -24,14 +24,14 @@ const (
 	BtnServers = "📡 Серверы"
 
 	// Админ-кнопки
-	BtnAdminManage       = "📋 Управление"
-	BtnAdminBroadcast    = "📢 Рассылка"
-	BtnAdminUserMode     = "👤 Режим пользователя"
-	BtnAdminBack         = "🔙 В меню админа"
-	BtnAdminCreateInvite = "🎟 Создать инвайт"
-	BtnAdminViewInvites  = "📋 Коды"
-	BtnAdminDeleteInvite = "🗑 Удалить код"
-	BtnAdminBanUser      = "🚫 Забанить"
+	BtnAdminManage             = "📋 Управление"
+	BtnAdminBroadcast          = "📢 Рассылка"
+	BtnAdminUserMode           = "👤 Режим пользователя"
+	BtnAdminBack               = "🔙 В меню админа"
+	BtnAdminCreateInvite       = "🎟 Создать инвайт"
+	BtnAdminViewInvites        = "📋 Коды"
+	BtnAdminDeleteInvite       = "🗑 Удалить код"
+	BtnAdminBanUser            = "🚫 Забанить"
 	BtnAdminSwitchSubscription = "♾️ Сменить тариф"
 
 	// Кнопки подтверждения
