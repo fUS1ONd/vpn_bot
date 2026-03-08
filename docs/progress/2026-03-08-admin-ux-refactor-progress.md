@@ -88,6 +88,35 @@
 
 Обновлён `TestModeratorViewInvites` под новый формат.
 
+## Фиксы после code review (коммит `7bb674b`)
+
+Все 4 находки подтверждены и исправлены по TDD.
+
+### Medium: дублирование ID в списке подписчиков модератора
+
+`handleModSubscribers` дописывал ` • ID: <code>%d</code>` поверх `formatSubscriberLabel`, который уже
+содержит ID через `formatUserLabel`. Убраны лишние дописывания в строках 174 и 184 `moderator.go`.
+
+### Medium: дублирование ID в диалоге продления подписки
+
+`handleModExtend` строил `• <code>%d</code> — %s` где `%s` уже содержал ID. Заменено на `• %s`.
+
+### Medium: firstName без HTML-экранирования
+
+`formatUserLabel` вставлял `firstName` в HTML без экранирования — имя `<b>Alex</b>` ломало разметку.
+Добавлен `html.EscapeString(name)`. Покрыто тестами `TestFormatUserLabel_HTMLEscaping`.
+
+### Low: success-сообщение смены тарифа без ParseMode HTML
+
+`processSwitchSubscriptionConfirm` отправлял финальное сообщение без `ParseMode: tele.ModeHTML`.
+В fallback-сценарии (нет имени/username) `TargetLabel` содержит `<code>ID</code>` — пользователь видел
+literal-теги. Добавлен `ParseMode: tele.ModeHTML`.
+
+### Low: тест закрепил старый формат
+
+`moderator_test.go:264` ожидал `"ID: <code>300</code>"` — старый формат. Обновлён на `<code>300</code>`.
+Добавлен `TestFormatSubscriberLabel_ContainsIDOnce` — проверяет что ID в label ровно один раз.
+
 ## Результат
 
 Все тесты зелёные (`make tests`), форматирование чистое (`make fmt`).
