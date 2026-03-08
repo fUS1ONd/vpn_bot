@@ -261,7 +261,7 @@ func TestHandleModSubscribers(t *testing.T) {
 	sentStr, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
 	assert.Contains(t, sentStr, "Мои подписчики")
-	assert.Contains(t, sentStr, "ID: <code>300</code>")
+	assert.Contains(t, sentStr, `<code>300</code>`)
 	assert.Contains(t, sentStr, "удалён")
 }
 

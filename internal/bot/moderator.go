@@ -171,7 +171,7 @@ func (b *Bot) handleModSubscribers(c tele.Context) error {
 			if daysToKick < 0 {
 				daysToKick = 0
 			}
-			fmt.Fprintf(&msg, "⏰ %s • ID: <code>%d</code>\n", label, sub.TelegramID)
+			fmt.Fprintf(&msg, "⏰ %s\n", label)
 			fmt.Fprintf(&msg, "   истёк %s (кик через %d дн.)\n\n", remUser.ExpireAt.Format("02.01.06"), daysToKick)
 			continue
 		}
@@ -181,7 +181,7 @@ func (b *Bot) handleModSubscribers(c tele.Context) error {
 		if daysLeft < 0 {
 			daysLeft = 0
 		}
-		fmt.Fprintf(&msg, "✅ %s • ID: <code>%d</code>\n", label, sub.TelegramID)
+		fmt.Fprintf(&msg, "✅ %s\n", label)
 		fmt.Fprintf(&msg, "   до %s (осталось %d дн.)\n\n", remUser.ExpireAt.Format("02.01.06"), daysLeft)
 	}
 
@@ -216,7 +216,7 @@ func (b *Bot) handleModExtend(c tele.Context) error {
 			fmt.Fprintf(&msg, "❌ <code>%d</code> — удалён\n", sub.TelegramID)
 			continue
 		}
-		fmt.Fprintf(&msg, "• <code>%d</code> — %s\n", sub.TelegramID, formatSubscriberLabel(sub))
+		fmt.Fprintf(&msg, "• %s\n", formatSubscriberLabel(sub))
 	}
 	msg.WriteString("\nВведите telegram_id подписчика:")
 

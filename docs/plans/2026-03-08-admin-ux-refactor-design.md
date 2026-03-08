@@ -141,3 +141,40 @@
 ### Тесты
 
 - Обновить ожидания в тестах, которые проверяют текст вывода с `•`
+
+## Найденные баги после реализации (code review)
+
+### Medium: дублирование ID в списке подписчиков модератора
+
+`handleModSubscribers` (`moderator.go:174, 184`) дописывает ` • ID: <code>%d</code>` поверх результата
+`formatSubscriberLabel`, который уже содержит ID. Итог: ID показывается дважды, разделитель `•` остался.
+
+Фикс: убрать ` • ID: <code>%d</code>` из строк 174 и 184, оставить только `%s`.
+
+### Medium: дублирование ID в диалоге продления подписки
+
+`handleModExtend` (`moderator.go:219`) строит строку `• <code>%d</code> — %s`, где `%s` =
+`formatSubscriberLabel` с ID внутри. Итог: ID дублируется, `•` смешан со старым форматом.
+
+Фикс: заменить на `• %s` без отдельного ID.
+
+### Medium: firstName не экранируется в HTML
+
+`formatUserLabel` (`format.go:13`) вставляет `firstName` в HTML-атрибут и тело тега без экранирования.
+Имя вроде `<b>Alex</b>` или `Tom & Jerry` ломает разметку во всех экранах на ModeHTML.
+
+Фикс: экранировать `firstName` через `html.EscapeString`.
+
+### Low: success-сообщение смены тарифа без ParseMode HTML
+
+`processSwitchSubscriptionConfirm` (`admin.go:235`) отправляет сообщение без `ParseMode: tele.ModeHTML`,
+хотя `session.TargetLabel` в fallback-сценарии (нет имени, нет username) содержит `<code>123</code>`.
+Пользователь видит literal-теги.
+
+Фикс: добавить `ParseMode: tele.ModeHTML` в SendOptions.
+
+### Low: тест закрепил старый формат вместо нового
+
+`moderator_test.go:264` проверяет `"ID: <code>300</code>"` — старый формат, которого больше нет.
+Тест проходит только потому, что `handleModSubscribers` ещё дописывает ID вручную (баг #1).
+После фикса #1 тест должен ожидать новый формат через `formatUserLabel`.

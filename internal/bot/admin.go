@@ -234,7 +234,7 @@ func (b *Bot) processSwitchSubscriptionConfirm(c tele.Context, text string) erro
 
 	return c.Send(
 		fmt.Sprintf("✅ Пользователь %s переведён на бессрочный тариф.", session.TargetLabel),
-		&tele.SendOptions{ReplyMarkup: AdminManageKeyboard()},
+		&tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: AdminManageKeyboard()},
 	)
 }
 

@@ -32,6 +32,34 @@ func TestFormatUserLabel(t *testing.T) {
 	})
 }
 
+// TestFormatUserLabel_HTMLEscaping проверяет что firstName экранируется в HTML
+func TestFormatUserLabel_HTMLEscaping(t *testing.T) {
+	t.Run("имя с HTML-тегами экранируется", func(t *testing.T) {
+		result := formatUserLabel("<b>Alex</b>", "", 123)
+		assert.NotContains(t, result, "<b>Alex</b>")
+		assert.Contains(t, result, "&lt;b&gt;Alex&lt;/b&gt;")
+	})
+
+	t.Run("имя с амперсандом экранируется", func(t *testing.T) {
+		result := formatUserLabel("Tom & Jerry", "", 123)
+		assert.NotContains(t, result, "Tom & Jerry")
+		assert.Contains(t, result, "Tom &amp; Jerry")
+	})
+}
+
+// TestFormatSubscriberLabel_ContainsIDOnce проверяет что ID присутствует ровно один раз в label
+func TestFormatSubscriberLabel_ContainsIDOnce(t *testing.T) {
+	firstName := "Иван"
+	username := "ivan"
+	sub := database.Subscriber{TelegramID: 300, FirstName: &firstName, Username: &username}
+
+	label := formatSubscriberLabel(sub)
+	// ID должен присутствовать ровно один раз — в <code>
+	assert.Equal(t, 1, strings.Count(label, "<code>300</code>"), "ID должен быть в <code> ровно один раз")
+	// deep link содержит ID в href — это нормально, но не дублирование в тексте
+	assert.Equal(t, 1, strings.Count(label, ">300<"), "ID не должен появляться в тексте отдельно")
+}
+
 // TestAdminKeyboardContainsModeratorsOnTopLevel проверяет что Модераторы на верхнем уровне
 func TestAdminKeyboardContainsModeratorsOnTopLevel(t *testing.T) {
 	keyboard := AdminKeyboard()
