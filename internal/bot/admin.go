@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"html"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -300,13 +301,13 @@ func formatAdminSwitchTargetLabel(user *database.User) string {
 		return "пользователь"
 	}
 	if user.FirstName != "" && user.Username != "" {
-		return fmt.Sprintf("%s (@%s)", user.FirstName, user.Username)
+		return fmt.Sprintf("%s (@%s)", html.EscapeString(user.FirstName), user.Username)
 	}
 	if user.Username != "" {
 		return "@" + user.Username
 	}
 	if user.FirstName != "" {
-		return user.FirstName
+		return html.EscapeString(user.FirstName)
 	}
 	return fmt.Sprintf("<code>%d</code>", user.TelegramID)
 }
@@ -321,7 +322,7 @@ func (b *Bot) formatAdminSwitchCurator(curatorID int64) string {
 			return "@" + user.Username
 		}
 		if user.FirstName != "" {
-			return user.FirstName
+			return html.EscapeString(user.FirstName)
 		}
 	}
 	if curatorID == b.config.AdminID {

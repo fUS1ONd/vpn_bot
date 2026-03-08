@@ -235,6 +235,30 @@ func TestHandleAdminModStats(t *testing.T) {
 	assert.Contains(t, msg, "Активных: 1")
 }
 
+// TestFormatAdminSwitchTargetLabel_HTMLEscaping проверяет экранирование HTML в имени пользователя
+func TestFormatAdminSwitchTargetLabel_HTMLEscaping(t *testing.T) {
+	t.Run("имя с HTML-тегами экранируется", func(t *testing.T) {
+		user := &database.User{TelegramID: 123, FirstName: "<b>Alex</b>"}
+		result := formatAdminSwitchTargetLabel(user)
+		assert.NotContains(t, result, "<b>Alex</b>")
+		assert.Contains(t, result, "&lt;b&gt;Alex&lt;/b&gt;")
+	})
+
+	t.Run("имя с амперсандом экранируется", func(t *testing.T) {
+		user := &database.User{TelegramID: 123, FirstName: "Tom & Jerry"}
+		result := formatAdminSwitchTargetLabel(user)
+		assert.NotContains(t, result, "Tom & Jerry")
+		assert.Contains(t, result, "Tom &amp; Jerry")
+	})
+
+	t.Run("имя и username — оба экранируются корректно", func(t *testing.T) {
+		user := &database.User{TelegramID: 123, FirstName: "Tom & Jerry", Username: "tom"}
+		result := formatAdminSwitchTargetLabel(user)
+		assert.Contains(t, result, "Tom &amp; Jerry")
+		assert.Contains(t, result, "@tom")
+	})
+}
+
 func TestProcessSwitchSubscriptionID_ValidationErrors(t *testing.T) {
 	dbFile := "test_admin_switch_validation.db"
 	db, err := database.New(dbFile)
