@@ -24,14 +24,18 @@ const (
 	BtnServers = "📡 Серверы"
 
 	// Админ-кнопки
-	BtnAdminManage       = "📋 Управление"
-	BtnAdminBroadcast    = "📢 Рассылка"
-	BtnAdminUserMode     = "👤 Режим пользователя"
-	BtnAdminBack         = "🔙 В меню админа"
-	BtnAdminCreateInvite = "🎟 Создать инвайт"
-	BtnAdminViewInvites  = "📋 Коды"
-	BtnAdminDeleteInvite = "🗑 Удалить код"
-	BtnAdminBanUser      = "🚫 Забанить"
+	BtnAdminManage             = "📋 Управление"
+	BtnAdminBroadcast          = "📢 Рассылка"
+	BtnAdminUserMode           = "👤 Режим пользователя"
+	BtnAdminBack               = "🔙 В меню админа"
+	BtnAdminCreateInvite       = "🎟 Создать инвайт"
+	BtnAdminViewInvites        = "📋 Коды"
+	BtnAdminDeleteInvite       = "🗑 Удалить код"
+	BtnAdminBanUser            = "🚫 Забанить"
+	BtnAdminSwitchSubscription = "♾️ Сменить тариф"
+
+	// Кнопки подтверждения
+	BtnConfirmYes = "Да"
 
 	// Кнопки рассылки — только активным (у кого есть доступ)
 	BtnBroadcastActive = "📢 Рассылка активным"
@@ -79,19 +83,19 @@ func InstructionsKeyboard() *tele.ReplyMarkup {
 func AdminKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
-		menu.Row(menu.Text(BtnAdminManage), menu.Text(BtnAdminBroadcast)),
-		menu.Row(menu.Text(BtnAdminUserMode)),
+		menu.Row(menu.Text(BtnAdminManage), menu.Text(BtnAdminModerators)),
+		menu.Row(menu.Text(BtnAdminBroadcast), menu.Text(BtnAdminUserMode)),
 	)
 	return menu
 }
 
-// AdminManageKeyboard возвращает меню управления
+// AdminManageKeyboard возвращает меню управления (инвайты + действия с пользователями)
 func AdminManageKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnAdminCreateInvite), menu.Text(BtnAdminViewInvites)),
 		menu.Row(menu.Text(BtnAdminBanUser), menu.Text(BtnAdminDeleteInvite)),
-		menu.Row(menu.Text(BtnAdminModerators)),
+		menu.Row(menu.Text(BtnAdminSwitchSubscription)),
 		menu.Row(menu.Text(BtnAdminBack)),
 	)
 	return menu
@@ -149,6 +153,15 @@ func CancelKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnCancel)),
+	)
+	return menu
+}
+
+// ConfirmKeyboard возвращает клавиатуру подтверждения.
+func ConfirmKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnConfirmYes), menu.Text(BtnCancel)),
 	)
 	return menu
 }

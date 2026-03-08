@@ -24,17 +24,19 @@ const (
 
 // Bot представляет Telegram бота
 type Bot struct {
-	bot           *tele.Bot
-	db            *database.DB
-	remnawave     *remnawave.Client
-	config        *config.Config
-	userStates    *stateMap
-	metricsClient *monitoring.MetricsClient // клиент метрик VM
-	dashboardMgr  *dashboardManager         // менеджер сессий дашборда
-	sdConfigsPath string                    // путь к sd_configs (для чтения targets)
-	render        *render.Client            // клиент render-сервиса (nil если не настроен)
-	modExtendMu   sync.RWMutex
-	modExtendData map[int64]modExtendSession // pending-данные продления для модератора
+	bot             *tele.Bot
+	db              *database.DB
+	remnawave       *remnawave.Client
+	config          *config.Config
+	userStates      *stateMap
+	metricsClient   *monitoring.MetricsClient // клиент метрик VM
+	dashboardMgr    *dashboardManager         // менеджер сессий дашборда
+	sdConfigsPath   string                    // путь к sd_configs (для чтения targets)
+	render          *render.Client            // клиент render-сервиса (nil если не настроен)
+	modExtendMu     sync.RWMutex
+	modExtendData   map[int64]modExtendSession // pending-данные продления для модератора
+	adminSwitchMu   sync.RWMutex
+	adminSwitchData map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
 }
 
 // New создаёт нового Telegram бота
@@ -50,15 +52,16 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	}
 
 	bot := &Bot{
-		bot:           b,
-		db:            db,
-		remnawave:     remnawaveClient,
-		config:        cfg,
-		userStates:    newStateMap(),
-		metricsClient: monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
-		dashboardMgr:  newDashboardManager(),
-		sdConfigsPath: cfg.SDConfigsPath,
-		modExtendData: make(map[int64]modExtendSession),
+		bot:             b,
+		db:              db,
+		remnawave:       remnawaveClient,
+		config:          cfg,
+		userStates:      newStateMap(),
+		metricsClient:   monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
+		dashboardMgr:    newDashboardManager(),
+		sdConfigsPath:   cfg.SDConfigsPath,
+		modExtendData:   make(map[int64]modExtendSession),
+		adminSwitchData: make(map[int64]adminSwitchSession),
 	}
 
 	// Middleware для логирования
@@ -226,6 +229,26 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processDeleteInvite(c, text)
 		}
 
+	case StateWaitSwitchSubscriptionID:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearAdminSwitchSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processSwitchSubscriptionID(c, text)
+		}
+
+	case StateWaitSwitchSubscriptionConfirm:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearAdminSwitchSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processSwitchSubscriptionConfirm(c, text)
+		}
+
 	case StateWaitModDeleteInvite:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
@@ -288,6 +311,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleViewInvites(c)
 		case BtnAdminDeleteInvite:
 			return b.handleDeleteInviteRequest(c)
+		case BtnAdminSwitchSubscription:
+			return b.handleSwitchSubscription(c)
 		case BtnBroadcastActive:
 			return b.handleBroadcastActiveRequest(c)
 		case BtnAdminModerators:

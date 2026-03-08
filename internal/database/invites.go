@@ -151,6 +151,30 @@ func (db *DB) UnclaimInvite(code string) error {
 	return nil
 }
 
+// UpdateInviteExpireDays обновляет срок действия инвайта по пользователю, который его активировал.
+// expireDays = nil означает бессрочный тариф.
+func (db *DB) UpdateInviteExpireDays(usedBy int64, expireDays *int) error {
+	result, err := db.conn.Exec(
+		`UPDATE invites
+		 SET expire_days = ?
+		 WHERE used_by = ? AND kicked_at IS NULL`,
+		expireDays, usedBy,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update invite expire_days: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get affected rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("invite not found")
+	}
+
+	return nil
+}
+
 // UseInvite помечает инвайт как использованный с временем активации
 // Deprecated: используй ClaimInvite для атомарной операции
 func (db *DB) UseInvite(code string, usedBy int64) error {

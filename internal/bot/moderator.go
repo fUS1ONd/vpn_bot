@@ -89,16 +89,7 @@ func (b *Bot) handleModeratorViewInvites(c tele.Context) error {
 			fmt.Fprintf(&msg, "🔹 Код: <code>%s</code>\n", inv.Code)
 
 			// Информация о пользователе
-			if inv.UserUsername != "" {
-				fmt.Fprintf(&msg, "👤 @%s", inv.UserUsername)
-			} else {
-				msg.WriteString("👤 пользователь")
-			}
-			if inv.UserFirstName != "" {
-				fmt.Fprintf(&msg, " • %s", inv.UserFirstName)
-			}
-			fmt.Fprintf(&msg, " • ID: <code>%d</code>", *inv.UsedBy)
-			msg.WriteString("\n")
+			fmt.Fprintf(&msg, "👤 %s\n", formatUserLabel(inv.UserFirstName, inv.UserUsername, *inv.UsedBy))
 
 			if inv.UsedAt != nil {
 				fmt.Fprintf(&msg, "📅 %s\n", inv.UsedAt.Format("02.01.06 15:04"))
@@ -180,7 +171,7 @@ func (b *Bot) handleModSubscribers(c tele.Context) error {
 			if daysToKick < 0 {
 				daysToKick = 0
 			}
-			fmt.Fprintf(&msg, "⏰ %s • ID: <code>%d</code>\n", label, sub.TelegramID)
+			fmt.Fprintf(&msg, "⏰ %s\n", label)
 			fmt.Fprintf(&msg, "   истёк %s (кик через %d дн.)\n\n", remUser.ExpireAt.Format("02.01.06"), daysToKick)
 			continue
 		}
@@ -190,7 +181,7 @@ func (b *Bot) handleModSubscribers(c tele.Context) error {
 		if daysLeft < 0 {
 			daysLeft = 0
 		}
-		fmt.Fprintf(&msg, "✅ %s • ID: <code>%d</code>\n", label, sub.TelegramID)
+		fmt.Fprintf(&msg, "✅ %s\n", label)
 		fmt.Fprintf(&msg, "   до %s (осталось %d дн.)\n\n", remUser.ExpireAt.Format("02.01.06"), daysLeft)
 	}
 
@@ -225,7 +216,7 @@ func (b *Bot) handleModExtend(c tele.Context) error {
 			fmt.Fprintf(&msg, "❌ <code>%d</code> — удалён\n", sub.TelegramID)
 			continue
 		}
-		fmt.Fprintf(&msg, "• <code>%d</code> — %s\n", sub.TelegramID, formatSubscriberLabel(sub))
+		fmt.Fprintf(&msg, "• %s\n", formatSubscriberLabel(sub))
 	}
 	msg.WriteString("\nВведите telegram_id подписчика:")
 
@@ -347,17 +338,15 @@ func (b *Bot) processModExtendConfirm(c tele.Context, text string) error {
 }
 
 func formatSubscriberLabel(sub database.Subscriber) string {
-	var parts []string
-	if sub.Username != nil && *sub.Username != "" {
-		parts = append(parts, "@"+*sub.Username)
+	firstName := ""
+	if sub.FirstName != nil {
+		firstName = *sub.FirstName
 	}
-	if sub.FirstName != nil && *sub.FirstName != "" {
-		parts = append(parts, *sub.FirstName)
+	username := ""
+	if sub.Username != nil {
+		username = *sub.Username
 	}
-	if len(parts) == 0 {
-		return "пользователь"
-	}
-	return strings.Join(parts, " • ")
+	return formatUserLabel(firstName, username, sub.TelegramID)
 }
 
 func (b *Bot) setModExtendSession(moderatorID int64, session modExtendSession) {
