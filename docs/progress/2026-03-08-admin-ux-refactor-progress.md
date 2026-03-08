@@ -117,6 +117,21 @@ literal-теги. Добавлен `ParseMode: tele.ModeHTML`.
 `moderator_test.go:264` ожидал `"ID: <code>300</code>"` — старый формат. Обновлён на `<code>300</code>`.
 Добавлен `TestFormatSubscriberLabel_ContainsIDOnce` — проверяет что ID в label ровно один раз.
 
-## Результат
+## Фиксы второго code review (коммит `1bf933d`)
+
+### Medium: HTML-инъекция в карточке смены тарифа
+
+`formatAdminSwitchTargetLabel` и `formatAdminSwitchCurator` вставляли `FirstName` в HTML-строку без
+экранирования. Карточка подтверждения отправляется с `ParseMode: HTML`, поэтому имена вроде
+`<b>Alex</b>` или `Tom & Jerry` ломали разметку. Добавлен `html.EscapeString` в обоих местах.
+Покрыто тестом `TestFormatAdminSwitchTargetLabel_HTMLEscaping`.
+
+### Low: README не отражал новую структуру меню
+
+`👥 Модераторы` была описана как вложенная кнопка внутри `📋 Управление`. После рефакторинга она
+на верхнем уровне. README обновлён: добавлена таблица главного меню, панель "Управление" описана
+отдельно без модераторов.
+
+## Итоговый результат
 
 Все тесты зелёные (`make tests`), форматирование чистое (`make fmt`).
