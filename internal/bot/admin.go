@@ -543,17 +543,7 @@ func formatInviteEntry(inv database.InviteWithUser) string {
 		msg.WriteString("✅ <b>Использован</b>\n")
 		msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
 
-		userLink := fmt.Sprintf("<a href=\"tg://user?id=%d\">%d</a>", *inv.UsedBy, *inv.UsedBy)
-		if inv.UserUsername != "" {
-			msg.WriteString(fmt.Sprintf("👤 @%s (%s)", inv.UserUsername, userLink))
-		} else {
-			msg.WriteString(fmt.Sprintf("👤 %s", userLink))
-		}
-
-		if inv.UserFirstName != "" {
-			msg.WriteString(fmt.Sprintf(" • %s", inv.UserFirstName))
-		}
-		msg.WriteString("\n")
+		msg.WriteString("👤 " + formatUserLabel(inv.UserFirstName, inv.UserUsername, *inv.UsedBy) + "\n")
 
 		if inv.UsedAt != nil {
 			msg.WriteString(fmt.Sprintf("📅 %s\n", inv.UsedAt.Format("02.01.06 15:04")))
@@ -705,16 +695,7 @@ func (b *Bot) handleAdminListModerators(c tele.Context) error {
 	fmt.Fprintf(&msg, "<b>📋 Модераторы (%d)</b>\n\n", len(mods))
 
 	for _, mod := range mods {
-		if mod.Username != "" {
-			fmt.Fprintf(&msg, "👤 @%s", mod.Username)
-		} else {
-			msg.WriteString("👤 без username")
-		}
-		if mod.FirstName != "" {
-			fmt.Fprintf(&msg, " • %s", mod.FirstName)
-		}
-		msg.WriteString("\n")
-		fmt.Fprintf(&msg, "🆔 <code>%d</code>\n", mod.TelegramID)
+		fmt.Fprintf(&msg, "👤 %s\n", formatUserLabel(mod.FirstName, mod.Username, mod.TelegramID))
 		fmt.Fprintf(&msg, "📨 Приглашено: %d\n\n", mod.InvitesCount)
 	}
 
@@ -784,16 +765,7 @@ func (b *Bot) handleAdminModStats(c tele.Context) error {
 		totalActive += active
 		totalExpired += expired
 
-		name := fmt.Sprintf("<code>%d</code>", mod.TelegramID)
-		if mod.Username != "" {
-			name = "@" + mod.Username
-		}
-
-		fmt.Fprintf(&msg, "👤 %s", name)
-		if mod.FirstName != "" {
-			fmt.Fprintf(&msg, " • %s", mod.FirstName)
-		}
-		msg.WriteString("\n")
+		fmt.Fprintf(&msg, "👤 %s\n", formatUserLabel(mod.FirstName, mod.Username, mod.TelegramID))
 		fmt.Fprintf(&msg, "   ✅ Активных: %d\n", active)
 		fmt.Fprintf(&msg, "   ⏰ Истекших: %d\n", expired)
 		fmt.Fprintf(&msg, "   👥 Всего приглашено: %d\n\n", len(subs))

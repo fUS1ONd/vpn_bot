@@ -121,7 +121,7 @@ func TestModeratorViewInvites(t *testing.T) {
 	sentStr, ok := ctx.sentMsg.(string)
 	assert.True(t, ok)
 	assert.Contains(t, sentStr, "Мои приглашения")
-	assert.Contains(t, sentStr, "ID: <code>501</code>")
+	assert.Contains(t, sentStr, "<code>501</code>")
 }
 
 func TestModeratorViewInvites_Empty(t *testing.T) {

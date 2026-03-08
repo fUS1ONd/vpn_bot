@@ -83,20 +83,19 @@ func InstructionsKeyboard() *tele.ReplyMarkup {
 func AdminKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
-		menu.Row(menu.Text(BtnAdminManage), menu.Text(BtnAdminBroadcast)),
-		menu.Row(menu.Text(BtnAdminUserMode)),
+		menu.Row(menu.Text(BtnAdminManage), menu.Text(BtnAdminModerators)),
+		menu.Row(menu.Text(BtnAdminBroadcast), menu.Text(BtnAdminUserMode)),
 	)
 	return menu
 }
 
-// AdminManageKeyboard возвращает меню управления
+// AdminManageKeyboard возвращает меню управления (инвайты + действия с пользователями)
 func AdminManageKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnAdminCreateInvite), menu.Text(BtnAdminViewInvites)),
 		menu.Row(menu.Text(BtnAdminBanUser), menu.Text(BtnAdminDeleteInvite)),
 		menu.Row(menu.Text(BtnAdminSwitchSubscription)),
-		menu.Row(menu.Text(BtnAdminModerators)),
 		menu.Row(menu.Text(BtnAdminBack)),
 	)
 	return menu
