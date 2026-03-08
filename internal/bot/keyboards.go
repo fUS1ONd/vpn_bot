@@ -32,6 +32,10 @@ const (
 	BtnAdminViewInvites  = "📋 Коды"
 	BtnAdminDeleteInvite = "🗑 Удалить код"
 	BtnAdminBanUser      = "🚫 Забанить"
+	BtnAdminSwitchSubscription = "♾️ Сменить тариф"
+
+	// Кнопки подтверждения
+	BtnConfirmYes = "Да"
 
 	// Кнопки рассылки — только активным (у кого есть доступ)
 	BtnBroadcastActive = "📢 Рассылка активным"
@@ -91,6 +95,7 @@ func AdminManageKeyboard() *tele.ReplyMarkup {
 	menu.Reply(
 		menu.Row(menu.Text(BtnAdminCreateInvite), menu.Text(BtnAdminViewInvites)),
 		menu.Row(menu.Text(BtnAdminBanUser), menu.Text(BtnAdminDeleteInvite)),
+		menu.Row(menu.Text(BtnAdminSwitchSubscription)),
 		menu.Row(menu.Text(BtnAdminModerators)),
 		menu.Row(menu.Text(BtnAdminBack)),
 	)
@@ -149,6 +154,15 @@ func CancelKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnCancel)),
+	)
+	return menu
+}
+
+// ConfirmKeyboard возвращает клавиатуру подтверждения.
+func ConfirmKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnConfirmYes), menu.Text(BtnCancel)),
 	)
 	return menu
 }

@@ -228,6 +228,15 @@ func (c *Client) UpdateUsername(uuid string, username string) error {
 		Username: &username,
 	}
 
+	return c.UpdateUser(uuid, req)
+}
+
+// UpdateUser обновляет данные пользователя в панели Remnawave.
+func (c *Client) UpdateUser(uuid string, req UpdateUserRequest) error {
+	if req.UUID == "" {
+		req.UUID = uuid
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -298,13 +307,7 @@ func (c *Client) ExtendUserSubscription(uuid string, days int) error {
 		UUID:     uuid,
 		ExpireAt: &expireAt,
 	}
-
-	body, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal update request: %w", err)
-	}
-
-	if _, err := c.doRequest("PATCH", "/api/users", body); err != nil {
+	if err := c.UpdateUser(uuid, req); err != nil {
 		return fmt.Errorf("failed to update user expireAt: %w", err)
 	}
 

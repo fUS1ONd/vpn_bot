@@ -35,6 +35,8 @@ type Bot struct {
 	render        *render.Client            // клиент render-сервиса (nil если не настроен)
 	modExtendMu   sync.RWMutex
 	modExtendData map[int64]modExtendSession // pending-данные продления для модератора
+	adminSwitchMu   sync.RWMutex
+	adminSwitchData map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
 }
 
 // New создаёт нового Telegram бота
@@ -59,6 +61,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		dashboardMgr:  newDashboardManager(),
 		sdConfigsPath: cfg.SDConfigsPath,
 		modExtendData: make(map[int64]modExtendSession),
+		adminSwitchData: make(map[int64]adminSwitchSession),
 	}
 
 	// Middleware для логирования
@@ -226,6 +229,26 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processDeleteInvite(c, text)
 		}
 
+	case StateWaitSwitchSubscriptionID:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearAdminSwitchSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processSwitchSubscriptionID(c, text)
+		}
+
+	case StateWaitSwitchSubscriptionConfirm:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearAdminSwitchSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processSwitchSubscriptionConfirm(c, text)
+		}
+
 	case StateWaitModDeleteInvite:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
@@ -288,6 +311,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleViewInvites(c)
 		case BtnAdminDeleteInvite:
 			return b.handleDeleteInviteRequest(c)
+		case BtnAdminSwitchSubscription:
+			return b.handleSwitchSubscription(c)
 		case BtnBroadcastActive:
 			return b.handleBroadcastActiveRequest(c)
 		case BtnAdminModerators:

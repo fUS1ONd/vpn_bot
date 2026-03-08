@@ -21,6 +21,7 @@ func TestAdminManageKeyboardDoesNotContainAddTrafficButton(t *testing.T) {
 	assert.Contains(t, buttons, BtnAdminViewInvites)
 	assert.Contains(t, buttons, BtnAdminDeleteInvite)
 	assert.Contains(t, buttons, BtnAdminBanUser)
+	assert.Contains(t, buttons, BtnAdminSwitchSubscription)
 	assert.Contains(t, buttons, BtnAdminBack)
 }
 

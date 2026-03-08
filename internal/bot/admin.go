@@ -18,7 +18,15 @@ const (
 	StateWaitDeleteInvite    = "wait_delete_invite"    // Ожидание кода для удаления
 	StateWaitAddModerator    = "wait_add_moderator"    // Ожидание telegram_id для назначения модератора
 	StateWaitRemoveModerator = "wait_remove_moderator" // Ожидание telegram_id для снятия модератора
+	StateWaitSwitchSubscriptionID      = "wait_switch_subscription_id"      // Ожидание telegram_id для смены тарифа
+	StateWaitSwitchSubscriptionConfirm = "wait_switch_subscription_confirm" // Ожидание подтверждения смены тарифа
 )
+
+type adminSwitchSession struct {
+	TargetTelegramID int64
+	TargetLabel      string
+	UserUUID         string
+}
 
 // isAdmin проверяет, является ли пользователь админом
 func (b *Bot) isAdmin(c tele.Context) bool {
@@ -77,6 +85,159 @@ func (b *Bot) handleBanUserRequest(c tele.Context) error {
 	})
 }
 
+// handleSwitchSubscription запрашивает telegram_id для смены тарифа.
+func (b *Bot) handleSwitchSubscription(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	b.userStates.Set(c.Sender().ID, StateWaitSwitchSubscriptionID)
+	b.clearAdminSwitchSession(c.Sender().ID)
+
+	return c.Send("<b>♾️ Смена тарифа</b>\n\nВведите telegram_id пользователя:", &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: CancelKeyboard(),
+	})
+}
+
+// processSwitchSubscriptionID проверяет пользователя и показывает карточку подтверждения.
+func (b *Bot) processSwitchSubscriptionID(c tele.Context, text string) error {
+	adminID := c.Sender().ID
+	targetID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
+	if err != nil {
+		return c.Send("Неверный telegram_id", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+	}
+
+	isBanned, err := b.db.IsBanned(targetID)
+	if err != nil {
+		slog.Error("Failed to check ban status before switching subscription", "error", err, "telegram_id", targetID)
+		b.userStates.Delete(adminID)
+		return c.Send("Ошибка проверки пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if isBanned {
+		b.userStates.Delete(adminID)
+		return c.Send("Этот пользователь забанен", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	user, err := b.db.GetUserByTelegramID(targetID)
+	if err != nil {
+		slog.Error("Failed to get user before switching subscription", "error", err, "telegram_id", targetID)
+		b.userStates.Delete(adminID)
+		return c.Send("Ошибка получения пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if user == nil {
+		b.userStates.Delete(adminID)
+		return c.Send("Пользователь не найден", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	invite, err := b.db.GetInviteByUsedBy(targetID)
+	if err != nil {
+		slog.Error("Failed to get invite before switching subscription", "error", err, "telegram_id", targetID)
+		b.userStates.Delete(adminID)
+		return c.Send("Ошибка проверки инвайта пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if invite == nil {
+		b.userStates.Delete(adminID)
+		return c.Send("Инвайт для этого пользователя не найден", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if invite.ExpireDays == nil {
+		b.userStates.Delete(adminID)
+		return c.Send("Этот пользователь уже на бессрочном тарифе", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	remUser, err := b.remnawave.GetUser(user.RemnawaveUUID)
+	if err != nil {
+		slog.Error("Failed to get user from Remnawave before switching subscription", "error", err, "telegram_id", targetID)
+		b.userStates.Delete(adminID)
+		return c.Send("Ошибка при получении данных подписки, попробуйте позже", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	targetLabel := formatAdminSwitchTargetLabel(user)
+	curatorLabel := b.formatAdminSwitchCurator(invite.CreatedBy)
+	expireAt := remUser.ExpireAt.UTC().Format("02.01.2006")
+
+	b.setAdminSwitchSession(adminID, adminSwitchSession{
+		TargetTelegramID: targetID,
+		TargetLabel:      targetLabel,
+		UserUUID:         user.RemnawaveUUID,
+	})
+	b.userStates.Set(adminID, StateWaitSwitchSubscriptionConfirm)
+
+	msg := fmt.Sprintf(
+		"<b>Перевод на бессрочный тариф</b>\n\nИмя: %s\nКуратор: %s\nТекущий срок: до %s\n\nПеревести на бессрочную подписку?",
+		targetLabel,
+		curatorLabel,
+		expireAt,
+	)
+
+	return c.Send(msg, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: ConfirmKeyboard(),
+	})
+}
+
+// processSwitchSubscriptionConfirm подтверждает перевод на бессрочный тариф.
+func (b *Bot) processSwitchSubscriptionConfirm(c tele.Context, text string) error {
+	adminID := c.Sender().ID
+	answer := strings.TrimSpace(text)
+	if answer != BtnConfirmYes {
+		return c.Send("Нажмите 'Да' для подтверждения или 'Отмена' для выхода.", &tele.SendOptions{ReplyMarkup: ConfirmKeyboard()})
+	}
+
+	session, ok := b.getAdminSwitchSession(adminID)
+	if !ok {
+		b.userStates.Delete(adminID)
+		return c.Send("Сессия смены тарифа потеряна. Начните заново.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	remUser, err := b.remnawave.GetUser(session.UserUUID)
+	if err != nil {
+		slog.Error("Failed to refresh user before switching subscription", "error", err, "telegram_id", session.TargetTelegramID)
+		b.userStates.Delete(adminID)
+		b.clearAdminSwitchSession(adminID)
+		return c.Send("Ошибка при обновлении подписки, попробуйте позже", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	if remUser.Status == remnawave.StatusExpired || remUser.Status == remnawave.StatusDisabled {
+		if err := b.remnawave.EnableUser(session.UserUUID); err != nil {
+			slog.Error("Failed to enable user before switching subscription", "error", err, "telegram_id", session.TargetTelegramID)
+			b.userStates.Delete(adminID)
+			b.clearAdminSwitchSession(adminID)
+			return c.Send("Ошибка при обновлении подписки, попробуйте позже", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+		}
+	}
+
+	unlimitedExpireAt := time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC)
+	if err := b.remnawave.UpdateUser(session.UserUUID, remnawave.UpdateUserRequest{
+		UUID:     session.UserUUID,
+		ExpireAt: strPtr(unlimitedExpireAt.Format(time.RFC3339)),
+	}); err != nil {
+		slog.Error("Failed to patch user expireAt while switching subscription", "error", err, "telegram_id", session.TargetTelegramID)
+		b.userStates.Delete(adminID)
+		b.clearAdminSwitchSession(adminID)
+		return c.Send("Ошибка при обновлении подписки, попробуйте позже", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	if err := b.db.UpdateInviteExpireDays(session.TargetTelegramID, nil); err != nil {
+		slog.Error("Failed to update invite expire_days while switching subscription", "error", err, "telegram_id", session.TargetTelegramID)
+		b.userStates.Delete(adminID)
+		b.clearAdminSwitchSession(adminID)
+		return c.Send("Ошибка при обновлении подписки, попробуйте позже", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	if err := b.db.ClearNotifications(session.TargetTelegramID); err != nil {
+		slog.Error("Failed to clear notifications after switching subscription", "error", err, "telegram_id", session.TargetTelegramID)
+	}
+
+	b.userStates.Delete(adminID)
+	b.clearAdminSwitchSession(adminID)
+
+	return c.Send(
+		fmt.Sprintf("✅ Пользователь %s переведён на бессрочный тариф.", session.TargetLabel),
+		&tele.SendOptions{ReplyMarkup: AdminManageKeyboard()},
+	)
+}
+
 // processBanUser обрабатывает бан пользователя
 func (b *Bot) processBanUser(c tele.Context, text string) error {
 	b.userStates.Delete(c.Sender().ID)
@@ -132,6 +293,64 @@ func (b *Bot) processBanUser(c tele.Context, text string) error {
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: AdminManageKeyboard(),
 	})
+}
+
+func formatAdminSwitchTargetLabel(user *database.User) string {
+	if user == nil {
+		return "пользователь"
+	}
+	if user.Username != "" {
+		return "@" + user.Username
+	}
+	if user.FirstName != "" {
+		return user.FirstName
+	}
+	return fmt.Sprintf("<code>%d</code>", user.TelegramID)
+}
+
+func (b *Bot) formatAdminSwitchCurator(curatorID int64) string {
+	user, err := b.db.GetUserByTelegramID(curatorID)
+	if err != nil {
+		slog.Error("Failed to get curator while building switch subscription message", "error", err, "telegram_id", curatorID)
+	}
+	if user != nil {
+		if user.Username != "" {
+			return "@" + user.Username
+		}
+		if user.FirstName != "" {
+			return user.FirstName
+		}
+	}
+	if curatorID == b.config.AdminID {
+		return "админ"
+	}
+	return fmt.Sprintf("<code>%d</code>", curatorID)
+}
+
+func (b *Bot) setAdminSwitchSession(adminID int64, session adminSwitchSession) {
+	b.adminSwitchMu.Lock()
+	defer b.adminSwitchMu.Unlock()
+	if b.adminSwitchData == nil {
+		b.adminSwitchData = make(map[int64]adminSwitchSession)
+	}
+	b.adminSwitchData[adminID] = session
+}
+
+func (b *Bot) getAdminSwitchSession(adminID int64) (adminSwitchSession, bool) {
+	b.adminSwitchMu.RLock()
+	defer b.adminSwitchMu.RUnlock()
+	session, ok := b.adminSwitchData[adminID]
+	return session, ok
+}
+
+func (b *Bot) clearAdminSwitchSession(adminID int64) {
+	b.adminSwitchMu.Lock()
+	defer b.adminSwitchMu.Unlock()
+	delete(b.adminSwitchData, adminID)
+}
+
+func strPtr(v string) *string {
+	return &v
 }
 
 // handleAdminBroadcastMenu показывает меню рассылки

@@ -60,6 +60,30 @@ func TestGetInviteByUsedBy(t *testing.T) {
 	assert.Nil(t, notFound)
 }
 
+func TestUpdateInviteExpireDays(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	t.Run("Меняет месячный инвайт на бессрочный", func(t *testing.T) {
+		days := 30
+		invite, err := db.CreateInviteWithExpiry(100, &days)
+		require.NoError(t, err)
+		require.NoError(t, db.ClaimInvite(invite.Code, 555))
+
+		require.NoError(t, db.UpdateInviteExpireDays(555, nil))
+
+		got, err := db.GetInviteByUsedBy(555)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Nil(t, got.ExpireDays)
+	})
+
+	t.Run("Возвращает ошибку если инвайт не найден", func(t *testing.T) {
+		err := db.UpdateInviteExpireDays(999, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invite not found")
+	})
+}
+
 func TestGetSubscribersByModerator(t *testing.T) {
 	db := setupTestDBInvites(t)
 

@@ -235,6 +235,169 @@ func TestHandleAdminModStats(t *testing.T) {
 	assert.Contains(t, msg, "Активных: 1")
 }
 
+func TestProcessSwitchSubscriptionID_ValidationErrors(t *testing.T) {
+	dbFile := "test_admin_switch_validation.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999999)
+	targetID := int64(12345)
+
+	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target")
+	require.NoError(t, err)
+
+	b := &Bot{
+		db:         db,
+		config:     &config.Config{AdminID: adminID},
+		userStates: newStateMap(),
+	}
+
+	t.Run("уже бессрочный", func(t *testing.T) {
+		invite, err := db.CreateInviteWithExpiry(adminID, nil)
+		require.NoError(t, err)
+		require.NoError(t, db.ClaimInvite(invite.Code, targetID))
+
+		ctx := &MockContext{sender: &tele.User{ID: adminID}}
+		err = b.processSwitchSubscriptionID(ctx, strconv.FormatInt(targetID, 10))
+		require.NoError(t, err)
+
+		msg, ok := ctx.sentMsg.(string)
+		require.True(t, ok)
+		assert.Contains(t, msg, "уже на бессрочном тарифе")
+		assert.Empty(t, b.userStates.Get(adminID))
+	})
+
+	t.Run("забанен", func(t *testing.T) {
+		otherID := int64(22334)
+		_, err := db.CreateUser(otherID, "banned", "Banned", "uuid-banned")
+		require.NoError(t, err)
+		days := 30
+		invite, err := db.CreateInviteWithExpiry(777, &days)
+		require.NoError(t, err)
+		require.NoError(t, db.ClaimInvite(invite.Code, otherID))
+		require.NoError(t, db.BanUser(otherID, adminID))
+
+		ctx := &MockContext{sender: &tele.User{ID: adminID}}
+		err = b.processSwitchSubscriptionID(ctx, strconv.FormatInt(otherID, 10))
+		require.NoError(t, err)
+
+		msg, ok := ctx.sentMsg.(string)
+		require.True(t, ok)
+		assert.Contains(t, msg, "пользователь забанен")
+		assert.Empty(t, b.userStates.Get(adminID))
+	})
+}
+
+func TestProcessSwitchSubscription_ConfirmFlow(t *testing.T) {
+	dbFile := "test_admin_switch_confirm.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999999)
+	modID := int64(100)
+	targetID := int64(12345)
+
+	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod")
+	require.NoError(t, err)
+	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target")
+	require.NoError(t, err)
+
+	days := 30
+	invite, err := db.CreateInviteWithExpiry(modID, &days)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(invite.Code, targetID))
+	require.NoError(t, db.MarkNotificationSent(targetID, "expire_3d"))
+
+	var gotEnable bool
+	var gotPatch bool
+	var patchReq remnawave.UpdateUserRequest
+
+	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-target":
+				payload := `{"response":{"uuid":"uuid-target","username":"target","status":"EXPIRED","expireAt":"2026-04-15T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPost && r.URL.Path == "/api/users/uuid-target/actions/enable":
+				gotEnable = true
+				payload := `{"response":{"success":true}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/users":
+				gotPatch = true
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&patchReq))
+				payload := `{"response":{"uuid":"uuid-target"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	b := &Bot{
+		db:         db,
+		remnawave:  client,
+		config:     &config.Config{AdminID: adminID},
+		userStates: newStateMap(),
+	}
+
+	ctxID := &MockContext{sender: &tele.User{ID: adminID}}
+	err = b.processSwitchSubscriptionID(ctxID, strconv.FormatInt(targetID, 10))
+	require.NoError(t, err)
+
+	msgID, ok := ctxID.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msgID, "Перевод на бессрочный тариф")
+	assert.Contains(t, msgID, "@target")
+	assert.Contains(t, msgID, "@moderator")
+	assert.Contains(t, msgID, "15.04.2026")
+	require.Equal(t, StateWaitSwitchSubscriptionConfirm, b.userStates.Get(adminID))
+
+	ctxConfirm := &MockContext{sender: &tele.User{ID: adminID}}
+	err = b.processSwitchSubscriptionConfirm(ctxConfirm, BtnConfirmYes)
+	require.NoError(t, err)
+
+	require.True(t, gotEnable)
+	require.True(t, gotPatch)
+	require.Equal(t, "uuid-target", patchReq.UUID)
+	require.NotNil(t, patchReq.ExpireAt)
+	assert.Equal(t, "2099-01-01T00:00:00Z", *patchReq.ExpireAt)
+
+	gotInvite, err := db.GetInviteByUsedBy(targetID)
+	require.NoError(t, err)
+	require.NotNil(t, gotInvite)
+	assert.Nil(t, gotInvite.ExpireDays)
+
+	sent, err := db.WasNotificationSent(targetID, "expire_3d")
+	require.NoError(t, err)
+	assert.False(t, sent)
+
+	msgConfirm, ok := ctxConfirm.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msgConfirm, "переведён на бессрочный тариф")
+	assert.Empty(t, b.userStates.Get(adminID))
+}
+
 func intPtrAdmin(v int) *int {
 	return &v
 }
