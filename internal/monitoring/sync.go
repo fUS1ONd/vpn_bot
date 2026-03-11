@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	// DefaultBandwidthMbps — дефолтная пропускная способность если тег bw: не найден
+	// DefaultBandwidthMbps — дефолтная пропускная способность если тег bandwidth не найден/невалиден
 	DefaultBandwidthMbps = 1000
 	// NodeExporterPort — порт Node Exporter на нодах
 	NodeExporterPort = 9100
@@ -24,13 +24,14 @@ type Target struct {
 	Labels  map[string]string `json:"labels"`
 }
 
-// ParseBandwidthTag парсит тег bw:<число> из массива тегов ноды.
+// ParseBandwidthTag парсит тег BW:<число> из массива тегов ноды (регистр не важен).
 // Возвращает DefaultBandwidthMbps если тег не найден.
 func ParseBandwidthTag(tags []string) int {
 	for _, tag := range tags {
-		if strings.HasPrefix(tag, "bw:") {
+		upper := strings.ToUpper(tag)
+		if strings.HasPrefix(upper, "BW:") {
 			var bw int
-			if _, err := fmt.Sscanf(tag, "bw:%d", &bw); err == nil && bw > 0 {
+			if _, err := fmt.Sscanf(upper, "BW:%d", &bw); err == nil && bw > 0 {
 				return bw
 			}
 		}
