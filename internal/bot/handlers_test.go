@@ -303,3 +303,22 @@ func TestProcessInviteCode_UsesInviteExpireDays(t *testing.T) {
 		assert.False(t, gotExpireAt.After(after.AddDate(0, 0, 30).Add(2*time.Second)))
 	})
 }
+
+func TestHandleInstructionDesktopUsesUnifiedPCMessage(t *testing.T) {
+	b, _ := setupTestBot(t)
+	ctx := &MockContext{
+		sender:  &tele.User{ID: 777, Username: "desktop"},
+		message: &tele.Message{},
+	}
+
+	err := b.handleInstructionDesktop(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "<b>Настройка на ПК</b>")
+	assert.Contains(t, msg, "https://www.happ.su/main/ru")
+	assert.Contains(t, msg, "\"URL подписки\"")
+	assert.Contains(t, msg, "\"TUN\"")
+	assert.Contains(t, msg, "Сначала активируйте подписку")
+}
