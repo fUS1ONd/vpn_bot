@@ -366,10 +366,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		return b.handleInstructionIOS(c)
 	case BtnInstAndroid:
 		return b.handleInstructionAndroid(c)
-	case BtnInstWindows:
-		return b.handleInstructionWindows(c)
-	case BtnInstMac:
-		return b.handleInstructionMac(c)
+	case BtnInstDesktop:
+		return b.handleInstructionDesktop(c)
 	}
 
 	// Неизвестное сообщение — показываем меню
@@ -591,19 +589,10 @@ func (b *Bot) handleInstructionAndroid(c tele.Context) error {
 	})
 }
 
-// handleInstructionWindows - инструкция для Windows
-func (b *Bot) handleInstructionWindows(c tele.Context) error {
+// handleInstructionDesktop - инструкция для ПК
+func (b *Bot) handleInstructionDesktop(c tele.Context) error {
 	subLink := b.getSubLinkForUser(c.Sender().ID)
-	return c.Send(fmt.Sprintf(MsgInstructionWindows, subLink), &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: InstructionsKeyboard(),
-	})
-}
-
-// handleInstructionMac - инструкция для macOS
-func (b *Bot) handleInstructionMac(c tele.Context) error {
-	subLink := b.getSubLinkForUser(c.Sender().ID)
-	return c.Send(fmt.Sprintf(MsgInstructionMac, subLink), &tele.SendOptions{
+	return c.Send(fmt.Sprintf(MsgInstructionDesktop, subLink), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: InstructionsKeyboard(),
 	})

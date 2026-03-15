@@ -17,8 +17,7 @@ const (
 	// Кнопки инструкций
 	BtnInstIOS     = "🍎 iOS"
 	BtnInstAndroid = "🤖 Android"
-	BtnInstWindows = "💻 Windows/Linux"
-	BtnInstMac     = "🍏 macOS"
+	BtnInstDesktop = "💻ПК"
 
 	// Кнопка серверов (мониторинг)
 	BtnServers = "📡 Серверы"
@@ -73,7 +72,7 @@ func InstructionsKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnInstIOS), menu.Text(BtnInstAndroid)),
-		menu.Row(menu.Text(BtnInstWindows), menu.Text(BtnInstMac)),
+		menu.Row(menu.Text(BtnInstDesktop)),
 		menu.Row(menu.Text(BtnBack)),
 	)
 	return menu
