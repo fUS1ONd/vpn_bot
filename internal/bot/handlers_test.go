@@ -422,6 +422,40 @@ func TestHandleInstructionDesktopUsesPreviewPlaceholderForGuest(t *testing.T) {
 	assert.Contains(t, msg, PreviewSubscriptionPlaceholder)
 }
 
+func TestHandleInstructionIOSUsesPreviewPlaceholderForGuest(t *testing.T) {
+	b, _ := setupTestBot(t)
+	b.setPreviewMode(true)
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: 780, Username: "previewios"},
+		message: &tele.Message{},
+	}
+
+	err := b.handleInstructionIOS(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, PreviewSubscriptionPlaceholder)
+}
+
+func TestHandleInstructionAndroidUsesPreviewPlaceholderForGuest(t *testing.T) {
+	b, _ := setupTestBot(t)
+	b.setPreviewMode(true)
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: 781, Username: "previewandroid"},
+		message: &tele.Message{},
+	}
+
+	err := b.handleInstructionAndroid(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, PreviewSubscriptionPlaceholder)
+}
+
 func TestHandleInfoSendsHelpMessage(t *testing.T) {
 	b, _ := setupTestBot(t)
 	ctx := &MockContext{
@@ -450,6 +484,29 @@ func TestHandleTextMessage_InfoButtonRoutesToHelpMessage(t *testing.T) {
 	msg, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
 	assert.Equal(t, MsgInfo, msg)
+}
+
+func TestHandleTextMessage_InstructionsButtonRoutesToInstructionsMenu(t *testing.T) {
+	b, _ := setupTestBot(t)
+	b.setPreviewMode(true)
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: 1000, Username: "preview_reader"},
+		message: &tele.Message{Text: BtnInstructions},
+	}
+
+	err := b.handleTextMessage(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Equal(t, MsgInstructions, msg)
+
+	opts := getSendOptions(t, ctx)
+	buttons := collectButtons(opts.ReplyMarkup.ReplyKeyboard)
+	assert.Contains(t, buttons, BtnInstIOS)
+	assert.Contains(t, buttons, BtnInstAndroid)
+	assert.Contains(t, buttons, BtnInstDesktop)
 }
 
 func TestHandleStatusReturnsPreviewMessageForGuest(t *testing.T) {
@@ -500,4 +557,38 @@ func TestHandleTextMessage_ActivateCodeButtonEntersInviteState(t *testing.T) {
 
 	assert.Equal(t, MsgWelcomeInvite, ctx.sentMsg)
 	assert.Equal(t, StateWaitInvite, b.userStates.Get(ctx.sender.ID))
+}
+
+func TestHandleTextMessage_BannedUserBlockedFromPreviewActions(t *testing.T) {
+	b, db := setupTestBot(t)
+	b.setPreviewMode(true)
+
+	bannedID := int64(1004)
+	require.NoError(t, db.BanUser(bannedID, b.config.AdminID))
+
+	testCases := []struct {
+		name string
+		text string
+	}{
+		{name: "status", text: BtnStatus},
+		{name: "connect", text: BtnConnect},
+		{name: "activate", text: BtnActivateCode},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &MockContext{
+				sender:  &tele.User{ID: bannedID, Username: "banned"},
+				message: &tele.Message{Text: tc.text},
+			}
+
+			err := b.handleTextMessage(ctx)
+			require.NoError(t, err)
+
+			msg, ok := ctx.sentMsg.(string)
+			require.True(t, ok)
+			assert.Contains(t, msg, "заблокирован")
+			assert.NotEqual(t, StateWaitInvite, b.userStates.Get(bannedID))
+		})
+	}
 }

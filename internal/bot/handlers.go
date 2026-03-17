@@ -119,8 +119,26 @@ func (b *Bot) isPreviewModeEnabled() bool {
 	return b.previewMode.Load()
 }
 
+func (b *Bot) isBannedUser(telegramID int64) bool {
+	banned, err := b.db.IsBanned(telegramID)
+	if err != nil {
+		slog.Error("Failed to check ban status", "error", err, "telegram_id", telegramID)
+		return false
+	}
+
+	return banned
+}
+
+func (b *Bot) sendBannedMessage(c tele.Context) error {
+	return c.Send("🚫 Ваш аккаунт заблокирован. Доступ запрещён.")
+}
+
 func (b *Bot) isPreviewGuest(telegramID int64) bool {
 	if !b.isPreviewModeEnabled() {
+		return false
+	}
+
+	if b.isBannedUser(telegramID) {
 		return false
 	}
 
@@ -166,8 +184,8 @@ func (b *Bot) handleStart(c tele.Context) error {
 	}
 
 	// Блокированные пользователи не допускаются к боту.
-	if banned, err := b.db.IsBanned(telegramID); err == nil && banned {
-		return c.Send("🚫 Ваш аккаунт заблокирован. Доступ запрещён.")
+	if b.isBannedUser(telegramID) {
+		return b.sendBannedMessage(c)
 	}
 
 	// Проверяем, зарегистрирован ли пользователь
@@ -235,6 +253,11 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	telegramID := c.Sender().ID
 	state := b.userStates.Get(telegramID)
 	text := c.Text()
+
+	if b.isBannedUser(telegramID) {
+		b.userStates.Delete(telegramID)
+		return b.sendBannedMessage(c)
+	}
 
 	// Обработка состояний
 	switch state {
