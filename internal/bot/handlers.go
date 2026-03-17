@@ -356,6 +356,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		return b.handleConnect(c)
 	case BtnDonate:
 		return b.handleDonate(c)
+	case BtnInfo:
+		return b.handleInfo(c)
 	case BtnServers:
 		return b.handleDashboard(c)
 	case BtnInstructions:
@@ -519,6 +521,14 @@ func (b *Bot) handleConnect(c tele.Context) error {
 func (b *Bot) handleDonate(c tele.Context) error {
 	msg := fmt.Sprintf(MsgDonate, b.config.DonateText)
 	return c.Send(msg, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: b.userKeyboard(c.Sender().ID),
+	})
+}
+
+// handleInfo показывает помощь, контакты и ссылки на документы сервиса
+func (b *Bot) handleInfo(c tele.Context) error {
+	return c.Send(MsgInfo, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: b.userKeyboard(c.Sender().ID),
 	})

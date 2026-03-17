@@ -62,6 +62,23 @@ func TestUserMenuKeyboardForModerator(t *testing.T) {
 	assert.NotNil(t, kb)
 }
 
+func TestBotUserKeyboardForModeratorContainsInfoButton(t *testing.T) {
+	b, _, _, modID := setupModeratorTestBot(t)
+
+	kb := b.userKeyboard(modID)
+	require.NotNil(t, kb)
+
+	var buttons []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+
+	assert.Contains(t, buttons, BtnInfo)
+	assert.Contains(t, buttons, BtnModInvites)
+}
+
 func TestAdminModeratorKeyboard(t *testing.T) {
 	// Клавиатура управления модераторами
 	kb := AdminModeratorKeyboard()

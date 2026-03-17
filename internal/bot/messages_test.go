@@ -31,3 +31,11 @@ func TestMsgAccountCreatedHasNoTrafficLimitDetails(t *testing.T) {
 	assert.NotContains(t, MsgAccountCreated, "Лимит трафика")
 	assert.NotContains(t, MsgAccountCreated, "Сброс трафика")
 }
+
+func TestMsgInfoContainsExpectedLinks(t *testing.T) {
+	assert.Contains(t, MsgInfo, "💡 Помощь и контакты")
+	assert.Contains(t, MsgInfo, "@fus1ond")
+	assert.Contains(t, MsgInfo, "https://telegra.ph/Politika-konfidencialnosti-08-15-17")
+	assert.Contains(t, MsgInfo, "https://telegra.ph/Polzovatelskoe-soglashenie-08-15-10")
+	assert.Contains(t, MsgInfo, `>читать</a>`)
+}
