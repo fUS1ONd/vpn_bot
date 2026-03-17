@@ -11,6 +11,7 @@ const (
 	BtnConnect      = "🌐 Подключить"
 	BtnDonate       = "💸 Поддержать"
 	BtnInfo         = "Информация"
+	BtnActivateCode = "🎟 Активировать код"
 	BtnInstructions = "📚 Инструкции"
 	BtnBack         = "🔙 Назад"
 	BtnCancel       = "🚫 Отмена"
@@ -57,12 +58,31 @@ const (
 	BtnAdminRemoveMod    = "➖ Снять модератора"
 )
 
+func BtnAdminPreview(enabled bool) string {
+	if enabled {
+		return "🟢 Preview: ON"
+	}
+	return "⚪ Preview: OFF"
+}
+
 // UserMenuKeyboard возвращает главное меню пользователя
 func UserMenuKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnStatus), menu.Text(BtnConnect)),
 		menu.Row(menu.Text(BtnServers), menu.Text(BtnInstructions)),
+		menu.Row(menu.Text(BtnDonate), menu.Text(BtnInfo)),
+	)
+	return menu
+}
+
+// PreviewUserMenuKeyboard возвращает гостевое меню preview-режима
+func PreviewUserMenuKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnStatus), menu.Text(BtnConnect)),
+		menu.Row(menu.Text(BtnServers), menu.Text(BtnInstructions)),
+		menu.Row(menu.Text(BtnActivateCode)),
 		menu.Row(menu.Text(BtnDonate), menu.Text(BtnInfo)),
 	)
 	return menu
@@ -80,11 +100,12 @@ func InstructionsKeyboard() *tele.ReplyMarkup {
 }
 
 // AdminKeyboard возвращает главное меню админа
-func AdminKeyboard() *tele.ReplyMarkup {
+func AdminKeyboard(previewEnabled bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnAdminManage), menu.Text(BtnAdminModerators)),
 		menu.Row(menu.Text(BtnAdminBroadcast), menu.Text(BtnAdminUserMode)),
+		menu.Row(menu.Text(BtnAdminPreview(previewEnabled))),
 	)
 	return menu
 }
