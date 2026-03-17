@@ -69,3 +69,31 @@ func TestInstructionsKeyboardContainsUnifiedDesktopButton(t *testing.T) {
 	assert.NotContains(t, buttons, "💻 Windows/Linux")
 	assert.NotContains(t, buttons, "🍏 macOS")
 }
+
+func TestUserMenuKeyboardContainsInfoButton(t *testing.T) {
+	keyboard := UserMenuKeyboard()
+
+	var buttons []string
+	for _, row := range keyboard.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+
+	assert.Contains(t, buttons, BtnInfo)
+	assert.Contains(t, buttons, BtnDonate)
+}
+
+func TestUserMenuKeyboardModeratorContainsInfoButton(t *testing.T) {
+	keyboard := UserMenuKeyboardModerator()
+
+	var buttons []string
+	for _, row := range keyboard.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+
+	assert.Contains(t, buttons, BtnInfo)
+	assert.Contains(t, buttons, BtnModInvites)
+}

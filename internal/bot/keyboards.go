@@ -10,6 +10,7 @@ const (
 	BtnStatus       = "👤 Мой статус"
 	BtnConnect      = "🌐 Подключить"
 	BtnDonate       = "💸 Поддержать"
+	BtnInfo         = "Информация"
 	BtnInstructions = "📚 Инструкции"
 	BtnBack         = "🔙 Назад"
 	BtnCancel       = "🚫 Отмена"
@@ -62,7 +63,7 @@ func UserMenuKeyboard() *tele.ReplyMarkup {
 	menu.Reply(
 		menu.Row(menu.Text(BtnStatus), menu.Text(BtnConnect)),
 		menu.Row(menu.Text(BtnServers), menu.Text(BtnInstructions)),
-		menu.Row(menu.Text(BtnDonate)),
+		menu.Row(menu.Text(BtnDonate), menu.Text(BtnInfo)),
 	)
 	return menu
 }
@@ -117,7 +118,7 @@ func UserMenuKeyboardModerator() *tele.ReplyMarkup {
 		menu.Row(menu.Text(BtnStatus), menu.Text(BtnConnect)),
 		menu.Row(menu.Text(BtnServers), menu.Text(BtnInstructions)),
 		menu.Row(menu.Text(BtnModInvites)),
-		menu.Row(menu.Text(BtnDonate)),
+		menu.Row(menu.Text(BtnDonate), menu.Text(BtnInfo)),
 	)
 	return menu
 }

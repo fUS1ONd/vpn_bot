@@ -322,3 +322,33 @@ func TestHandleInstructionDesktopUsesUnifiedPCMessage(t *testing.T) {
 	assert.Contains(t, msg, "\"TUN\"")
 	assert.Contains(t, msg, "Сначала активируйте подписку")
 }
+
+func TestHandleInfoSendsHelpMessage(t *testing.T) {
+	b, _ := setupTestBot(t)
+	ctx := &MockContext{
+		sender:  &tele.User{ID: 888, Username: "reader"},
+		message: &tele.Message{},
+	}
+
+	err := b.handleInfo(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Equal(t, MsgInfo, msg)
+}
+
+func TestHandleTextMessage_InfoButtonRoutesToHelpMessage(t *testing.T) {
+	b, _ := setupTestBot(t)
+	ctx := &MockContext{
+		sender:  &tele.User{ID: 999, Username: "reader"},
+		message: &tele.Message{Text: BtnInfo},
+	}
+
+	err := b.handleTextMessage(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Equal(t, MsgInfo, msg)
+}

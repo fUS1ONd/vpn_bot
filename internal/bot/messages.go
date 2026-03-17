@@ -45,6 +45,13 @@ const (
 
 %s`
 
+	MsgInfo = `<b>💡 Помощь и контакты</b>
+
+Если есть вопросы — пишите @fus1ond
+
+🔒 Политика конфиденциальности: <a href="https://telegra.ph/Politika-konfidencialnosti-08-15-17">читать</a>
+📜 Пользовательское соглашение: <a href="https://telegra.ph/Polzovatelskoe-soglashenie-08-15-10">читать</a>`
+
 	MsgInstructions = `<b>📚 Инструкции по настройке</b>
 
 Выберите вашу платформу:`
