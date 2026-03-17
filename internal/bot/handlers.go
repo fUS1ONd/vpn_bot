@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/config"
@@ -33,6 +34,7 @@ type Bot struct {
 	dashboardMgr    *dashboardManager         // менеджер сессий дашборда
 	sdConfigsPath   string                    // путь к sd_configs (для чтения targets)
 	render          *render.Client            // клиент render-сервиса (nil если не настроен)
+	previewMode     atomic.Bool
 	modExtendMu     sync.RWMutex
 	modExtendData   map[int64]modExtendSession // pending-данные продления для модератора
 	adminSwitchMu   sync.RWMutex
@@ -109,6 +111,57 @@ func (b *Bot) Run() {
 	b.bot.Start()
 }
 
+func (b *Bot) setPreviewMode(enabled bool) {
+	b.previewMode.Store(enabled)
+}
+
+func (b *Bot) isPreviewModeEnabled() bool {
+	return b.previewMode.Load()
+}
+
+func (b *Bot) isBannedUser(telegramID int64) bool {
+	banned, err := b.db.IsBanned(telegramID)
+	if err != nil {
+		slog.Error("Failed to check ban status", "error", err, "telegram_id", telegramID)
+		return false
+	}
+
+	return banned
+}
+
+func (b *Bot) sendBannedMessage(c tele.Context) error {
+	return c.Send("🚫 Ваш аккаунт заблокирован. Доступ запрещён.")
+}
+
+func (b *Bot) isPreviewGuest(telegramID int64) bool {
+	if !b.isPreviewModeEnabled() {
+		return false
+	}
+
+	if b.isBannedUser(telegramID) {
+		return false
+	}
+
+	user, err := b.db.GetUserByTelegramID(telegramID)
+	if err != nil {
+		slog.Error("Failed to resolve preview guest state", "error", err, "telegram_id", telegramID)
+		return false
+	}
+
+	return user == nil
+}
+
+func (b *Bot) registeredUserKeyboard(telegramID int64) *tele.ReplyMarkup {
+	if b.isModerator(telegramID) {
+		return UserMenuKeyboardModerator()
+	}
+	return UserMenuKeyboard()
+}
+
+func (b *Bot) adminKeyboard() *tele.ReplyMarkup {
+	return AdminKeyboard(b.isPreviewModeEnabled())
+}
+
 // handleMediaMessage обрабатывает медиа-сообщения (для рассылки)
 func (b *Bot) handleMediaMessage(c tele.Context) error {
 	telegramID := c.Sender().ID
@@ -131,8 +184,8 @@ func (b *Bot) handleStart(c tele.Context) error {
 	}
 
 	// Блокированные пользователи не допускаются к боту.
-	if banned, err := b.db.IsBanned(telegramID); err == nil && banned {
-		return c.Send("🚫 Ваш аккаунт заблокирован. Доступ запрещён.")
+	if b.isBannedUser(telegramID) {
+		return b.sendBannedMessage(c)
 	}
 
 	// Проверяем, зарегистрирован ли пользователь
@@ -168,6 +221,14 @@ func (b *Bot) handleStart(c tele.Context) error {
 			return nil
 		}
 
+		if b.isPreviewModeEnabled() {
+			b.userStates.Delete(telegramID)
+			return c.Send(MsgPreviewWelcome, &tele.SendOptions{
+				ParseMode:   tele.ModeHTML,
+				ReplyMarkup: b.userKeyboard(telegramID),
+			})
+		}
+
 		b.userStates.Set(telegramID, StateWaitInvite)
 		return c.Send(MsgWelcomeInvite, &tele.SendOptions{
 			ParseMode: tele.ModeHTML,
@@ -193,11 +254,22 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	state := b.userStates.Get(telegramID)
 	text := c.Text()
 
+	if b.isBannedUser(telegramID) {
+		b.userStates.Delete(telegramID)
+		return b.sendBannedMessage(c)
+	}
+
 	// Обработка состояний
 	switch state {
 	case StateWaitInvite:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
+			if b.isPreviewGuest(telegramID) {
+				return c.Send(MsgPreviewWelcome, &tele.SendOptions{
+					ParseMode:   tele.ModeHTML,
+					ReplyMarkup: b.userKeyboard(telegramID),
+				})
+			}
 			return c.Send("Отменено. Для начала отправьте /start")
 		}
 		return b.processInviteCode(c, text)
@@ -205,7 +277,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitBroadcastActive:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: b.adminKeyboard()})
 		}
 		if b.isAdmin(c) {
 			return b.processBroadcastMessage(c)
@@ -214,7 +286,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitBanUser:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: b.adminKeyboard()})
 		}
 		if b.isAdmin(c) {
 			return b.processBanUser(c, text)
@@ -223,7 +295,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitDeleteInvite:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: b.adminKeyboard()})
 		}
 		if b.isAdmin(c) {
 			return b.processDeleteInvite(c, text)
@@ -275,7 +347,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitAddModerator:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: b.adminKeyboard()})
 		}
 		if b.isAdmin(c) {
 			return b.processAddModerator(c, text)
@@ -284,7 +356,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitRemoveModerator:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: b.adminKeyboard()})
 		}
 		if b.isAdmin(c) {
 			return b.processRemoveModerator(c, text)
@@ -301,6 +373,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleAdminBroadcastMenu(c)
 		case BtnAdminUserMode:
 			return b.handleUserMode(c)
+		case BtnAdminPreview(false), BtnAdminPreview(true):
+			return b.handleAdminPreviewToggle(c)
 		case BtnAdminBack:
 			return b.handleAdminStart(c)
 		case BtnAdminCreateInvite:
@@ -354,6 +428,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		return b.handleStatus(c)
 	case BtnConnect:
 		return b.handleConnect(c)
+	case BtnActivateCode:
+		return b.handleActivateCode(c)
 	case BtnDonate:
 		return b.handleDonate(c)
 	case BtnInfo:
@@ -475,6 +551,13 @@ func (b *Bot) notifyAdminNewUser(telegramID int64, username, firstName string) {
 func (b *Bot) handleStatus(c tele.Context) error {
 	telegramID := c.Sender().ID
 
+	if b.isPreviewGuest(telegramID) {
+		return c.Send(MsgPreviewStatus, &tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: b.userKeyboard(telegramID),
+		})
+	}
+
 	user, err := b.db.GetUserByTelegramID(telegramID)
 	if err != nil || user == nil {
 		return c.Send(MsgNotRegistered, &tele.SendOptions{ParseMode: tele.ModeHTML})
@@ -498,6 +581,13 @@ func (b *Bot) handleStatus(c tele.Context) error {
 func (b *Bot) handleConnect(c tele.Context) error {
 	telegramID := c.Sender().ID
 
+	if b.isPreviewGuest(telegramID) {
+		return c.Send(MsgPreviewConnect, &tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: b.userKeyboard(telegramID),
+		})
+	}
+
 	user, err := b.db.GetUserByTelegramID(telegramID)
 	if err != nil || user == nil {
 		return c.Send(MsgNotRegistered, &tele.SendOptions{ParseMode: tele.ModeHTML})
@@ -514,6 +604,18 @@ func (b *Bot) handleConnect(c tele.Context) error {
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: b.userKeyboard(telegramID),
+	})
+}
+
+func (b *Bot) handleActivateCode(c tele.Context) error {
+	if !b.isPreviewGuest(c.Sender().ID) {
+		return b.handleStart(c)
+	}
+
+	b.userStates.Set(c.Sender().ID, StateWaitInvite)
+	return c.Send(MsgWelcomeInvite, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: CancelKeyboard(),
 	})
 }
 
@@ -562,7 +664,7 @@ func (b *Bot) handleBack(c tele.Context) error {
 func (b *Bot) handleUserMode(c tele.Context) error {
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: b.userKeyboard(c.Sender().ID),
+		ReplyMarkup: b.registeredUserKeyboard(c.Sender().ID),
 	})
 }
 
@@ -570,6 +672,9 @@ func (b *Bot) handleUserMode(c tele.Context) error {
 func (b *Bot) getSubLinkForUser(telegramID int64) string {
 	user, err := b.db.GetUserByTelegramID(telegramID)
 	if err != nil || user == nil {
+		if b.isPreviewGuest(telegramID) {
+			return PreviewSubscriptionPlaceholder
+		}
 		return "Сначала активируйте подписку"
 	}
 
@@ -610,10 +715,10 @@ func (b *Bot) handleInstructionDesktop(c tele.Context) error {
 
 // userKeyboard возвращает правильную клавиатуру для пользователя (с учётом роли модератора)
 func (b *Bot) userKeyboard(telegramID int64) *tele.ReplyMarkup {
-	if b.isModerator(telegramID) {
-		return UserMenuKeyboardModerator()
+	if b.isPreviewGuest(telegramID) {
+		return PreviewUserMenuKeyboard()
 	}
-	return UserMenuKeyboard()
+	return b.registeredUserKeyboard(telegramID)
 }
 
 // getBotUsername возвращает username бота для формирования deep link

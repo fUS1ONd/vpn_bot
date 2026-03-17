@@ -235,6 +235,43 @@ func TestHandleAdminModStats(t *testing.T) {
 	assert.Contains(t, msg, "Активных: 1")
 }
 
+func TestHandleAdminPreviewToggle(t *testing.T) {
+	b, _ := setupTestBot(t)
+	adminID := b.config.AdminID
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: adminID, Username: "admin"},
+		message: &tele.Message{Text: BtnAdminPreview(false)},
+	}
+
+	err := b.handleTextMessage(ctx)
+	require.NoError(t, err)
+	assert.True(t, b.isPreviewModeEnabled())
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "Preview")
+	assert.Contains(t, msg, "включен")
+
+	opts := getSendOptions(t, ctx)
+	buttons := collectButtons(opts.ReplyMarkup.ReplyKeyboard)
+	assert.Contains(t, buttons, BtnAdminPreview(true))
+}
+
+func TestHandleAdminPreviewToggleRejectsNonAdmin(t *testing.T) {
+	b, _ := setupTestBot(t)
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: 4242, Username: "user"},
+		message: &tele.Message{Text: BtnAdminPreview(false)},
+	}
+
+	err := b.handleAdminPreviewToggle(ctx)
+	require.NoError(t, err)
+	assert.False(t, b.isPreviewModeEnabled())
+	assert.Nil(t, ctx.sentMsg)
+}
+
 // TestFormatAdminSwitchTargetLabel_HTMLEscaping проверяет экранирование HTML в имени пользователя
 func TestFormatAdminSwitchTargetLabel_HTMLEscaping(t *testing.T) {
 	t.Run("имя с HTML-тегами экранируется", func(t *testing.T) {
