@@ -7301,6 +7301,131 @@
         ]
       }
     },
+    "/api/subscriptions/connection-keys/{uuid}": {
+      "get": {
+        "operationId": "SubscriptionsController_getConnectionKeysByUuid",
+        "parameters": [
+          {
+            "name": "uuid",
+            "required": true,
+            "in": "path",
+            "description": "UUID of the user",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection keys fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetConnectionKeysByUuidResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "number",
+                      "example": 400
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "validation": {
+                            "type": "string",
+                            "example": "uuid"
+                          },
+                          "code": {
+                            "type": "string",
+                            "example": "invalid_string"
+                          },
+                          "message": {
+                            "type": "string",
+                            "example": "Invalid uuid"
+                          },
+                          "path": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "example": [
+                              "uuid"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "validation",
+                          "code",
+                          "message",
+                          "path"
+                        ]
+                      },
+                      "example": [
+                        {
+                          "validation": "uuid",
+                          "code": "invalid_string",
+                          "message": "Invalid uuid",
+                          "path": [
+                            "uuid"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "timestamp": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errorCode": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Authorization": []
+          }
+        ],
+        "summary": "Get connection keys (base64 format) by uuid",
+        "tags": [
+          "[Protected] Subscriptions Controller"
+        ]
+      }
+    },
     "/api/subscription-templates": {
       "get": {
         "operationId": "SubscriptionTemplateController_getAllTemplates",
@@ -13851,6 +13976,131 @@
         ]
       }
     },
+    "/api/nodes/bulk-actions": {
+      "post": {
+        "operationId": "NodesController_bulkNodesActions",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkNodesActionsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Event sent successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkNodesActionsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "number",
+                      "example": 400
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "validation": {
+                            "type": "string",
+                            "example": "uuid"
+                          },
+                          "code": {
+                            "type": "string",
+                            "example": "invalid_string"
+                          },
+                          "message": {
+                            "type": "string",
+                            "example": "Invalid uuid"
+                          },
+                          "path": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "example": [
+                              "uuid"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "validation",
+                          "code",
+                          "message",
+                          "path"
+                        ]
+                      },
+                      "example": [
+                        {
+                          "validation": "uuid",
+                          "code": "invalid_string",
+                          "message": "Invalid uuid",
+                          "path": [
+                            "uuid"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "timestamp": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errorCode": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Authorization": []
+          }
+        ],
+        "summary": "Perform actions for many nodes",
+        "tags": [
+          "Nodes Controller"
+        ]
+      }
+    },
     "/api/hosts/tags": {
       "get": {
         "operationId": "HostsController_getAllHostTags",
@@ -20086,12 +20336,396 @@
           "Subscription Settings Controller"
         ]
       }
+    },
+    "/api/ip-control/fetch-ips/{uuid}": {
+      "post": {
+        "operationId": "IpControlController_fetchUserIps",
+        "parameters": [
+          {
+            "name": "uuid",
+            "required": true,
+            "in": "path",
+            "description": "UUID of the user",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Return jobId for further processing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchIpsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "number",
+                      "example": 400
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "validation": {
+                            "type": "string",
+                            "example": "uuid"
+                          },
+                          "code": {
+                            "type": "string",
+                            "example": "invalid_string"
+                          },
+                          "message": {
+                            "type": "string",
+                            "example": "Invalid uuid"
+                          },
+                          "path": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "example": [
+                              "uuid"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "validation",
+                          "code",
+                          "message",
+                          "path"
+                        ]
+                      },
+                      "example": [
+                        {
+                          "validation": "uuid",
+                          "code": "invalid_string",
+                          "message": "Invalid uuid",
+                          "path": [
+                            "uuid"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "timestamp": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errorCode": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Authorization": []
+          }
+        ],
+        "summary": "Request IP List for User",
+        "tags": [
+          "IP Management Controller"
+        ]
+      }
+    },
+    "/api/ip-control/fetch-ips/result/{jobId}": {
+      "get": {
+        "operationId": "IpControlController_getFetchIpsResult",
+        "parameters": [
+          {
+            "name": "jobId",
+            "required": true,
+            "in": "path",
+            "description": "Job ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Return result or status of the job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchIpsResultResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "number",
+                      "example": 400
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "validation": {
+                            "type": "string",
+                            "example": "uuid"
+                          },
+                          "code": {
+                            "type": "string",
+                            "example": "invalid_string"
+                          },
+                          "message": {
+                            "type": "string",
+                            "example": "Invalid uuid"
+                          },
+                          "path": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "example": [
+                              "uuid"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "validation",
+                          "code",
+                          "message",
+                          "path"
+                        ]
+                      },
+                      "example": [
+                        {
+                          "validation": "uuid",
+                          "code": "invalid_string",
+                          "message": "Invalid uuid",
+                          "path": [
+                            "uuid"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "timestamp": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errorCode": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Authorization": []
+          }
+        ],
+        "summary": "Get IP List Result by Job ID",
+        "tags": [
+          "IP Management Controller"
+        ]
+      }
+    },
+    "/api/ip-control/drop-connections": {
+      "post": {
+        "operationId": "IpControlController_dropConnections",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DropConnectionsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Event sent to background executor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DropConnectionsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "number",
+                      "example": 400
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "validation": {
+                            "type": "string",
+                            "example": "uuid"
+                          },
+                          "code": {
+                            "type": "string",
+                            "example": "invalid_string"
+                          },
+                          "message": {
+                            "type": "string",
+                            "example": "Invalid uuid"
+                          },
+                          "path": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "example": [
+                              "uuid"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "validation",
+                          "code",
+                          "message",
+                          "path"
+                        ]
+                      },
+                      "example": [
+                        {
+                          "validation": "uuid",
+                          "code": "invalid_string",
+                          "message": "Invalid uuid",
+                          "path": [
+                            "uuid"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found // Connected nodes not found"
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "timestamp": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errorCode": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Authorization": []
+          }
+        ],
+        "summary": "Drop Connections for Users or IPs",
+        "tags": [
+          "IP Management Controller"
+        ]
+      }
     }
   },
   "info": {
-    "title": "Remnawave API v2.5.5",
+    "title": "Remnawave API v2.6.4",
     "description": "\nRemnawave is a powerful proxy managment tool, built on top of Xray-core, with a focus on simplicity and ease of use.\n\n## Resources\n* https://t.me/remnawave\n* https://github.com/remnawave\n* https://docs.rw\n",
-    "version": "2.5.5",
+    "version": "2.6.4",
     "contact": {},
     "license": {
       "name": "AGPL-3.0",
@@ -20138,6 +20772,10 @@
     {
       "name": "Bandwidth Stats Controller",
       "description": ""
+    },
+    {
+      "name": "IP Management Controller",
+      "description": "Management of IP addresses and connections."
     },
     {
       "name": "Config Profiles Controller",
@@ -20385,6 +21023,63 @@
                       "clientSecret": null,
                       "allowedEmails": []
                     }
+                  },
+                  "generic": {
+                    "type": "object",
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "clientId": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "clientSecret": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "withPkce": {
+                        "type": "boolean"
+                      },
+                      "authorizationUrl": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "tokenUrl": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "frontendDomain": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "allowedEmails": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "enabled",
+                      "clientId",
+                      "clientSecret",
+                      "withPkce",
+                      "authorizationUrl",
+                      "tokenUrl",
+                      "frontendDomain",
+                      "allowedEmails"
+                    ],
+                    "default": {
+                      "enabled": false,
+                      "frontendDomain": null,
+                      "tokenUrl": null,
+                      "clientId": null,
+                      "clientSecret": null,
+                      "withPkce": false,
+                      "authorizationUrl": null,
+                      "allowedEmails": []
+                    }
                   }
                 },
                 "required": [
@@ -20630,6 +21325,63 @@
                   "clientSecret": null,
                   "allowedEmails": []
                 }
+              },
+              "generic": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "clientId": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "clientSecret": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "withPkce": {
+                    "type": "boolean"
+                  },
+                  "authorizationUrl": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "tokenUrl": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "frontendDomain": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "allowedEmails": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "clientId",
+                  "clientSecret",
+                  "withPkce",
+                  "authorizationUrl",
+                  "tokenUrl",
+                  "frontendDomain",
+                  "allowedEmails"
+                ],
+                "default": {
+                  "enabled": false,
+                  "frontendDomain": null,
+                  "tokenUrl": null,
+                  "clientId": null,
+                  "clientSecret": null,
+                  "withPkce": false,
+                  "authorizationUrl": null,
+                  "allowedEmails": []
+                }
               }
             },
             "required": [
@@ -20861,6 +21613,63 @@
                       "keycloakDomain": null,
                       "clientId": null,
                       "clientSecret": null,
+                      "allowedEmails": []
+                    }
+                  },
+                  "generic": {
+                    "type": "object",
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "clientId": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "clientSecret": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "withPkce": {
+                        "type": "boolean"
+                      },
+                      "authorizationUrl": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "tokenUrl": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "frontendDomain": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "allowedEmails": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "enabled",
+                      "clientId",
+                      "clientSecret",
+                      "withPkce",
+                      "authorizationUrl",
+                      "tokenUrl",
+                      "frontendDomain",
+                      "allowedEmails"
+                    ],
+                    "default": {
+                      "enabled": false,
+                      "frontendDomain": null,
+                      "tokenUrl": null,
+                      "clientId": null,
+                      "clientSecret": null,
+                      "withPkce": false,
+                      "authorizationUrl": null,
                       "allowedEmails": []
                     }
                   }
@@ -21381,13 +22190,15 @@
               "github",
               "pocketid",
               "yandex",
-              "keycloak"
+              "keycloak",
+              "generic"
             ],
             "x-enumNames": [
               "GITHUB",
               "POCKETID",
               "YANDEX",
-              "KEYCLOAK"
+              "KEYCLOAK",
+              "GENERIC"
             ]
           }
         },
@@ -21425,13 +22236,15 @@
               "github",
               "pocketid",
               "yandex",
-              "keycloak"
+              "keycloak",
+              "generic"
             ],
             "x-enumNames": [
               "GITHUB",
               "POCKETID",
               "YANDEX",
-              "KEYCLOAK"
+              "KEYCLOAK",
+              "GENERIC"
             ]
           },
           "code": {
@@ -26888,6 +27701,42 @@
             "required": [
               "subpageConfigUuid",
               "webpageAllowed"
+            ]
+          }
+        },
+        "required": [
+          "response"
+        ]
+      },
+      "GetConnectionKeysByUuidResponseDto": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "object",
+            "properties": {
+              "enabledKeys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "hiddenKeys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "disabledKeys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "enabledKeys",
+              "hiddenKeys",
+              "disabledKeys"
             ]
           }
         },
@@ -32966,6 +33815,57 @@
           "response"
         ]
       },
+      "BulkNodesActionsRequestDto": {
+        "type": "object",
+        "properties": {
+          "uuids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "ENABLE",
+              "DISABLE",
+              "RESTART",
+              "RESET_TRAFFIC"
+            ],
+            "x-enumNames": [
+              "ENABLE",
+              "DISABLE",
+              "RESTART",
+              "RESET_TRAFFIC"
+            ]
+          }
+        },
+        "required": [
+          "uuids",
+          "action"
+        ]
+      },
+      "BulkNodesActionsResponseDto": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "object",
+            "properties": {
+              "eventSent": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "eventSent"
+            ]
+          }
+        },
+        "required": [
+          "response"
+        ]
+      },
       "GetAllHostTagsResponseDto": {
         "type": "object",
         "properties": {
@@ -33164,6 +34064,29 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          "excludeFromSubscriptionTypes": {
+            "description": "Optional. Subscription types from which the host will be excluded from.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "XRAY_JSON",
+                "XRAY_BASE64",
+                "MIHOMO",
+                "STASH",
+                "CLASH",
+                "SINGBOX"
+              ],
+              "x-enumNames": [
+                "XRAY_JSON",
+                "XRAY_BASE64",
+                "MIHOMO",
+                "STASH",
+                "CLASH",
+                "SINGBOX"
+              ]
+            }
           }
         },
         "required": [
@@ -33317,6 +34240,28 @@
                 "items": {
                   "type": "string",
                   "format": "uuid"
+                }
+              },
+              "excludeFromSubscriptionTypes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "XRAY_JSON",
+                    "XRAY_BASE64",
+                    "MIHOMO",
+                    "STASH",
+                    "CLASH",
+                    "SINGBOX"
+                  ],
+                  "x-enumNames": [
+                    "XRAY_JSON",
+                    "XRAY_BASE64",
+                    "MIHOMO",
+                    "STASH",
+                    "CLASH",
+                    "SINGBOX"
+                  ]
                 }
               }
             },
@@ -33521,6 +34466,29 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          "excludeFromSubscriptionTypes": {
+            "description": "Optional. Subscription types from which the host will be excluded from.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "XRAY_JSON",
+                "XRAY_BASE64",
+                "MIHOMO",
+                "STASH",
+                "CLASH",
+                "SINGBOX"
+              ],
+              "x-enumNames": [
+                "XRAY_JSON",
+                "XRAY_BASE64",
+                "MIHOMO",
+                "STASH",
+                "CLASH",
+                "SINGBOX"
+              ]
+            }
           }
         },
         "required": [
@@ -33671,6 +34639,28 @@
                 "items": {
                   "type": "string",
                   "format": "uuid"
+                }
+              },
+              "excludeFromSubscriptionTypes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "XRAY_JSON",
+                    "XRAY_BASE64",
+                    "MIHOMO",
+                    "STASH",
+                    "CLASH",
+                    "SINGBOX"
+                  ],
+                  "x-enumNames": [
+                    "XRAY_JSON",
+                    "XRAY_BASE64",
+                    "MIHOMO",
+                    "STASH",
+                    "CLASH",
+                    "SINGBOX"
+                  ]
                 }
               }
             },
@@ -33851,6 +34841,28 @@
                     "type": "string",
                     "format": "uuid"
                   }
+                },
+                "excludeFromSubscriptionTypes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ],
+                    "x-enumNames": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ]
+                  }
                 }
               },
               "required": [
@@ -34028,6 +35040,28 @@
                 "items": {
                   "type": "string",
                   "format": "uuid"
+                }
+              },
+              "excludeFromSubscriptionTypes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "XRAY_JSON",
+                    "XRAY_BASE64",
+                    "MIHOMO",
+                    "STASH",
+                    "CLASH",
+                    "SINGBOX"
+                  ],
+                  "x-enumNames": [
+                    "XRAY_JSON",
+                    "XRAY_BASE64",
+                    "MIHOMO",
+                    "STASH",
+                    "CLASH",
+                    "SINGBOX"
+                  ]
                 }
               }
             },
@@ -34288,6 +35322,28 @@
                     "type": "string",
                     "format": "uuid"
                   }
+                },
+                "excludeFromSubscriptionTypes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ],
+                    "x-enumNames": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ]
+                  }
                 }
               },
               "required": [
@@ -34483,6 +35539,28 @@
                     "type": "string",
                     "format": "uuid"
                   }
+                },
+                "excludeFromSubscriptionTypes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ],
+                    "x-enumNames": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ]
+                  }
                 }
               },
               "required": [
@@ -34677,6 +35755,28 @@
                   "items": {
                     "type": "string",
                     "format": "uuid"
+                  }
+                },
+                "excludeFromSubscriptionTypes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ],
+                    "x-enumNames": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ]
                   }
                 }
               },
@@ -34883,6 +35983,28 @@
                     "type": "string",
                     "format": "uuid"
                   }
+                },
+                "excludeFromSubscriptionTypes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ],
+                    "x-enumNames": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ]
+                  }
                 }
               },
               "required": [
@@ -35085,6 +36207,28 @@
                   "items": {
                     "type": "string",
                     "format": "uuid"
+                  }
+                },
+                "excludeFromSubscriptionTypes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ],
+                    "x-enumNames": [
+                      "XRAY_JSON",
+                      "XRAY_BASE64",
+                      "MIHOMO",
+                      "STASH",
+                      "CLASH",
+                      "SINGBOX"
+                    ]
                   }
                 }
               },
@@ -38029,6 +39173,16 @@
                   "1"
                 ]
               },
+              "settings": {
+                "description": "{\"markdownDescription\":\"Settings for the **response rules** config. Optional.\"}",
+                "type": "object",
+                "properties": {
+                  "disableSubscriptionAccessByPath": {
+                    "description": "{\"markdownDescription\":\"Usually, a user's subscription may also be available via additional paths such as **/json**, **/stash**, or **/mihomo**. If this flag is set to **true**, access via these additional paths will be disabled.\"}",
+                    "type": "boolean"
+                  }
+                }
+              },
               "rules": {
                 "description": "{\"title\":\"Response Rules\",\"markdownDescription\":\"Array of **response rules**. Rules are evaluated in order and the first rule that matches is applied. If no rule matches, request will be blocked by default.\\n\\n**Example:**\\n```json\\n[\\n  {\\n    \\\"name\\\": \\\"Blank rule\\\",\\n    \\\"description\\\": \\\"Blank rule\\\",\\n    \\\"operator\\\": \\\"AND\\\",\\n    \\\"enabled\\\": true,\\n    \\\"conditions\\\": [],\\n    \\\"responseType\\\": \\\"BLOCK\\\",\\n    \\\"responseModifications\\\": {\\n      \\\"headers\\\": []\\n    }\\n  }\\n]\\n```\",\"defaultSnippets\":[]}",
                 "type": "array",
@@ -38181,10 +39335,22 @@
                             ]
                           }
                         },
+                        "applyHeadersToEnd": {
+                          "description": "{\"markdownDescription\":\"By default, headers are added when forming the response. In some cases, headers set in SRR may be overridden by headers from other parts of the system. If you set this flag to **true**, headers from SRR will be added at the very end, just before the response is sent. In this case, SRR headers may override headers from other sections.\"}",
+                          "type": "boolean"
+                        },
                         "subscriptionTemplate": {
                           "description": "{\"markdownDescription\":\"Override the subscription template with the given name. If not provided, the default subscription template will be used. If the template name is not found, the default subscription template for this type will be used. **This modification have higher priority than settings from External Squads.**\"}",
                           "type": "string",
                           "minLength": 1
+                        },
+                        "ignoreHostXrayJsonTemplate": {
+                          "description": "{\"markdownDescription\":\"Each Host may have its own Xray Json Template. If you set this flag to **true**, the Xray Json Template defined by the SRR will be used. **The Host's Xray Json Template will be ignored.**\"}",
+                          "type": "boolean"
+                        },
+                        "ignoreServeJsonAtBaseSubscription": {
+                          "description": "{\"markdownDescription\":\"If you set this flag to **true**, the **Serve JSON at Base Subscription** setting will be ignored (set to **false**).\"}",
+                          "type": "boolean"
                         }
                       }
                     }
@@ -38396,10 +39562,22 @@
                           ]
                         }
                       },
+                      "applyHeadersToEnd": {
+                        "description": "{\"markdownDescription\":\"By default, headers are added when forming the response. In some cases, headers set in SRR may be overridden by headers from other parts of the system. If you set this flag to **true**, headers from SRR will be added at the very end, just before the response is sent. In this case, SRR headers may override headers from other sections.\"}",
+                        "type": "boolean"
+                      },
                       "subscriptionTemplate": {
                         "description": "{\"markdownDescription\":\"Override the subscription template with the given name. If not provided, the default subscription template will be used. If the template name is not found, the default subscription template for this type will be used. **This modification have higher priority than settings from External Squads.**\"}",
                         "type": "string",
                         "minLength": 1
+                      },
+                      "ignoreHostXrayJsonTemplate": {
+                        "description": "{\"markdownDescription\":\"Each Host may have its own Xray Json Template. If you set this flag to **true**, the Xray Json Template defined by the SRR will be used. **The Host's Xray Json Template will be ignored.**\"}",
+                        "type": "boolean"
+                      },
+                      "ignoreServeJsonAtBaseSubscription": {
+                        "description": "{\"markdownDescription\":\"If you set this flag to **true**, the **Serve JSON at Base Subscription** setting will be ignored (set to **false**).\"}",
+                        "type": "boolean"
                       }
                     }
                   }
@@ -38555,6 +39733,16 @@
                       "1"
                     ]
                   },
+                  "settings": {
+                    "description": "{\"markdownDescription\":\"Settings for the **response rules** config. Optional.\"}",
+                    "type": "object",
+                    "properties": {
+                      "disableSubscriptionAccessByPath": {
+                        "description": "{\"markdownDescription\":\"Usually, a user's subscription may also be available via additional paths such as **/json**, **/stash**, or **/mihomo**. If this flag is set to **true**, access via these additional paths will be disabled.\"}",
+                        "type": "boolean"
+                      }
+                    }
+                  },
                   "rules": {
                     "description": "{\"title\":\"Response Rules\",\"markdownDescription\":\"Array of **response rules**. Rules are evaluated in order and the first rule that matches is applied. If no rule matches, request will be blocked by default.\\n\\n**Example:**\\n```json\\n[\\n  {\\n    \\\"name\\\": \\\"Blank rule\\\",\\n    \\\"description\\\": \\\"Blank rule\\\",\\n    \\\"operator\\\": \\\"AND\\\",\\n    \\\"enabled\\\": true,\\n    \\\"conditions\\\": [],\\n    \\\"responseType\\\": \\\"BLOCK\\\",\\n    \\\"responseModifications\\\": {\\n      \\\"headers\\\": []\\n    }\\n  }\\n]\\n```\",\"defaultSnippets\":[]}",
                     "type": "array",
@@ -38707,10 +39895,22 @@
                                 ]
                               }
                             },
+                            "applyHeadersToEnd": {
+                              "description": "{\"markdownDescription\":\"By default, headers are added when forming the response. In some cases, headers set in SRR may be overridden by headers from other parts of the system. If you set this flag to **true**, headers from SRR will be added at the very end, just before the response is sent. In this case, SRR headers may override headers from other sections.\"}",
+                              "type": "boolean"
+                            },
                             "subscriptionTemplate": {
                               "description": "{\"markdownDescription\":\"Override the subscription template with the given name. If not provided, the default subscription template will be used. If the template name is not found, the default subscription template for this type will be used. **This modification have higher priority than settings from External Squads.**\"}",
                               "type": "string",
                               "minLength": 1
+                            },
+                            "ignoreHostXrayJsonTemplate": {
+                              "description": "{\"markdownDescription\":\"Each Host may have its own Xray Json Template. If you set this flag to **true**, the Xray Json Template defined by the SRR will be used. **The Host's Xray Json Template will be ignored.**\"}",
+                              "type": "boolean"
+                            },
+                            "ignoreServeJsonAtBaseSubscription": {
+                              "description": "{\"markdownDescription\":\"If you set this flag to **true**, the **Serve JSON at Base Subscription** setting will be ignored (set to **false**).\"}",
+                              "type": "boolean"
                             }
                           }
                         }
@@ -38897,6 +40097,16 @@
                   "1"
                 ]
               },
+              "settings": {
+                "description": "{\"markdownDescription\":\"Settings for the **response rules** config. Optional.\"}",
+                "type": "object",
+                "properties": {
+                  "disableSubscriptionAccessByPath": {
+                    "description": "{\"markdownDescription\":\"Usually, a user's subscription may also be available via additional paths such as **/json**, **/stash**, or **/mihomo**. If this flag is set to **true**, access via these additional paths will be disabled.\"}",
+                    "type": "boolean"
+                  }
+                }
+              },
               "rules": {
                 "description": "{\"title\":\"Response Rules\",\"markdownDescription\":\"Array of **response rules**. Rules are evaluated in order and the first rule that matches is applied. If no rule matches, request will be blocked by default.\\n\\n**Example:**\\n```json\\n[\\n  {\\n    \\\"name\\\": \\\"Blank rule\\\",\\n    \\\"description\\\": \\\"Blank rule\\\",\\n    \\\"operator\\\": \\\"AND\\\",\\n    \\\"enabled\\\": true,\\n    \\\"conditions\\\": [],\\n    \\\"responseType\\\": \\\"BLOCK\\\",\\n    \\\"responseModifications\\\": {\\n      \\\"headers\\\": []\\n    }\\n  }\\n]\\n```\",\"defaultSnippets\":[]}",
                 "type": "array",
@@ -39049,10 +40259,22 @@
                             ]
                           }
                         },
+                        "applyHeadersToEnd": {
+                          "description": "{\"markdownDescription\":\"By default, headers are added when forming the response. In some cases, headers set in SRR may be overridden by headers from other parts of the system. If you set this flag to **true**, headers from SRR will be added at the very end, just before the response is sent. In this case, SRR headers may override headers from other sections.\"}",
+                          "type": "boolean"
+                        },
                         "subscriptionTemplate": {
                           "description": "{\"markdownDescription\":\"Override the subscription template with the given name. If not provided, the default subscription template will be used. If the template name is not found, the default subscription template for this type will be used. **This modification have higher priority than settings from External Squads.**\"}",
                           "type": "string",
                           "minLength": 1
+                        },
+                        "ignoreHostXrayJsonTemplate": {
+                          "description": "{\"markdownDescription\":\"Each Host may have its own Xray Json Template. If you set this flag to **true**, the Xray Json Template defined by the SRR will be used. **The Host's Xray Json Template will be ignored.**\"}",
+                          "type": "boolean"
+                        },
+                        "ignoreServeJsonAtBaseSubscription": {
+                          "description": "{\"markdownDescription\":\"If you set this flag to **true**, the **Serve JSON at Base Subscription** setting will be ignored (set to **false**).\"}",
+                          "type": "boolean"
                         }
                       }
                     }
@@ -39214,6 +40436,16 @@
                       "1"
                     ]
                   },
+                  "settings": {
+                    "description": "{\"markdownDescription\":\"Settings for the **response rules** config. Optional.\"}",
+                    "type": "object",
+                    "properties": {
+                      "disableSubscriptionAccessByPath": {
+                        "description": "{\"markdownDescription\":\"Usually, a user's subscription may also be available via additional paths such as **/json**, **/stash**, or **/mihomo**. If this flag is set to **true**, access via these additional paths will be disabled.\"}",
+                        "type": "boolean"
+                      }
+                    }
+                  },
                   "rules": {
                     "description": "{\"title\":\"Response Rules\",\"markdownDescription\":\"Array of **response rules**. Rules are evaluated in order and the first rule that matches is applied. If no rule matches, request will be blocked by default.\\n\\n**Example:**\\n```json\\n[\\n  {\\n    \\\"name\\\": \\\"Blank rule\\\",\\n    \\\"description\\\": \\\"Blank rule\\\",\\n    \\\"operator\\\": \\\"AND\\\",\\n    \\\"enabled\\\": true,\\n    \\\"conditions\\\": [],\\n    \\\"responseType\\\": \\\"BLOCK\\\",\\n    \\\"responseModifications\\\": {\\n      \\\"headers\\\": []\\n    }\\n  }\\n]\\n```\",\"defaultSnippets\":[]}",
                     "type": "array",
@@ -39366,10 +40598,22 @@
                                 ]
                               }
                             },
+                            "applyHeadersToEnd": {
+                              "description": "{\"markdownDescription\":\"By default, headers are added when forming the response. In some cases, headers set in SRR may be overridden by headers from other parts of the system. If you set this flag to **true**, headers from SRR will be added at the very end, just before the response is sent. In this case, SRR headers may override headers from other sections.\"}",
+                              "type": "boolean"
+                            },
                             "subscriptionTemplate": {
                               "description": "{\"markdownDescription\":\"Override the subscription template with the given name. If not provided, the default subscription template will be used. If the template name is not found, the default subscription template for this type will be used. **This modification have higher priority than settings from External Squads.**\"}",
                               "type": "string",
                               "minLength": 1
+                            },
+                            "ignoreHostXrayJsonTemplate": {
+                              "description": "{\"markdownDescription\":\"Each Host may have its own Xray Json Template. If you set this flag to **true**, the Xray Json Template defined by the SRR will be used. **The Host's Xray Json Template will be ignored.**\"}",
+                              "type": "boolean"
+                            },
+                            "ignoreServeJsonAtBaseSubscription": {
+                              "description": "{\"markdownDescription\":\"If you set this flag to **true**, the **Serve JSON at Base Subscription** setting will be ignored (set to **false**).\"}",
+                              "type": "boolean"
                             }
                           }
                         }
@@ -39438,6 +40682,243 @@
               "hwidSettings",
               "createdAt",
               "updatedAt"
+            ]
+          }
+        },
+        "required": [
+          "response"
+        ]
+      },
+      "FetchIpsResponseDto": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "object",
+            "properties": {
+              "jobId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "jobId"
+            ]
+          }
+        },
+        "required": [
+          "response"
+        ]
+      },
+      "FetchIpsResultResponseDto": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "object",
+            "properties": {
+              "isCompleted": {
+                "type": "boolean"
+              },
+              "isFailed": {
+                "type": "boolean"
+              },
+              "progress": {
+                "type": "object",
+                "properties": {
+                  "total": {
+                    "type": "number"
+                  },
+                  "completed": {
+                    "type": "number"
+                  },
+                  "percent": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "total",
+                  "completed",
+                  "percent"
+                ]
+              },
+              "result": {
+                "type": "object",
+                "properties": {
+                  "success": {
+                    "type": "boolean"
+                  },
+                  "userUuid": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "userId": {
+                    "type": "string"
+                  },
+                  "nodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "nodeUuid": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "nodeName": {
+                          "type": "string"
+                        },
+                        "countryCode": {
+                          "type": "string"
+                        },
+                        "ips": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "nodeUuid",
+                        "nodeName",
+                        "countryCode",
+                        "ips"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "success",
+                  "userUuid",
+                  "userId",
+                  "nodes"
+                ],
+                "nullable": true
+              }
+            },
+            "required": [
+              "isCompleted",
+              "isFailed",
+              "progress",
+              "result"
+            ]
+          }
+        },
+        "required": [
+          "response"
+        ]
+      },
+      "DropConnectionsRequestDto": {
+        "type": "object",
+        "properties": {
+          "dropBy": {
+            "oneOf": [
+              {
+                "description": "Drop by user UUIDs",
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "enum": [
+                      "userUuids"
+                    ]
+                  },
+                  "userUuids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "required": [
+                  "by",
+                  "userUuids"
+                ]
+              },
+              {
+                "description": "Drop by IP addresses",
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "enum": [
+                      "ipAddresses"
+                    ]
+                  },
+                  "ipAddresses": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "by",
+                  "ipAddresses"
+                ]
+              }
+            ]
+          },
+          "targetNodes": {
+            "oneOf": [
+              {
+                "description": "Target all connected nodes",
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "allNodes"
+                    ]
+                  }
+                },
+                "required": [
+                  "target"
+                ]
+              },
+              {
+                "description": "Target specific nodes",
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "specificNodes"
+                    ]
+                  },
+                  "nodeUuids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "required": [
+                  "target",
+                  "nodeUuids"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "dropBy",
+          "targetNodes"
+        ]
+      },
+      "DropConnectionsResponseDto": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "object",
+            "properties": {
+              "eventSent": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "eventSent"
             ]
           }
         },
@@ -40282,7 +41763,8 @@
             "enum": [
               "service.panel_started",
               "service.login_attempt_failed",
-              "service.login_attempt_success"
+              "service.login_attempt_success",
+              "service.subpage_config_changed"
             ]
           },
           "timestamp": {
@@ -40319,6 +41801,27 @@
               },
               "panelVersion": {
                 "type": "string"
+              },
+              "subpageConfig": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "CREATED",
+                      "UPDATED",
+                      "DELETED"
+                    ]
+                  },
+                  "uuid": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "action",
+                  "uuid"
+                ]
               }
             }
           }
