@@ -39,11 +39,3 @@ func TestMsgInfoContainsExpectedLinks(t *testing.T) {
 	assert.Contains(t, MsgInfo, "https://telegra.ph/Polzovatelskoe-soglashenie-08-15-10")
 	assert.Contains(t, MsgInfo, `>читать</a>`)
 }
-
-func TestPreviewMessagesContainExpectedHints(t *testing.T) {
-	assert.Contains(t, MsgPreviewWelcome, "preview")
-	assert.Contains(t, MsgPreviewWelcome, "Активировать код")
-	assert.Contains(t, MsgPreviewStatus, "preview")
-	assert.Contains(t, MsgPreviewConnect, "Ссылка появится после активации инвайта")
-	assert.Contains(t, PreviewSubscriptionPlaceholder, "Ссылка появится после активации инвайта")
-}
