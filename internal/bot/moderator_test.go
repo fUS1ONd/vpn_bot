@@ -236,7 +236,7 @@ func TestHandleModSubscribers(t *testing.T) {
 	require.NoError(t, db.ClaimInvite(inv2.Code, 301))
 	require.NoError(t, db.DeleteUser(301))
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			// batch-запрос вместо поштучных
@@ -539,7 +539,7 @@ func TestProcessModExtendID_ClearsStateOnTerminalErrors(t *testing.T) {
 		require.NoError(t, db.ClaimInvite(inv.Code, 9002))
 
 		// Remnawave: подписка истекает через 60 дней (>30) — слишком рано продлевать
-		client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+		client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 		client.SetHTTPClient(&http.Client{
 			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				if strings.Contains(r.URL.Path, "uuid-9002") {
@@ -594,7 +594,7 @@ func TestHandleModSubscribers_UsesBatchAPI(t *testing.T) {
 
 	// Считаем запросы к API
 	apiCallPaths := []string{}
-	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			apiCallPaths = append(apiCallPaths, r.URL.Path)
@@ -662,7 +662,7 @@ func TestProcessModExtendConfirm_ClearsStateOnExtendError(t *testing.T) {
 
 	// Настраиваем Remnawave — первый вызов (preview) успешен, второй (extend) — ошибка
 	callCount := 0
-	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			callCount++

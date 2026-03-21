@@ -209,7 +209,7 @@ func TestProcessInviteCode_UsesInviteExpireDays(t *testing.T) {
 		require.NoError(t, err)
 
 		var captured remnawave.CreateUserRequest
-		client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+		client := remnawave.NewClient("https://panel.example.com", "test-token", []string{"uuid-1", "uuid-2"})
 		clientHTTP := &http.Client{
 			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				require.Equal(t, http.MethodPost, r.Method)
@@ -247,6 +247,7 @@ func TestProcessInviteCode_UsesInviteExpireDays(t *testing.T) {
 		err = b.processInviteCode(ctx, invite.Code)
 		require.NoError(t, err)
 		assert.Equal(t, "2099-01-01T00:00:00Z", captured.ExpireAt)
+		assert.Equal(t, []string{"uuid-1", "uuid-2"}, captured.ActiveInternalSquads)
 	})
 
 	t.Run("Месячный инвайт", func(t *testing.T) {
@@ -257,7 +258,7 @@ func TestProcessInviteCode_UsesInviteExpireDays(t *testing.T) {
 		require.NoError(t, err)
 
 		var captured remnawave.CreateUserRequest
-		client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+		client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 		clientHTTP := &http.Client{
 			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				require.Equal(t, http.MethodPost, r.Method)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -15,9 +16,9 @@ type Config struct {
 	AdminID  int64
 
 	// Remnawave
-	RemnawaveURL       string
-	RemnawaveAPIToken  string
-	RemnawaveSquadUUID string // Опционально, UUID внутреннего сквада
+	RemnawaveURL        string
+	RemnawaveAPIToken   string
+	RemnawaveSquadUUIDs []string // Опционально, UUID внутренних сквадов по умолчанию
 
 	// База данных
 	DBPath string
@@ -40,16 +41,16 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		BotToken:           os.Getenv("BOT_TOKEN"),
-		RemnawaveURL:       os.Getenv("REMNAWAVE_URL"),
-		RemnawaveAPIToken:  os.Getenv("REMNAWAVE_API_TOKEN"),
-		RemnawaveSquadUUID: os.Getenv("REMNAWAVE_DEFAULT_SQUAD_UUID"),
-		DBPath:             getEnvOrDefault("DB_PATH", "/app/data/bot.db"),
-		DonateText:         os.Getenv("DONATE_TEXT"),
-		SDConfigsPath:      getEnvOrDefault("SD_CONFIGS_PATH", "/app/sd_configs"),
-		VictoriaMetricsURL: getEnvOrDefault("VICTORIA_METRICS_URL", "http://victoriametrics:8428"),
-		RenderURL:          os.Getenv("RENDER_URL"),
-		RenderAPIKey:       os.Getenv("RENDER_API_KEY"),
+		BotToken:            os.Getenv("BOT_TOKEN"),
+		RemnawaveURL:        os.Getenv("REMNAWAVE_URL"),
+		RemnawaveAPIToken:   os.Getenv("REMNAWAVE_API_TOKEN"),
+		RemnawaveSquadUUIDs: getRemnawaveSquadUUIDs(),
+		DBPath:              getEnvOrDefault("DB_PATH", "/app/data/bot.db"),
+		DonateText:          os.Getenv("DONATE_TEXT"),
+		SDConfigsPath:       getEnvOrDefault("SD_CONFIGS_PATH", "/app/sd_configs"),
+		VictoriaMetricsURL:  getEnvOrDefault("VICTORIA_METRICS_URL", "http://victoriametrics:8428"),
+		RenderURL:           os.Getenv("RENDER_URL"),
+		RenderAPIKey:        os.Getenv("RENDER_API_KEY"),
 	}
 
 	// Парсинг AdminID
@@ -79,4 +80,36 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// getRemnawaveSquadUUIDs читает список default squads из нового env
+// и использует legacy env как fallback для обратной совместимости.
+func getRemnawaveSquadUUIDs() []string {
+	if squadUUIDs := parseCSVEnv(os.Getenv("REMNAWAVE_DEFAULT_SQUAD_UUIDS")); len(squadUUIDs) > 0 {
+		return squadUUIDs
+	}
+
+	return parseCSVEnv(os.Getenv("REMNAWAVE_DEFAULT_SQUAD_UUID"))
+}
+
+func parseCSVEnv(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		result = append(result, value)
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+
+	return result
 }

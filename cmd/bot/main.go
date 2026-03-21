@@ -49,7 +49,7 @@ func main() {
 	remnawaveClient := remnawave.NewClient(
 		cfg.RemnawaveURL,
 		cfg.RemnawaveAPIToken,
-		cfg.RemnawaveSquadUUID,
+		cfg.RemnawaveSquadUUIDs,
 	)
 
 	// Создание и запуск Telegram бота

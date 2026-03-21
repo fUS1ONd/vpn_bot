@@ -82,7 +82,7 @@ func main() {
 	defer db.Close()
 
 	// Создаём клиент Remnawave
-	client := remnawave.NewClient(remnawaveURL, remnawaveToken, "")
+	client := remnawave.NewClient(remnawaveURL, remnawaveToken, nil)
 
 	// Получаем инвайты без даты активации
 	invites, err := getInvitesWithoutUsedAt(db)

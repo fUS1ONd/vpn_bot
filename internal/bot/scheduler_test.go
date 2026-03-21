@@ -53,7 +53,7 @@ func TestHandleAutoKick_404IsNotFatalError(t *testing.T) {
 	require.NoError(t, db.ClaimInvite(inv.Code, 700))
 
 	// Настраиваем Remnawave — DELETE возвращает 404 (пользователь уже удалён)
-	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodDelete {

@@ -115,7 +115,7 @@ func TestProcessBanUser_PersistsBanAndKeepsInviteHistory(t *testing.T) {
 	require.NoError(t, db.ClaimInvite(inv.Code, targetID))
 	require.NoError(t, db.MarkNotificationSent(targetID, "expire_3d"))
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodDelete && r.URL.Path == "/api/users/uuid-target" {
@@ -185,7 +185,7 @@ func TestHandleAdminModStats(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv.Code, subID))
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && r.URL.Path == "/api/users" {
@@ -344,7 +344,7 @@ func TestProcessSwitchSubscription_ConfirmFlow(t *testing.T) {
 	var gotPatch bool
 	var patchReq remnawave.UpdateUserRequest
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", "")
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {

@@ -32,18 +32,20 @@ var (
 
 // Client — HTTP-клиент для Remnawave API
 type Client struct {
-	baseURL   string
-	apiToken  string
-	squadUUID string
-	http      *http.Client
+	baseURL    string
+	apiToken   string
+	squadUUIDs []string
+	http       *http.Client
 }
 
 // NewClient создаёт новый клиент Remnawave API
-func NewClient(baseURL, apiToken, squadUUID string) *Client {
+func NewClient(baseURL, apiToken string, squadUUIDs []string) *Client {
+	copiedSquadUUIDs := append([]string(nil), squadUUIDs...)
+
 	return &Client{
-		baseURL:   baseURL,
-		apiToken:  apiToken,
-		squadUUID: squadUUID,
+		baseURL:    baseURL,
+		apiToken:   apiToken,
+		squadUUIDs: copiedSquadUUIDs,
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -125,9 +127,9 @@ func (c *Client) CreateUser(telegramID int64, username string, expireAt time.Tim
 		ExpireAt:             expireAt.UTC().Format(time.RFC3339),
 	}
 
-	// Добавляем сквад если указан
-	if c.squadUUID != "" {
-		req.ActiveInternalSquads = []string{c.squadUUID}
+	// Передаём все default squads, если они заданы в конфиге.
+	if len(c.squadUUIDs) > 0 {
+		req.ActiveInternalSquads = append([]string(nil), c.squadUUIDs...)
 	}
 
 	body, err := json.Marshal(req)

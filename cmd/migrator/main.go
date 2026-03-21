@@ -82,7 +82,7 @@ func main() {
 	remnawaveClient := remnawave.NewClient(
 		cfg.RemnawaveURL,
 		cfg.RemnawaveAPIToken,
-		cfg.RemnawaveSquadUUID,
+		cfg.RemnawaveSquadUUIDs,
 	)
 
 	// Открываем лог-файл
