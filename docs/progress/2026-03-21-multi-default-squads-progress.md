@@ -18,10 +18,12 @@
 - ✅ `cmd/bot/main.go` и `cmd/migrator/main.go` передают в клиент `cfg.RemnawaveSquadUUIDs`.
 - ✅ `cmd/backfill-used-at/main.go` и тестовые вызовы `NewClient(...)` переведены на новую сигнатуру.
 - ✅ В `internal/remnawave/client_test.go` добавлен тест `TestCreateUserSetsMultipleInternalSquads`.
+- ✅ Добавлен регрессионный тест `TestCreateUserOmitsEmptyInternalSquads`, который проверяет, что при пустом списке поле `activeInternalSquads` не попадает в JSON-запрос.
 - ✅ В `internal/bot/handlers_test.go` проверено, что signup отправляет оба UUID в `activeInternalSquads`.
 
 ### Task 3 — конфиг и документация проекта
 - ✅ Обновлены `.env.example` и `docker-compose.yml` под `REMNAWAVE_DEFAULT_SQUAD_UUIDS`.
+- ✅ В `.env.example` добавлен явный пример `REMNAWAVE_DEFAULT_SQUAD_UUIDS=uuid-1,uuid-2`, чтобы файл соответствовал шагам плана.
 - ✅ Обновлён `README.md`:
   - описан новый env;
   - добавлен пример списка UUID;
@@ -35,6 +37,11 @@
 
 - `d34f243` — `plan: описать добавление multiple default squads`
 - `d6ce83b` — `feat: добавить назначение новых пользователей в несколько сквадов`
+
+## Доработки после ревью
+
+- Добавлен регрессионный тест на отсутствие `activeInternalSquads` в JSON-запросе при пустом списке default squads.
+- В `.env.example` добавлен явный пример значения `REMNAWAVE_DEFAULT_SQUAD_UUIDS=uuid-1,uuid-2`.
 
 ## Проверки
 
