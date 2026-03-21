@@ -38,7 +38,7 @@ func (b *Bot) isAdmin(c tele.Context) bool {
 func (b *Bot) handleAdminStart(c tele.Context) error {
 	return c.Send(MsgAdminWelcome, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: b.adminKeyboard(),
+		ReplyMarkup: AdminKeyboard(),
 	})
 }
 
@@ -50,27 +50,6 @@ func (b *Bot) handleAdminManageMenu(c tele.Context) error {
 	return c.Send("<b>Управление</b>\n\nВыберите действие:", &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: AdminManageKeyboard(),
-	})
-}
-
-func (b *Bot) handleAdminPreviewToggle(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	enabled := !b.isPreviewModeEnabled()
-	b.setPreviewMode(enabled)
-
-	statusText := "выключен"
-	description := "Новые пользователи снова будут сразу попадать в сценарий ввода инвайта."
-	if enabled {
-		statusText = "включен"
-		description = "Незарегистрированные пользователи могут смотреть интерфейс без активации VPN."
-	}
-
-	return c.Send(fmt.Sprintf("<b>Preview-режим %s</b>\n\n%s", statusText, description), &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: b.adminKeyboard(),
 	})
 }
 
