@@ -29,9 +29,17 @@ make logs
 | `REMNAWAVE_URL`                | ✅           | URL панели Remnawave                                        |
 | `REMNAWAVE_API_TOKEN`          | ✅           | JWT-токен из панели Remnawave                               |
 | `DB_PATH`                      | —            | Путь к SQLite-базе (дефолт: `/app/data/bot.db`)             |
-| `REMNAWAVE_DEFAULT_SQUAD_UUID` | —            | UUID internal squad (если пользователи не видят серверы)    |
+| `REMNAWAVE_DEFAULT_SQUAD_UUIDS` | —            | Список UUID internal squads через запятую; новые пользователи добавляются во все перечисленные сквады |
 | `DONATE_TEXT`                  | —            | Текст с реквизитами для кнопки "Поддержать"                 |
 | `VICTORIA_METRICS_URL`         | —            | URL VictoriaMetrics (дефолт: `http://victoriametrics:8428`) |
+
+Пример:
+
+```env
+REMNAWAVE_DEFAULT_SQUAD_UUIDS=uuid-1,uuid-2,uuid-3
+```
+
+Для обратной совместимости бот также понимает legacy-переменную `REMNAWAVE_DEFAULT_SQUAD_UUID`, если новый список не задан.
 
 ## Функциональность
 

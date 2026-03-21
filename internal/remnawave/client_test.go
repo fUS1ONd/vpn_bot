@@ -15,7 +15,7 @@ func TestCreateUserSetsUnlimitedTraffic(t *testing.T) {
 	var capturedRequest CreateUserRequest
 	expectedExpireAt := time.Date(2026, time.March, 10, 12, 0, 0, 0, time.UTC)
 
-	client := NewClient("https://panel.example.com", "test-token", "")
+	client := NewClient("https://panel.example.com", "test-token", nil)
 	client.http = &http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			require.Equal(t, http.MethodPost, r.Method)
@@ -61,6 +61,85 @@ func TestCreateUserSetsUnlimitedTraffic(t *testing.T) {
 	require.Equal(t, expectedExpireAt.Format(time.RFC3339), capturedRequest.ExpireAt)
 }
 
+func TestCreateUserSetsMultipleInternalSquads(t *testing.T) {
+	var capturedRequest CreateUserRequest
+	expectedExpireAt := time.Date(2026, time.March, 11, 15, 0, 0, 0, time.UTC)
+
+	client := NewClient("https://panel.example.com", "test-token", []string{"uuid-1", "uuid-2"})
+	client.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			require.Equal(t, http.MethodPost, r.Method)
+			require.Equal(t, "/api/users", r.URL.Path)
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&capturedRequest))
+
+			payload, err := json.Marshal(map[string]any{
+				"response": map[string]any{
+					"uuid":              "uuid-2",
+					"shortUuid":         "short-2",
+					"username":          "bob",
+					"status":            StatusActive,
+					"trafficLimitBytes": 0,
+					"subscriptionUrl":   "vless://example",
+					"createdAt":         time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+					"expireAt":          expectedExpireAt.Format(time.RFC3339),
+				},
+			})
+			require.NoError(t, err)
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(string(payload))),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	user, err := client.CreateUser(54321, "bob", expectedExpireAt)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.Equal(t, []string{"uuid-1", "uuid-2"}, capturedRequest.ActiveInternalSquads)
+}
+
+func TestCreateUserOmitsEmptyInternalSquads(t *testing.T) {
+	var capturedBody map[string]any
+	expectedExpireAt := time.Date(2026, time.March, 12, 18, 0, 0, 0, time.UTC)
+
+	client := NewClient("https://panel.example.com", "test-token", nil)
+	client.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			require.Equal(t, http.MethodPost, r.Method)
+			require.Equal(t, "/api/users", r.URL.Path)
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&capturedBody))
+
+			payload, err := json.Marshal(map[string]any{
+				"response": map[string]any{
+					"uuid":              "uuid-3",
+					"shortUuid":         "short-3",
+					"username":          "carol",
+					"status":            StatusActive,
+					"trafficLimitBytes": 0,
+					"subscriptionUrl":   "vless://example",
+					"createdAt":         time.Date(2026, time.March, 2, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+					"expireAt":          expectedExpireAt.Format(time.RFC3339),
+				},
+			})
+			require.NoError(t, err)
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(string(payload))),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	user, err := client.CreateUser(98765, "carol", expectedExpireAt)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	_, exists := capturedBody["activeInternalSquads"]
+	require.False(t, exists)
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -93,7 +172,7 @@ func TestCalculateExtendedExpireAt(t *testing.T) {
 }
 
 func TestExtendUserSubscription_EnableAndPatch(t *testing.T) {
-	client := NewClient("https://panel.example.com", "test-token", "")
+	client := NewClient("https://panel.example.com", "test-token", nil)
 
 	var patchReq UpdateUserRequest
 	var gotEnable bool
@@ -141,7 +220,7 @@ func TestExtendUserSubscription_EnableAndPatch(t *testing.T) {
 }
 
 func TestExtendUserSubscription_RejectTooEarly(t *testing.T) {
-	client := NewClient("https://panel.example.com", "test-token", "")
+	client := NewClient("https://panel.example.com", "test-token", nil)
 
 	var gotPatch bool
 	client.http = &http.Client{
