@@ -8,6 +8,9 @@
 
 ## 1. Переменные окружения (.env)
 
+> В этом чеклисте используется существующий домен `fus1ond.ru` с отдельным path-префиксом `/vpn-bot`.
+> Если понадобится другой префикс, его нужно заменить единообразно в `PLATEGA_CALLBACK_URL`, nginx-конфиге и smoke test.
+
 ### Обязательные (новые)
 
 ```env
@@ -16,7 +19,7 @@ PLATEGA_MERCHANT_ID=ваш_merchant_id
 PLATEGA_SECRET=ваш_secret_key
 
 # Полный URL для callback (HTTPS обязательно!)
-PLATEGA_CALLBACK_URL=https://vpn.fus1ond.ru/platega/callback
+PLATEGA_CALLBACK_URL=https://fus1ond.ru/vpn-bot/platega/callback
 ```
 
 ### Опциональные (с дефолтами)
@@ -60,7 +63,7 @@ VICTORIA_METRICS_URL=http://victoriametrics:8428
 # Platega (НОВОЕ)
 PLATEGA_MERCHANT_ID=your-merchant-id
 PLATEGA_SECRET=your-secret-key
-PLATEGA_CALLBACK_URL=https://vpn.fus1ond.ru/platega/callback
+PLATEGA_CALLBACK_URL=https://fus1ond.ru/vpn-bot/platega/callback
 CALLBACK_PORT=8080
 MIN_SUBSCRIPTION_PRICE=400
 TRIAL_TRAFFIC_LIMIT_GB=1
@@ -82,18 +85,22 @@ PLATEGA_FEE_WITHDRAWAL=2
 - **Docker-compose nginx:** `/root/MyCVWEBsite/docker-compose.prod.yml`
 - **vpn-bot:** `/root/vpn_bot/docker-compose.yml`, контейнер `vpn-bot`
 - **Сети:** nginx в `mycvwebsite_pwp-network`, vpn-bot в `vpn_bot_vpn-network` — **разные сети!**
-- **Домены:** `fus1ond.ru` (портфолио), `moto-23.ru` (магазин). Для VPN-бота домена пока нет
+- **Домены:** `fus1ond.ru` (портфолио), `moto-23.ru` (магазин)
 - **SSL:** Let's Encrypt через certbot (контейнер `mycvwebsite-certbot-1`)
 
 ### Что нужно сделать
 
-#### 2.1. Выделить домен/субдомен для callback
+#### 2.1. Выделить path-префикс для callback на существующем домене
 
-Platega требует HTTPS. Варианты:
+Platega требует HTTPS. В текущем деплое отдельный домен или субдомен не нужен: callback и health публикуются через существующий `fus1ond.ru` с отдельным префиксом.
 
-- **Вариант A (рекомендуется):** Субдомен `vpn.fus1ond.ru` — добавить A-запись в DNS, указывающую на `5.53.125.146`
-- **Вариант B:** Отдельный домен
-- **Вариант C:** Использовать `fus1ond.ru` с отдельным location — проще, но мешает основному сайту
+Используем:
+
+- callback URL: `https://fus1ond.ru/vpn-bot/platega/callback`
+- health URL: `https://fus1ond.ru/vpn-bot/health`
+- внутренние роуты бота без изменений:
+  - `/platega/callback`
+  - `/health`
 
 #### 2.2. Подключить vpn-bot к сети nginx
 
@@ -130,53 +137,30 @@ docker compose down && docker compose up -d
 
 Теперь nginx сможет обращаться к `vpn-bot:8080` по имени контейнера.
 
-#### 2.3. Получить SSL-сертификат для субдомена
+#### 2.3. Проверить существующий HTTPS для `fus1ond.ru`
 
 ```bash
-# Добавить субдомен в certbot (из директории MyCVWEBsite)
+# Проверить, что текущий домен уже отвечает по HTTPS
 cd /root/MyCVWEBsite
-docker compose -f docker-compose.prod.yml exec certbot certbot certonly --webroot \
-  --webroot-path=/var/www/certbot \
-  -d vpn.fus1ond.ru \
-  --agree-tos --no-eff-email
+curl -I https://fus1ond.ru
 ```
 
-Или расширить существующий сертификат:
+Дополнительно проверить, что nginx уже обслуживает `fus1ond.ru`:
+
 ```bash
-docker compose -f docker-compose.prod.yml exec certbot certbot certonly --webroot \
-  --webroot-path=/var/www/certbot \
-  -d fus1ond.ru -d vpn.fus1ond.ru \
-  --agree-tos --no-eff-email --expand
+docker compose -f docker-compose.prod.yml exec nginx nginx -T | grep -n "server_name fus1ond.ru"
 ```
 
-#### 2.4. Добавить server block в nginx.prod.conf
+Если `fus1ond.ru` уже работает с валидным сертификатом, отдельный certbot-шаг для callback не нужен.
 
-В файле `/root/MyCVWEBsite/nginx.prod.conf` добавить **перед** закрывающей `}` блока `http`:
+#### 2.4. Добавить location-блоки в существующий server block `fus1ond.ru`
+
+В файле `/root/MyCVWEBsite/nginx.prod.conf` найти существующий `server` для `fus1ond.ru` и добавить в него:
 
 ```nginx
-    # VPN Bot Platega callback
-    server {
-        listen 80;
-        server_name vpn.fus1ond.ru;
-        location /.well-known/acme-challenge/ {
-            root /var/www/certbot;
-        }
-        location / {
-            return 301 https://$host$request_uri;
-        }
-    }
-
-    server {
-        listen 443 ssl;
-        server_name vpn.fus1ond.ru;
-        ssl_certificate /etc/letsencrypt/live/vpn.fus1ond.ru/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/vpn.fus1ond.ru/privkey.pem;
-        include /etc/letsencrypt/options-ssl-nginx.conf;
-        ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-
-        # Platega callback
-        location /platega/callback {
-            proxy_pass http://vpn-bot:8080;
+        # VPN Bot Platega callback через path-префикс
+        location = /vpn-bot/platega/callback {
+            proxy_pass http://vpn-bot:8080/platega/callback;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -190,19 +174,17 @@ docker compose -f docker-compose.prod.yml exec certbot certbot certonly --webroo
             proxy_send_timeout 60s;
         }
 
-        # Health check
-        location /health {
-            proxy_pass http://vpn-bot:8080;
+        # Health check бота через тот же path-префикс
+        location = /vpn-bot/health {
+            proxy_pass http://vpn-bot:8080/health;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
         }
-
-        # Всё остальное — 404
-        location / {
-            return 404;
-        }
-    }
 ```
 
-**Примечание:** `proxy_pass http://vpn-bot:8080` работает потому что vpn-bot подключён к сети `mycvwebsite_pwp-network` (шаг 2.2). Если вместо этого используется проброс порта на хост, заменить на `proxy_pass http://host.docker.internal:8080` или `proxy_pass http://172.17.0.1:8080` (IP хоста из Docker).
+**Примечание:** `proxy_pass http://vpn-bot:8080/...` работает потому что vpn-bot подключён к сети `mycvwebsite_pwp-network` (шаг 2.2). Если вместо этого используется проброс порта на хост, заменить на `proxy_pass http://host.docker.internal:8080/...` или `proxy_pass http://172.17.0.1:8080/...` (IP хоста из Docker).
 
 #### 2.5. Перезагрузить nginx
 
@@ -216,11 +198,11 @@ docker compose -f docker-compose.prod.yml exec nginx nginx -s reload
 
 ```bash
 # Health check через HTTPS
-curl -s https://vpn.fus1ond.ru/health
+curl -s https://fus1ond.ru/vpn-bot/health
 # Ответ: OK
 
 # Callback без заголовков — 401
-curl -s -o /dev/null -w "%{http_code}" -X POST https://vpn.fus1ond.ru/platega/callback
+curl -s -o /dev/null -w "%{http_code}" -X POST https://fus1ond.ru/vpn-bot/platega/callback
 # Ответ: 401
 ```
 
@@ -250,13 +232,9 @@ curl -s -o /dev/null -w "%{http_code}" -X POST https://vpn.fus1ond.ru/platega/ca
 cd /root/vpn_bot
 cp data/bot.db data/bot.db.backup-$(date +%Y%m%d)
 
-# 2. Добавить DNS-запись vpn.fus1ond.ru → 5.53.125.146
-#    (в панели управления DNS провайдера)
-
-# 2.1. Проверить DNS-пропагацию (certbot упадёт если DNS ещё не готов)
-dig +short vpn.fus1ond.ru
-# Ожидаемый ответ: 5.53.125.146
-# Если пусто — подождать (обычно 5-30 минут, иногда до 48 часов)
+# 2. Проверить, что fus1ond.ru уже обслуживается текущим nginx по HTTPS
+curl -I https://fus1ond.ru
+# Ожидаемый ответ: HTTP 200/301/302, без TLS-ошибки
 
 # 3. Бэкап nginx-конфига
 cp /root/MyCVWEBsite/nginx.prod.conf /root/MyCVWEBsite/nginx.prod.conf.backup
@@ -275,12 +253,11 @@ nano /root/vpn_bot/.env
 # 5. Обновить docker-compose.yml vpn-bot (добавить сеть и порт, см. раздел 2.2)
 nano /root/vpn_bot/docker-compose.yml
 
-# 6. Получить SSL-сертификат для vpn.fus1ond.ru (см. раздел 2.3)
+# 6. Проверить текущий HTTPS-конфиг для fus1ond.ru (см. раздел 2.3)
 cd /root/MyCVWEBsite
-docker compose -f docker-compose.prod.yml exec certbot certbot certonly --webroot \
-  --webroot-path=/var/www/certbot -d vpn.fus1ond.ru --agree-tos --no-eff-email
+docker compose -f docker-compose.prod.yml exec nginx nginx -T | grep -n "server_name fus1ond.ru"
 
-# 7. Добавить server block для vpn.fus1ond.ru в nginx (см. раздел 2.4)
+# 7. Добавить location-блоки `/vpn-bot/...` в server block fus1ond.ru (см. раздел 2.4)
 nano /root/MyCVWEBsite/nginx.prod.conf
 
 # 8. Проверить и перезагрузить nginx
@@ -307,11 +284,11 @@ curl -s http://127.0.0.1:8080/health
 # Ожидаемый ответ: OK
 
 # 11. Проверить через nginx (HTTPS)
-curl -s https://vpn.fus1ond.ru/health
+curl -s https://fus1ond.ru/vpn-bot/health
 # Ожидаемый ответ: OK
 
 # 12. Проверить что callback endpoint доступен
-curl -s -o /dev/null -w "%{http_code}" -X POST https://vpn.fus1ond.ru/platega/callback
+curl -s -o /dev/null -w "%{http_code}" -X POST https://fus1ond.ru/vpn-bot/platega/callback
 # Ожидаемый ответ: 401 (нет заголовков — это правильно)
 
 # 13. Проверить логи на ошибки
@@ -364,7 +341,7 @@ docker compose logs vpn-bot | grep -i "callback\|platega"
 ### Тест 1: Health check
 
 ```bash
-curl https://vpn.fus1ond.ru/health
+curl https://fus1ond.ru/vpn-bot/health
 # Ответ: OK
 ```
 
@@ -372,14 +349,14 @@ curl https://vpn.fus1ond.ru/health
 
 ```bash
 # Без заголовков — должен быть 401
-curl -s -o /dev/null -w "%{http_code}" -X POST https://vpn.fus1ond.ru/platega/callback
+curl -s -o /dev/null -w "%{http_code}" -X POST https://fus1ond.ru/vpn-bot/platega/callback
 # Ответ: 401
 
 # С неверными заголовками — должен быть 401
 curl -s -o /dev/null -w "%{http_code}" -X POST \
   -H "X-MerchantId: wrong" \
   -H "X-Secret: wrong" \
-  https://vpn.fus1ond.ru/platega/callback
+  https://fus1ond.ru/vpn-bot/platega/callback
 # Ответ: 401
 ```
 
@@ -457,7 +434,7 @@ make down && make up
 ### Откат nginx
 
 ```bash
-# Удалить server block для vpn.fus1ond.ru из конфига
+# Удалить location-блоки `/vpn-bot/platega/callback` и `/vpn-bot/health` из конфига
 nano /root/MyCVWEBsite/nginx.prod.conf
 cd /root/MyCVWEBsite
 docker compose -f docker-compose.prod.yml exec nginx nginx -t
