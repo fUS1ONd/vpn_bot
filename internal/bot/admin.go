@@ -692,7 +692,7 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 
 	conversion := 0
 	if trialsThisMonth > 0 {
-		conversion = (firstPayments*100 + trialsThisMonth/2) / trialsThisMonth
+		conversion = firstPayments * 100 / trialsThisMonth
 	}
 
 	ownerIncome := monthEarnings.TotalNetAmount - monthEarnings.TotalShareAmount
