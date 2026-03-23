@@ -336,7 +336,7 @@ func TestGetConfirmedPaymentsByMonth(t *testing.T) {
 
 	payments, err := db.GetConfirmedPaymentsByMonth(2026, 3)
 	require.NoError(t, err)
-	require.Len(t, payments, 4)
+	require.Len(t, payments, 3, "chargebacked платежи не должны попадать в выручку")
 
 	byTelegramID := make(map[int64]MonthlyConfirmedPayment, len(payments))
 	for _, payment := range payments {
@@ -366,10 +366,8 @@ func TestGetConfirmedPaymentsByMonth(t *testing.T) {
 	assert.Equal(t, 800, notActivatedPayment.Amount)
 	assert.Equal(t, 105, notActivatedPayment.ShareAmount)
 
-	chargebackedPayment, ok := byTelegramID[204]
-	require.True(t, ok)
-	assert.Equal(t, 600, chargebackedPayment.Amount)
-	assert.Equal(t, 0, chargebackedPayment.ShareAmount)
+	_, ok = byTelegramID[204]
+	assert.False(t, ok, "chargebacked платёж не должен попадать в выручку")
 }
 
 func TestCountFirstPaymentsByMonth_IncludesFinanciallyConfirmedStatuses(t *testing.T) {

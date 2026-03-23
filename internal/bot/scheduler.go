@@ -312,10 +312,10 @@ func (b *Bot) handleAutoKick(telegramID int64, userUUID string) {
 		} else {
 			slog.Warn("Scheduler failed to delete user from Remnawave during auto-kick", "error", err, "telegram_id", telegramID)
 			b.sendAdminAlert(fmt.Sprintf(
-				"⚠️ Auto-kick не завершён: не удалось удалить пользователя %d из Remnawave: %v",
+				"⚠️ Auto-kick: не удалось удалить пользователя %d из Remnawave: %v. Продолжаем удаление из БД.",
 				telegramID, err,
 			))
-			return
+			// НЕ делаем return — продолжаем удаление из БД, чтобы избежать partial failure
 		}
 	}
 

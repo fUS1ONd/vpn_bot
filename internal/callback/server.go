@@ -26,6 +26,7 @@ type Server struct {
 	handler    PaymentHandler
 	httpServer *http.Server
 	mux        *http.ServeMux
+	limiter    *ipRateLimiter
 }
 
 // NewServer создаёт callback-сервер. port=0 означает автовыбор ОС (для тестов).
@@ -34,10 +35,11 @@ func NewServer(port int, merchantID, secret string, handler PaymentHandler) *Ser
 		merchantID: merchantID,
 		secret:     secret,
 		handler:    handler,
+		limiter:    newIPRateLimiter(10, 20), // 10 req/s, burst 20
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/platega/callback", s.handleCallback)
+	mux.HandleFunc("/platega/callback", s.rateLimitMiddleware(s.handleCallback))
 	mux.HandleFunc("/health", s.handleHealth)
 	s.mux = mux
 

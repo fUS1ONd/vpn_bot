@@ -194,7 +194,12 @@ func (b *Bot) schedulePaymentActivationRetry(paymentID int64) {
 		}()
 
 		for attempt, delay := range delays {
-			time.Sleep(delay)
+			select {
+			case <-b.shutdownCh:
+				slog.Info("Payment retry cancelled by shutdown", "payment_id", paymentID, "attempt", attempt+1)
+				return
+			case <-time.After(delay):
+			}
 
 			if b.retryConfirmedPaymentActivation(paymentID, "background_retry") {
 				return
@@ -478,7 +483,7 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 	// Проверка лимита 90 дней: нельзя оплатить, если до конца подписки >= 90 дней
 	remUser, err := b.remnawave.GetUserByTelegramID(telegramID)
 	if err == nil && remUser != nil && remUser.Status == "ACTIVE" && remUser.ExpireAt.Year() < 2099 {
-		daysLeft := int(time.Until(remUser.ExpireAt).Hours() / 24)
+		daysLeft := int(remUser.ExpireAt.Sub(time.Now().UTC()).Hours() / 24)
 		if daysLeft >= 90 {
 			return nil, "", fmt.Errorf("subscription_too_far: %d days left", daysLeft)
 		}
@@ -564,13 +569,14 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 // Защищён мьютексом по telegram_id для предотвращения race condition
 // с параллельным callback от Platega.
 func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
+	// Глобальная операция: помечаем протухшие PENDING как expired (не ждём scheduler).
+	// Вызывается ДО захвата per-user mutex, т.к. операция не привязана к конкретному пользователю.
+	b.db.ExpireOldPendingPayments()
+
 	// Берём мьютекс ДО чтения из БД — та же блокировка, что и в callback
 	mu := getPaymentMutex(telegramID)
 	mu.Lock()
 	defer mu.Unlock()
-
-	// Попутно помечаем протухшие PENDING как expired (не ждём scheduler)
-	b.db.ExpireOldPendingPayments()
 
 	pending, err := b.db.GetPendingPayment(telegramID)
 	if err != nil {

@@ -274,6 +274,7 @@ func (db *DB) GetConfirmedPaymentsByMonth(year int, month int) ([]MonthlyConfirm
 		     GROUP BY payment_id
 		 ) me ON me.payment_id = p.id
 		 WHERE p.confirmed_at >= ? AND p.confirmed_at < ?
+		   AND p.status NOT IN ('chargebacked')
 		 ORDER BY p.confirmed_at ASC, p.id ASC`,
 		start, end,
 	)
@@ -323,7 +324,7 @@ func (db *DB) CountConfirmedPaymentsByMonth(year int, month int) (int, error) {
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	err := db.conn.QueryRow(
-		`SELECT COUNT(*) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ?`,
+		`SELECT COUNT(*) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ? AND status NOT IN ('chargebacked')`,
 		start, end,
 	).Scan(&count)
 	return count, err
@@ -335,7 +336,7 @@ func (db *DB) SumConfirmedPaymentsByMonth(year int, month int) (int, error) {
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	err := db.conn.QueryRow(
-		`SELECT COALESCE(SUM(amount), 0) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ?`,
+		`SELECT COALESCE(SUM(amount), 0) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ? AND status NOT IN ('chargebacked')`,
 		start, end,
 	).Scan(&sum)
 	return sum, err

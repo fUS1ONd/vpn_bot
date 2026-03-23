@@ -180,13 +180,15 @@ func (b *Bot) processVideoRender(chatID int64, statusMsgID int, telegramID int64
 		return
 	}
 	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
 
 	if _, err := io.Copy(tmpFile, resultBody); err != nil {
+		tmpFile.Close()
 		slog.Error("Не удалось записать результат", "error", err)
 		b.bot.Edit(statusMsg, MsgSubtitlesError)
 		return
 	}
+	// Закрываем файл перед отправкой — иначе Telegram SDK не сможет его прочитать (на Windows — блокировка)
+	tmpFile.Close()
 
 	// Отправляем видео пользователю
 	video := &tele.Video{File: tele.FromDisk(tmpFile.Name())}
@@ -235,13 +237,15 @@ func (b *Bot) processCircleRender(chatID int64, statusMsgID int, telegramID int6
 		return
 	}
 	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
 
 	if _, err := io.Copy(tmpFile, resultBody); err != nil {
+		tmpFile.Close()
 		slog.Error("Не удалось записать результат", "error", err)
 		b.bot.Edit(statusMsg, MsgSubtitlesError)
 		return
 	}
+	// Закрываем файл перед отправкой — иначе Telegram SDK не сможет его прочитать
+	tmpFile.Close()
 
 	// Отправляем как кружок (VideoNote)
 	videoNote := &tele.VideoNote{File: tele.FromDisk(tmpFile.Name())}

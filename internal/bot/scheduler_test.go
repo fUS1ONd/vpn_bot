@@ -97,7 +97,7 @@ func TestHandleAutoKick_404IsNotFatalError(t *testing.T) {
 	assert.NotNil(t, invite.KickedAt, "kicked_at должен быть проставлен после автокика")
 }
 
-func TestHandleAutoKick_DoesNotCleanupOnRemnawaveDeleteError(t *testing.T) {
+func TestHandleAutoKick_ContinuesCleanupOnRemnawaveDeleteError(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	_, err := db.CreateUser(701, "victim", "Victim", "uuid-701", nil, nil)
@@ -127,14 +127,15 @@ func TestHandleAutoKick_DoesNotCleanupOnRemnawaveDeleteError(t *testing.T) {
 
 	b.handleAutoKick(701, "uuid-701")
 
+	// Даже при ошибке Remnawave — cleanup в БД продолжается, чтобы не было partial failure
 	dbUser, err := db.GetUserByTelegramID(701)
 	require.NoError(t, err)
-	assert.NotNil(t, dbUser, "локальный cleanup нельзя делать, если DeleteUser в Remnawave завершился ошибкой")
+	assert.Nil(t, dbUser, "пользователь должен быть удалён из БД даже при ошибке Remnawave (partial failure fix)")
 
 	invite, err := db.GetInviteByCode(inv.Code)
 	require.NoError(t, err)
 	require.NotNil(t, invite)
-	assert.Nil(t, invite.KickedAt, "kicked_at нельзя ставить при неуспешном удалении в панели")
+	assert.NotNil(t, invite.KickedAt, "kicked_at должен быть проставлен даже при ошибке Remnawave")
 }
 
 func TestHandleAutoKick_SkipsAlreadyDeletedInRemnawave(t *testing.T) {

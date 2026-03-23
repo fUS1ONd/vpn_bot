@@ -40,6 +40,8 @@ type Bot struct {
 	maintenanceMode      atomic.Bool               // Режим обслуживания (сбрасывается при перезапуске)
 	paymentRetryDelays   []time.Duration           // Тестовые override-задержки для короткого background retry активации
 	paymentRetryInFlight sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
+	shutdownCh           chan struct{}             // Закрывается при Stop() для отмены фоновых горутин
+	userLimiter          *userRateLimiter          // per-user rate limiter для команд бота
 	modChangePriceMu     sync.RWMutex
 	modChangePriceData   map[int64]modChangePriceSession // pending-данные изменения цены для модератора
 	adminSwitchMu        sync.RWMutex
@@ -69,10 +71,23 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		metricsClient:      monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
 		dashboardMgr:       newDashboardManager(),
 		sdConfigsPath:      cfg.SDConfigsPath,
+		shutdownCh:         make(chan struct{}),
+		userLimiter:        newUserRateLimiter(3, 5), // 3 req/s, burst 5
 		modChangePriceData: make(map[int64]modChangePriceSession),
 		adminSwitchData:    make(map[int64]adminSwitchSession),
 		adminPriceData:     make(map[int64]adminChangePriceSession),
 	}
+
+	// Rate limiting middleware — защита от спама командами
+	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
+		return func(c tele.Context) error {
+			if c.Sender() != nil && !bot.userLimiter.allow(c.Sender().ID) {
+				slog.Warn("Rate limit exceeded", "telegram_id", c.Sender().ID)
+				return nil // Молча игнорируем
+			}
+			return next(c)
+		}
+	})
 
 	// Middleware для логирования
 	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
@@ -127,6 +142,7 @@ func (b *Bot) Run() {
 
 // Stop останавливает бота (для graceful shutdown)
 func (b *Bot) Stop() {
+	close(b.shutdownCh)
 	b.bot.Stop()
 }
 
@@ -208,7 +224,7 @@ func (b *Bot) handleStart(c tele.Context) error {
 		subType := determineSubscriptionType(remUser, b.isTrialUser(telegramID))
 		if subType == subTypeGrace {
 			graceDeadline := remUser.ExpireAt.Add(72 * time.Hour)
-			remaining := time.Until(graceDeadline)
+			remaining := graceDeadline.Sub(time.Now().UTC())
 			var remainStr string
 			days := int(remaining.Hours() / 24)
 			if days > 0 {
