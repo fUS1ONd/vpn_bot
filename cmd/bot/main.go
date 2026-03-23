@@ -14,7 +14,6 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/monitoring"
-	"github.com/fus1ond/vpn_bot/internal/platega"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
 
@@ -77,10 +76,7 @@ func main() {
 
 	// Запуск callback-сервера (если Platega настроена)
 	if cfg.PlategaMerchantID != "" && cfg.PlategaSecret != "" {
-		// TODO(этап 4): заменить stubHandler на telegramBot.PaymentCallbackHandler()
-		// когда метод будет реализован в боте
-		stubHandler := &noopPaymentHandler{}
-		callbackServer := callback.NewServer(cfg.CallbackPort, cfg.PlategaMerchantID, cfg.PlategaSecret, stubHandler)
+		callbackServer := callback.NewServer(cfg.CallbackPort, cfg.PlategaMerchantID, cfg.PlategaSecret, telegramBot.PaymentCallbackHandler())
 
 		go func() {
 			if err := callbackServer.Start(); err != nil && err != http.ErrServerClosed {
@@ -115,12 +111,4 @@ func main() {
 
 	<-ctx.Done()
 	slog.Info("Bot stopped")
-}
-
-// noopPaymentHandler — заглушка обработчика платежей до реализации в этапе 4
-type noopPaymentHandler struct{}
-
-func (n *noopPaymentHandler) HandlePaymentCallback(payload platega.CallbackPayload) error {
-	slog.Info("Callback получен (заглушка, этап 4 не реализован)", "transaction_id", payload.ID)
-	return nil
 }

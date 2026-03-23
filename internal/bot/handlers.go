@@ -10,6 +10,7 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/monitoring"
+	"github.com/fus1ond/vpn_bot/internal/platega"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/fus1ond/vpn_bot/internal/render"
 	tele "gopkg.in/telebot.v3"
@@ -33,6 +34,8 @@ type Bot struct {
 	dashboardMgr    *dashboardManager         // менеджер сессий дашборда
 	sdConfigsPath   string                    // путь к sd_configs (для чтения targets)
 	render          *render.Client            // клиент render-сервиса (nil если не настроен)
+	platega         *platega.Client           // Platega API клиент (nil если не настроен)
+	maintenanceMode bool                      // Режим обслуживания (сбрасывается при перезапуске)
 	modExtendMu     sync.RWMutex
 	modExtendData   map[int64]modExtendSession // pending-данные продления для модератора
 	adminSwitchMu   sync.RWMutex
@@ -89,6 +92,12 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	if cfg.RenderURL != "" {
 		bot.render = render.NewClient(cfg.RenderURL, cfg.RenderAPIKey)
 		slog.Info("Render service enabled", "url", cfg.RenderURL)
+	}
+
+	// Инициализация Platega-клиента (опционально)
+	if cfg.PlategaMerchantID != "" && cfg.PlategaSecret != "" {
+		bot.platega = platega.NewClient(cfg.PlategaMerchantID, cfg.PlategaSecret)
+		slog.Info("Platega client initialized")
 	}
 
 	// Регистрация обработчиков
@@ -406,7 +415,13 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		expireAt = time.Now().UTC().AddDate(0, 0, *invite.ExpireDays)
 	}
 
-	remnawaveUser, err := b.remnawave.CreateUser(telegramID, username, expireAt)
+	// Определяем лимит трафика: триал получает ограничение, админский инвайт — безлимит
+	var trafficLimitBytes int64
+	if invite.ExpireDays != nil {
+		trafficLimitBytes = int64(b.config.TrialTrafficLimitGB) * 1024 * 1024 * 1024
+	}
+
+	remnawaveUser, err := b.remnawave.CreateUser(telegramID, username, expireAt, trafficLimitBytes)
 	if err != nil {
 		slog.Error("Failed to create user in Remnawave", "error", err)
 		// Откатываем инвайт — пользователь не создан

@@ -340,9 +340,8 @@ func TestProcessSwitchSubscription_ConfirmFlow(t *testing.T) {
 	require.NoError(t, db.ClaimInvite(invite.Code, targetID))
 	require.NoError(t, db.MarkNotificationSent(targetID, "expire_3d"))
 
-	var gotEnable bool
-	var gotPatch bool
-	var patchReq remnawave.UpdateUserRequest
+	var patchCount int
+	var lastPatchReq remnawave.UpdateUserRequest
 
 	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
@@ -355,17 +354,9 @@ func TestProcessSwitchSubscription_ConfirmFlow(t *testing.T) {
 					Body:       io.NopCloser(strings.NewReader(payload)),
 					Header:     make(http.Header),
 				}, nil
-			case r.Method == http.MethodPost && r.URL.Path == "/api/users/uuid-target/actions/enable":
-				gotEnable = true
-				payload := `{"response":{"success":true}}`
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader(payload)),
-					Header:     make(http.Header),
-				}, nil
 			case r.Method == http.MethodPatch && r.URL.Path == "/api/users":
-				gotPatch = true
-				require.NoError(t, json.NewDecoder(r.Body).Decode(&patchReq))
+				patchCount++
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&lastPatchReq))
 				payload := `{"response":{"uuid":"uuid-target"}}`
 				return &http.Response{
 					StatusCode: http.StatusOK,
@@ -401,11 +392,11 @@ func TestProcessSwitchSubscription_ConfirmFlow(t *testing.T) {
 	err = b.processSwitchSubscriptionConfirm(ctxConfirm, BtnConfirmYes)
 	require.NoError(t, err)
 
-	require.True(t, gotEnable)
-	require.True(t, gotPatch)
-	require.Equal(t, "uuid-target", patchReq.UUID)
-	require.NotNil(t, patchReq.ExpireAt)
-	assert.Equal(t, "2099-01-01T00:00:00Z", *patchReq.ExpireAt)
+	// EnableUser (PATCH) + UpdateUser (PATCH) = 2 вызова
+	require.Equal(t, 2, patchCount)
+	require.Equal(t, "uuid-target", lastPatchReq.UUID)
+	require.NotNil(t, lastPatchReq.ExpireAt)
+	assert.Equal(t, "2099-01-01T00:00:00Z", *lastPatchReq.ExpireAt)
 
 	gotInvite, err := db.GetInviteByUsedBy(targetID)
 	require.NoError(t, err)

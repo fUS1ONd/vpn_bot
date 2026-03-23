@@ -199,8 +199,11 @@ func (b *Bot) processSwitchSubscriptionConfirm(c tele.Context, text string) erro
 		return c.Send("Ошибка при обновлении подписки, попробуйте позже", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
+	unlimitedExpireAt := time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC)
+
 	if remUser.Status == remnawave.StatusExpired || remUser.Status == remnawave.StatusDisabled {
-		if err := b.remnawave.EnableUser(session.UserUUID); err != nil {
+		// EnableUser одним вызовом ставит ACTIVE + ExpireAt + безлимит трафика
+		if err := b.remnawave.EnableUser(session.UserUUID, unlimitedExpireAt); err != nil {
 			slog.Error("Failed to enable user before switching subscription", "error", err, "telegram_id", session.TargetTelegramID)
 			b.userStates.Delete(adminID)
 			b.clearAdminSwitchSession(adminID)
@@ -208,7 +211,6 @@ func (b *Bot) processSwitchSubscriptionConfirm(c tele.Context, text string) erro
 		}
 	}
 
-	unlimitedExpireAt := time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC)
 	if err := b.remnawave.UpdateUser(session.UserUUID, remnawave.UpdateUserRequest{
 		UUID:     session.UserUUID,
 		ExpireAt: strPtr(unlimitedExpireAt.Format(time.RFC3339)),

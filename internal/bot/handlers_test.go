@@ -58,7 +58,10 @@ func setupTestBot(t *testing.T) (*Bot, *database.DB) {
 		os.Remove(dbFile)
 	})
 
-	cfg := &config.Config{AdminID: 999999}
+	cfg := &config.Config{
+		AdminID:             999999,
+		TrialTrafficLimitGB: 1,
+	}
 	b := &Bot{
 		db:         db,
 		config:     cfg,
@@ -247,6 +250,7 @@ func TestProcessInviteCode_UsesInviteExpireDays(t *testing.T) {
 		err = b.processInviteCode(ctx, invite.Code)
 		require.NoError(t, err)
 		assert.Equal(t, "2099-01-01T00:00:00Z", captured.ExpireAt)
+		assert.Equal(t, int64(0), captured.TrafficLimitBytes) // Бессрочный инвайт — безлимит
 		assert.Equal(t, []string{"uuid-1", "uuid-2"}, captured.ActiveInternalSquads)
 	})
 
@@ -302,6 +306,8 @@ func TestProcessInviteCode_UsesInviteExpireDays(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, gotExpireAt.Before(before.AddDate(0, 0, 30).Add(-2*time.Second)))
 		assert.False(t, gotExpireAt.After(after.AddDate(0, 0, 30).Add(2*time.Second)))
+		// Месячный инвайт — лимит трафика (TrialTrafficLimitGB=1 по умолчанию)
+		assert.Equal(t, int64(1*1024*1024*1024), captured.TrafficLimitBytes)
 	})
 }
 

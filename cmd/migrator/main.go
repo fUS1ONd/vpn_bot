@@ -128,6 +128,7 @@ func main() {
 			oldUser.TelegramID,
 			username,
 			time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC),
+			0, // Безлимит для мигрирующих пользователей
 		)
 		if err != nil {
 			logLine := fmt.Sprintf("[ERROR] telegram_id=%d — API error: %v\n", oldUser.TelegramID, err)
