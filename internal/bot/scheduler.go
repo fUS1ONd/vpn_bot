@@ -134,7 +134,9 @@ func (b *Bot) processTrialUser(telegramID int64, dbUser database.User, expireAt,
 			return
 		}
 
-		// Защита: проверяем, не оплатил ли пользователь
+		// Защита: проверяем, не оплатил ли пользователь.
+		// confirmed_not_activated тоже защищает от кика: деньги уже подтверждены,
+		// даже если активация в панели ещё не завершилась.
 		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt)
 		if err != nil {
 			slog.Error("Scheduler: ошибка проверки оплаты при кике триала", "error", err, "telegram_id", telegramID)
@@ -168,7 +170,9 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 
 	// Подписка истекла — disable + начало grace period
 	if !now.Before(expireAt) {
-		// Защита: проверяем, не оплатил ли пользователь после expireAt
+		// Защита: проверяем, не оплатил ли пользователь после expireAt.
+		// confirmed_not_activated тоже считается оплатой для scheduler:
+		// пользователя нельзя disable-ить как должника, пока retry активации продолжается.
 		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt)
 		if err != nil {
 			slog.Error("Scheduler: ошибка проверки оплаты", "error", err, "telegram_id", telegramID)
@@ -197,7 +201,8 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 			return
 		}
 
-		// Защита: проверяем оплату за весь grace period
+		// Защита: проверяем оплату за весь grace period.
+		// confirmed_not_activated здесь тоже блокирует кик: деньги уже получены.
 		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt)
 		if err != nil {
 			slog.Error("Scheduler: ошибка проверки оплаты перед grace kick", "error", err, "telegram_id", telegramID)
@@ -223,6 +228,8 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 
 // isTrialUser проверяет, находится ли пользователь на триале.
 // Триальный = приглашён модераторским инвайтом (expire_days != NULL) И ни разу не платил.
+// confirmed_not_activated уже не считается "не платил": деньги подтверждены, просто
+// активация доступа в панели временно отложена на retry.
 func (b *Bot) isTrialUser(telegramID int64) bool {
 	invite, err := b.db.GetInviteByUsedBy(telegramID)
 	if err != nil || invite == nil || invite.ExpireDays == nil {

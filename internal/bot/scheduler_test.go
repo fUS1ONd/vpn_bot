@@ -263,6 +263,43 @@ func TestSchedulerTrialNotKickedIfPaid(t *testing.T) {
 	assert.NotNil(t, dbUser, "оплативший пользователь не должен быть кикнут")
 }
 
+func TestSchedulerTrialNotKickedIfPaymentConfirmedNotActivated(t *testing.T) {
+	b, db := setupSchedulerTestBot(t)
+
+	modID := int64(101)
+	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	require.NoError(t, err)
+	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
+
+	userID := int64(202)
+	price := 400
+	_, err = db.CreateUser(userID, "user_retry_trial", "User", "uuid-202", &price, &modID)
+	require.NoError(t, err)
+
+	expireDays := 3
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, userID))
+
+	payment := &database.Payment{
+		TelegramID:    userID,
+		Amount:        400,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	id, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(id))
+	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
+
+	yesterday := time.Now().UTC().AddDate(0, 0, -1)
+	b.processTrialUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-202"}, yesterday, time.Now().UTC())
+
+	dbUser, err := db.GetUserByTelegramID(userID)
+	require.NoError(t, err)
+	assert.NotNil(t, dbUser, "пользователь с confirmed_not_activated не должен быть кикнут как неоплативший")
+}
+
 func TestSchedulerSkipsLegacyUserWithoutInvite(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
@@ -530,6 +567,123 @@ func TestSchedulerPaidDisableIgnoresPaymentsBeforeExpireAt(t *testing.T) {
 	assert.True(t, disableCalled, "старый платёж до expireAt не должен блокировать disable после истечения подписки")
 }
 
+func TestSchedulerPaidDisableSkippedIfPaymentConfirmedNotActivated(t *testing.T) {
+	b, db := setupSchedulerTestBot(t)
+
+	modID := int64(131)
+	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	require.NoError(t, err)
+	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
+
+	userID := int64(321)
+	price := 400
+	_, err = db.CreateUser(userID, "paid_retry_disable", "Paid", "uuid-321", &price, &modID)
+	require.NoError(t, err)
+
+	expireDays := 30
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, userID))
+
+	payment := &database.Payment{
+		TelegramID:    userID,
+		Amount:        400,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	id, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(id))
+	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
+
+	var disableCalled bool
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodPatch {
+				disableCalled = true
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, fmt.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}),
+	})
+	b.remnawave = client
+
+	expireAt := time.Now().UTC().Add(-30 * time.Minute)
+	b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-321"}, expireAt, time.Now().UTC())
+
+	assert.False(t, disableCalled, "confirmed_not_activated не должен приводить к disable как будто оплаты не было")
+}
+
+func TestSchedulerGraceKickSkippedIfPaymentConfirmedNotActivated(t *testing.T) {
+	b, db := setupSchedulerTestBot(t)
+
+	modID := int64(132)
+	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	require.NoError(t, err)
+	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
+
+	userID := int64(322)
+	price := 400
+	_, err = db.CreateUser(userID, "paid_retry_grace", "Paid", "uuid-322", &price, &modID)
+	require.NoError(t, err)
+
+	expireDays := 30
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, userID))
+
+	payment := &database.Payment{
+		TelegramID:    userID,
+		Amount:        400,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	id, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(id))
+	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
+
+	var deleteCalled bool
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/api/users/uuid-322") {
+				user := remnawave.User{
+					UUID:     "uuid-322",
+					Status:   "DISABLED",
+					ExpireAt: time.Now().UTC().AddDate(0, 0, -5),
+				}
+				body, _ := json.Marshal(map[string]interface{}{"response": user})
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(body))),
+					Header:     make(http.Header),
+				}, nil
+			}
+			if r.Method == http.MethodDelete {
+				deleteCalled = true
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, fmt.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}),
+	})
+	b.remnawave = client
+
+	expireAt := time.Now().UTC().Add(-96 * time.Hour)
+	b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-322"}, expireAt, time.Now().UTC())
+
+	assert.False(t, deleteCalled, "confirmed_not_activated не должен приводить к grace kick как будто оплаты не было")
+}
+
 // TestSchedulerMaintenanceMode проверяет, что в maintenance mode кики и disable не выполняются
 func TestSchedulerMaintenanceMode(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
@@ -666,4 +820,121 @@ func TestSchedulerRetryConfirmedNotActivated(t *testing.T) {
 	assert.Equal(t, "confirmed", p.Status, "статус должен стать confirmed после retry")
 	require.NotNil(t, p.ConfirmedAt)
 	assert.True(t, p.ConfirmedAt.Equal(confirmedAt), "confirmed_at должен сохраниться после retry")
+}
+
+func TestSchedulerPassDoesNotPunishConfirmedNotActivatedWhenRetryStillFails(t *testing.T) {
+	b, db := setupSchedulerTestBot(t)
+
+	modID := int64(140)
+	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	require.NoError(t, err)
+	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
+
+	userID := int64(630)
+	price := 400
+	_, err = db.CreateUser(userID, "retry_pass_user", "Retry", "uuid-630", &price, &modID)
+	require.NoError(t, err)
+
+	expireDays := 30
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, userID))
+
+	payment := &database.Payment{
+		TelegramID:    userID,
+		Amount:        400,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	id, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(id))
+	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
+
+	expireAt := time.Now().UTC().Add(-2 * time.Hour)
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, time.Now().UTC(), id)
+	require.NoError(t, err)
+
+	var retryPatchCalled bool
+	var disableCalled bool
+	var deleteCalled bool
+
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/api/users/uuid-630"):
+				user := remnawave.User{
+					UUID:     "uuid-630",
+					Status:   "EXPIRED",
+					ExpireAt: expireAt,
+				}
+				body, _ := json.Marshal(map[string]interface{}{"response": user})
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(body))),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users":
+				payload := fmt.Sprintf(`{"response":{"users":[{"uuid":"uuid-630","username":"retry_pass_user","status":"EXPIRED","telegramId":630,"expireAt":"%s"}],"total":1}}`,
+					expireAt.Format(time.RFC3339))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/users":
+				bodyBytes, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+
+				var req remnawave.UpdateUserRequest
+				require.NoError(t, json.Unmarshal(bodyBytes, &req))
+				require.NotNil(t, req.Status)
+
+				switch *req.Status {
+				case remnawave.StatusActive:
+					retryPatchCalled = true
+					return &http.Response{
+						StatusCode: http.StatusInternalServerError,
+						Body:       io.NopCloser(strings.NewReader(`{"error":"temporary failure"}`)),
+						Header:     make(http.Header),
+					}, nil
+				case remnawave.StatusDisabled:
+					disableCalled = true
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
+						Header:     make(http.Header),
+					}, nil
+				default:
+					return nil, fmt.Errorf("unexpected patch status: %s", *req.Status)
+				}
+			case r.Method == http.MethodDelete && r.URL.Path == "/api/users/uuid-630":
+				deleteCalled = true
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, fmt.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+			}
+		}),
+	})
+	b.remnawave = client
+
+	b.runSubscriptionSchedulerPass()
+
+	assert.True(t, retryPatchCalled, "scheduler должен попробовать retry активации confirmed_not_activated")
+	assert.False(t, disableCalled, "после неуспешного retry scheduler не должен disable-ить уже оплатившего пользователя")
+	assert.False(t, deleteCalled, "после неуспешного retry scheduler не должен кикать уже оплатившего пользователя")
+
+	dbUser, err := db.GetUserByTelegramID(userID)
+	require.NoError(t, err)
+	assert.NotNil(t, dbUser, "пользователь должен остаться в БД после scheduler pass")
+
+	storedPayment, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, storedPayment)
+	assert.Equal(t, "confirmed_not_activated", storedPayment.Status, "платёж должен остаться в retry-статусе после неуспешной активации")
 }

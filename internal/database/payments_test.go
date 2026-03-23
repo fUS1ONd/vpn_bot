@@ -252,3 +252,56 @@ func TestHasConfirmedPayment(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, has)
 }
+
+func TestHasConfirmedPaymentTreatsConfirmedNotActivatedAsPaid(t *testing.T) {
+	dbFile := "test_payments_has_confirmed_not_activated.db"
+	db, err := New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	p := &Payment{
+		TelegramID:    12345,
+		Amount:        500,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	id, err := db.CreatePayment(p)
+	require.NoError(t, err)
+
+	require.NoError(t, db.ConfirmPayment(id))
+	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
+
+	has, err := db.HasConfirmedPayment(12345)
+	require.NoError(t, err)
+	assert.True(t, has, "confirmed_not_activated должен считаться подтверждённой оплатой для защитных проверок")
+}
+
+func TestHasConfirmedPaymentSinceTreatsConfirmedNotActivatedAsPaid(t *testing.T) {
+	dbFile := "test_payments_has_since_confirmed_not_activated.db"
+	db, err := New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	p := &Payment{
+		TelegramID:    12345,
+		Amount:        500,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	id, err := db.CreatePayment(p)
+	require.NoError(t, err)
+
+	require.NoError(t, db.ConfirmPayment(id))
+	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
+
+	since := time.Now().UTC().Add(-1 * time.Hour)
+	has, err := db.HasConfirmedPaymentSince(12345, since)
+	require.NoError(t, err)
+	assert.True(t, has, "confirmed_not_activated должен защищать пользователя в проверках scheduler по времени")
+}

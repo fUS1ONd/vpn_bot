@@ -227,22 +227,25 @@ func (db *DB) GetConfirmedNotActivated() ([]Payment, error) {
 	return payments, rows.Err()
 }
 
-// HasConfirmedPayment проверяет, была ли у пользователя хотя бы одна подтверждённая оплата
+// HasConfirmedPayment проверяет, была ли у пользователя хотя бы одна подтверждённая оплата.
+// Для защитных проверок scheduler считаем оплатой и confirmed_not_activated:
+// деньги уже подтверждены, пользователя нельзя считать неоплатившим.
 func (db *DB) HasConfirmedPayment(telegramID int64) (bool, error) {
 	var exists bool
 	err := db.conn.QueryRow(
-		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND status = 'confirmed')`, telegramID,
+		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND status IN ('confirmed', 'confirmed_not_activated'))`, telegramID,
 	).Scan(&exists)
 	return exists, err
 }
 
 // HasConfirmedPaymentSince проверяет, есть ли подтверждённый платёж после указанной даты.
-// Используется scheduler для защиты от ложного кика/disable — если пользователь оплатил
-// после expireAt, подписка уже активирована через callback.
+// Используется scheduler для защиты от ложного кика/disable. Для этой проверки
+// confirmed_not_activated тоже считается оплатой: callback уже подтвердил деньги,
+// даже если активация в Remnawave ещё retry-ится.
 func (db *DB) HasConfirmedPaymentSince(telegramID int64, since time.Time) (bool, error) {
 	var exists bool
 	err := db.conn.QueryRow(
-		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND status = 'confirmed' AND confirmed_at >= ?)`,
+		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND status IN ('confirmed', 'confirmed_not_activated') AND confirmed_at >= ?)`,
 		telegramID, since,
 	).Scan(&exists)
 	return exists, err
