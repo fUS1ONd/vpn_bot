@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/config"
@@ -35,7 +36,7 @@ type Bot struct {
 	sdConfigsPath        string                    // путь к sd_configs (для чтения targets)
 	render               *render.Client            // клиент render-сервиса (nil если не настроен)
 	platega              *platega.Client           // Platega API клиент (nil если не настроен)
-	maintenanceMode      bool                      // Режим обслуживания (сбрасывается при перезапуске)
+	maintenanceMode      atomic.Bool               // Режим обслуживания (сбрасывается при перезапуске)
 	paymentRetryDelays   []time.Duration           // Тестовые override-задержки для короткого background retry активации
 	paymentRetryInFlight sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
 	modChangePriceMu     sync.RWMutex
@@ -251,7 +252,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitBroadcastActive:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
 		}
 		if b.isAdmin(c) {
 			return b.processBroadcastMessage(c)
@@ -260,7 +261,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitBanUser:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
 		}
 		if b.isAdmin(c) {
 			return b.processBanUser(c, text)
@@ -269,7 +270,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitDeleteInvite:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
 		}
 		if b.isAdmin(c) {
 			return b.processDeleteInvite(c, text)
@@ -324,6 +325,16 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processAdminChangePriceValue(c, text)
 		}
 
+	case StateWaitAdminChangePriceMigrationConfirm:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearAdminChangePriceSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processAdminChangePriceMigrationConfirm(c, text)
+		}
+
 	case StateWaitModDeleteInvite:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
@@ -357,7 +368,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitAddModerator:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
 		}
 		if b.isAdmin(c) {
 			return b.processAddModerator(c, text)
@@ -366,7 +377,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitRemoveModerator:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
 		}
 		if b.isAdmin(c) {
 			return b.processRemoveModerator(c, text)
@@ -744,7 +755,7 @@ func (b *Bot) userKeyboard(telegramID int64) *tele.ReplyMarkup {
 	}
 
 	// В режиме обслуживания скрываем оплату для всех.
-	if b.maintenanceMode {
+	if b.isMaintenanceMode() {
 		return UserMenuKeyboardDynamic("", false, isMod)
 	}
 

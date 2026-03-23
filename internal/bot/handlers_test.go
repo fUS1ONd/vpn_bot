@@ -53,12 +53,13 @@ func (c *MockContext) Text() string {
 // setupTestBot создаёт бота с временной БД для тестов
 func setupTestBot(t *testing.T) (*Bot, *database.DB) {
 	t.Helper()
-	dbFile := "test_handlers.db"
+	testName := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
+	dbFile := t.TempDir() + "/test_handlers_" + testName + ".db"
 	db, err := database.New(dbFile)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.Close()
-		os.Remove(dbFile)
+		_ = os.Remove(dbFile)
 	})
 
 	cfg := &config.Config{
@@ -234,7 +235,7 @@ func TestUserKeyboardHidesPaymentButtonInMaintenanceMode(t *testing.T) {
 	}
 	assert.Contains(t, normalButtons, BtnRenew)
 
-	b.maintenanceMode = true
+	b.setMaintenanceMode(true)
 
 	kb = b.userKeyboard(userID)
 	var maintenanceButtons []string
@@ -265,6 +266,54 @@ func TestUserKeyboardHidesPaymentButtonWithoutPlatega(t *testing.T) {
 
 	assert.NotContains(t, buttons, BtnPay)
 	assert.NotContains(t, buttons, BtnRenew)
+}
+
+func TestUserKeyboardShowsRenewForLegacyPaidMigratedUser(t *testing.T) {
+	b, db := setupTestBot(t)
+
+	modID := int64(781)
+	userID := int64(780)
+	price := 500
+	_, err := db.CreateUser(modID, "moderator", "Moderator", "uuid-mod-781", nil, nil)
+	require.NoError(t, err)
+
+	_, err = db.CreateUser(userID, "legacy_paid", "Legacy Paid", "uuid-legacy-paid", &price, &modID)
+	require.NoError(t, err)
+
+	expireDays := 30
+	invite, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(invite.Code, userID))
+
+	require.NoError(t, db.SetLegacyPaidMigrated(userID, true))
+
+	b.platega = platega.NewClient("merchant", "secret")
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/780":
+				payload := `{"response":{"uuid":"uuid-legacy-paid","username":"legacy_paid","status":"ACTIVE","expireAt":"2026-04-15T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	kb := b.userKeyboard(userID)
+	var buttons []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+
+	assert.Contains(t, buttons, BtnRenew)
+	assert.NotContains(t, buttons, BtnPay)
 }
 
 func TestHandleStatusShowsDevices(t *testing.T) {

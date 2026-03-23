@@ -21,12 +21,12 @@ import (
 // setupSchedulerTestBot создаёт бота для тестов scheduler.
 func setupSchedulerTestBot(t *testing.T) (*Bot, *database.DB) {
 	t.Helper()
-	dbFile := fmt.Sprintf("test_scheduler_%s.db", t.Name())
+	dbFile := t.TempDir() + "/" + fmt.Sprintf("test_scheduler_%s.db", t.Name())
 	db, err := database.New(dbFile)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.Close()
-		os.Remove(dbFile)
+		_ = os.Remove(dbFile)
 	})
 	cfg := &config.Config{AdminID: 999}
 	b := &Bot{
@@ -36,6 +36,22 @@ func setupSchedulerTestBot(t *testing.T) (*Bot, *database.DB) {
 		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
 	}
 	return b, db
+}
+
+func newOfflineTelegramBotForTest(t *testing.T, transport http.RoundTripper) *tele.Bot {
+	t.Helper()
+
+	bot, err := tele.NewBot(tele.Settings{
+		Token:   "test-token",
+		URL:     "https://api.telegram.org",
+		Offline: true,
+		Client: &http.Client{
+			Transport: transport,
+		},
+	})
+	require.NoError(t, err)
+
+	return bot
 }
 
 // TestHandleAutoKick_404IsNotFatalError проверяет, что при 404 от Remnawave (пользователь
@@ -197,6 +213,28 @@ func TestIsTrialUser(t *testing.T) {
 	})
 }
 
+func TestIsTrialUserTreatsLegacyPaidMigratedUserAsPaid(t *testing.T) {
+	b, db := setupSchedulerTestBot(t)
+
+	modID := int64(120)
+	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod-120", nil, nil)
+	require.NoError(t, err)
+	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
+
+	userID := int64(220)
+	price := 500
+	_, err = db.CreateUser(userID, "legacy_paid", "Legacy Paid", "uuid-220", &price, &modID)
+	require.NoError(t, err)
+
+	expireDays := 30
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, userID))
+	require.NoError(t, db.SetLegacyPaidMigrated(userID, true))
+
+	assert.False(t, b.isTrialUser(userID))
+}
+
 // TestSchedulerTrialKick проверяет кик триального пользователя после expireAt
 func TestSchedulerTrialKick(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
@@ -261,6 +299,70 @@ func TestSchedulerTrialWaitsForExactExpireAt(t *testing.T) {
 	dbUser, err := db.GetUserByTelegramID(userID)
 	require.NoError(t, err)
 	assert.NotNil(t, dbUser, "триальный пользователь не должен кикаться раньше точного expireAt")
+}
+
+func TestSchedulerPaidReminderForLegacyPaidMigratedUser(t *testing.T) {
+	b, db := setupSchedulerTestBot(t)
+
+	modID := int64(130)
+	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod-130", nil, nil)
+	require.NoError(t, err)
+	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
+
+	userID := int64(230)
+	price := 500
+	_, err = db.CreateUser(userID, "legacy_paid", "Legacy Paid", "uuid-230", &price, &modID)
+	require.NoError(t, err)
+
+	expireDays := 30
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, userID))
+	require.NoError(t, db.SetLegacyPaidMigrated(userID, true))
+
+	expireAt := time.Now().UTC().Add(60 * time.Hour)
+
+	b.remnawave = remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.Query().Get("size") == "1000":
+				payload := fmt.Sprintf(`{"response":{"users":[{"uuid":"uuid-230","username":"legacy_paid","status":"ACTIVE","telegramId":230,"expireAt":"%s"}],"total":1}}`,
+					expireAt.Format(time.RFC3339))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, fmt.Errorf("unexpected remnawave request: %s %s", r.Method, r.URL.Path)
+			}
+		}),
+	})
+
+	b.bot = newOfflineTelegramBotForTest(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/sendMessage"):
+			payload := `{"ok":true,"result":{"message_id":1,"date":1710000000,"chat":{"id":230,"type":"private"},"text":"ok"}}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(payload)),
+				Header:     make(http.Header),
+			}, nil
+		default:
+			return nil, fmt.Errorf("unexpected telegram request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+
+	b.runSubscriptionSchedulerPass()
+
+	sent, err := db.WasNotificationSent(userID, notificationExpire3d)
+	require.NoError(t, err)
+	assert.True(t, sent, "migrated-paid пользователь должен получить 3-day reminder")
+
+	trialSent, err := db.WasNotificationSent(userID, notificationTrialExpire1d)
+	require.NoError(t, err)
+	assert.False(t, trialSent, "migrated-paid пользователь не должен идти по trial-ветке")
 }
 
 // TestSchedulerTrialNotKickedIfPaid проверяет, что оплативший триальный не кикается
@@ -791,7 +893,7 @@ func TestSchedulerGraceKickSkippedWhenFreshStatusCheckFails(t *testing.T) {
 // TestSchedulerMaintenanceMode проверяет, что в maintenance mode кики и disable не выполняются
 func TestSchedulerMaintenanceMode(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
-	b.maintenanceMode = true
+	b.setMaintenanceMode(true)
 
 	modID := int64(100)
 	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)

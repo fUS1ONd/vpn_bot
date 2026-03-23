@@ -20,7 +20,7 @@ func (b *Bot) handlePayButton(c tele.Context) error {
 	telegramID := c.Sender().ID
 
 	// Проверка режима обслуживания
-	if b.maintenanceMode {
+	if b.isMaintenanceMode() {
 		return c.Send("⚙️ Платёжная система временно на обслуживании. Попробуйте позже.", &tele.SendOptions{
 			ReplyMarkup: b.userKeyboard(telegramID),
 		})

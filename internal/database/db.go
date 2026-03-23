@@ -17,13 +17,14 @@ type DB struct {
 
 // User представляет запись пользователя
 type User struct {
-	TelegramID        int64
-	Username          string
-	FirstName         string // Имя пользователя из Telegram
-	RemnawaveUUID     string
-	SubscriptionPrice *int   // Цена подписки руб/мес (NULL = не установлена)
-	ModeratorID       *int64 // Telegram ID куратора (NULL = админский/снят)
-	CreatedAt         time.Time
+	TelegramID         int64
+	Username           string
+	FirstName          string // Имя пользователя из Telegram
+	RemnawaveUUID      string
+	SubscriptionPrice  *int   // Цена подписки руб/мес (NULL = не установлена)
+	ModeratorID        *int64 // Telegram ID куратора (NULL = админский/снят)
+	LegacyPaidMigrated bool   // Старый пользователь с ручной оплатой, переведённый на новую модель
+	CreatedAt          time.Time
 }
 
 // Invite представляет запись инвайта
@@ -173,6 +174,8 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE users ADD COLUMN subscription_price INTEGER`,
 		// Миграция: telegram_id модератора-куратора (NULL = админский или снят модератор)
 		`ALTER TABLE users ADD COLUMN moderator_id INTEGER`,
+		// Миграция: флаг старой ручной оплаты для перевода legacy-пользователей на новую модель
+		`ALTER TABLE users ADD COLUMN legacy_paid_migrated INTEGER NOT NULL DEFAULT 0`,
 		// Миграция: цена подписки при создании инвайта
 		`ALTER TABLE invites ADD COLUMN subscription_price INTEGER`,
 		// Миграция: неизменяемый исторический флаг trial-инвайта

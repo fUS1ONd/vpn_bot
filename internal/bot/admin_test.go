@@ -3,6 +3,7 @@ package bot
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -913,6 +914,370 @@ func TestAdminChangePriceFlow_UpdatesPaidUser(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, msgValue, "изменена: 500 → 650 руб/мес")
 	assert.Empty(t, b.userStates.Get(adminID))
+}
+
+func TestAdminChangePriceFlow_PromptsForLegacyPaidMigration(t *testing.T) {
+	dbFile := "test_admin_change_price_migration.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999999)
+	modID := int64(54321)
+	targetID := int64(12346)
+
+	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AddModerator(modID, adminID))
+
+	_, err = db.CreateUser(targetID, "legacy", "Legacy", "uuid-target", nil, nil)
+	require.NoError(t, err)
+
+	expireDays := 30
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, targetID))
+
+	expireAt := time.Date(2026, time.April, 15, 0, 0, 0, 0, time.UTC)
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-target":
+				payload := fmt.Sprintf(
+					`{"response":{"uuid":"uuid-target","username":"legacy","status":"ACTIVE","expireAt":"%s"}}`,
+					expireAt.Format(time.RFC3339),
+				)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}),
+	})
+
+	b := &Bot{
+		db:         db,
+		remnawave:  client,
+		config:     &config.Config{AdminID: adminID, MinSubscriptionPrice: 400},
+		userStates: newStateMap(),
+	}
+
+	ctxID := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceID(ctxID, strconv.FormatInt(targetID, 10)))
+	require.Equal(t, StateWaitAdminChangePriceValue, b.userStates.Get(adminID))
+
+	ctxValue := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceValue(ctxValue, "650"))
+
+	msgValue, ok := ctxValue.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msgValue, "Текущий период уже оплачен вручную")
+	assert.Contains(t, msgValue, "15.04.2026")
+	assert.Equal(t, StateWaitAdminChangePriceMigrationConfirm, b.userStates.Get(adminID))
+
+	updatedUser, err := db.GetUserByTelegramID(targetID)
+	require.NoError(t, err)
+	assert.Nil(t, updatedUser.SubscriptionPrice, "цена не должна применяться до ответа на migration-вопрос")
+
+	ctxConfirm := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceMigrationConfirm(ctxConfirm, BtnAdminMigrationPaidYes))
+
+	updatedUser, err = db.GetUserByTelegramID(targetID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedUser.SubscriptionPrice)
+	assert.Equal(t, 650, *updatedUser.SubscriptionPrice)
+	assert.True(t, updatedUser.LegacyPaidMigrated)
+
+	updatedInvite, err := db.GetInviteByUsedBy(targetID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedInvite.SubscriptionPrice)
+	assert.Equal(t, 650, *updatedInvite.SubscriptionPrice)
+
+	assert.Empty(t, b.userStates.Get(adminID))
+}
+
+func TestAdminChangePriceFlow_FailsClosedWhenMigrationLookupFails(t *testing.T) {
+	dbFile := "test_admin_change_price_migration_lookup_fail.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999995)
+	modID := int64(54325)
+	targetID := int64(12350)
+
+	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod-fail", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AddModerator(modID, adminID))
+
+	_, err = db.CreateUser(targetID, "legacy_fail", "Legacy Fail", "uuid-target-fail", nil, nil)
+	require.NoError(t, err)
+
+	expireDays := 30
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, targetID))
+
+	b := &Bot{
+		db:         db,
+		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
+		config:     &config.Config{AdminID: adminID, MinSubscriptionPrice: 400},
+		userStates: newStateMap(),
+	}
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("network down")
+		}),
+	})
+
+	ctxID := &MockContext{sender: &tele.User{ID: adminID}}
+	err = b.processAdminChangePriceID(ctxID, strconv.FormatInt(targetID, 10))
+	require.NoError(t, err)
+
+	msg, ok := ctxID.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "Ошибка проверки пользователя, попробуйте позже")
+	assert.Empty(t, b.userStates.Get(adminID))
+
+	user, err := db.GetUserByTelegramID(targetID)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Nil(t, user.SubscriptionPrice)
+}
+
+func TestAdminChangePriceFlow_MigrationNoLeavesTrial(t *testing.T) {
+	dbFile := "test_admin_change_price_migration_no.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999997)
+	modID := int64(54323)
+	targetID := int64(12348)
+
+	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod-no", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AddModerator(modID, adminID))
+
+	_, err = db.CreateUser(targetID, "legacy_no", "Legacy No", "uuid-target-no", nil, nil)
+	require.NoError(t, err)
+
+	expireDays := 30
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, targetID))
+
+	expireAt := time.Date(2026, time.April, 20, 0, 0, 0, 0, time.UTC)
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-target-no":
+				payload := fmt.Sprintf(
+					`{"response":{"uuid":"uuid-target-no","username":"legacy_no","status":"ACTIVE","expireAt":"%s"}}`,
+					expireAt.Format(time.RFC3339),
+				)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}),
+	})
+
+	b := &Bot{
+		db:         db,
+		remnawave:  client,
+		config:     &config.Config{AdminID: adminID, MinSubscriptionPrice: 400},
+		userStates: newStateMap(),
+	}
+
+	ctxID := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceID(ctxID, strconv.FormatInt(targetID, 10)))
+	require.Equal(t, StateWaitAdminChangePriceValue, b.userStates.Get(adminID))
+
+	ctxValue := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceValue(ctxValue, "700"))
+
+	msgValue, ok := ctxValue.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msgValue, "Текущий период уже оплачен вручную")
+	require.Equal(t, StateWaitAdminChangePriceMigrationConfirm, b.userStates.Get(adminID))
+
+	ctxConfirm := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceMigrationConfirm(ctxConfirm, BtnAdminMigrationPaidNo))
+
+	updatedUser, err := db.GetUserByTelegramID(targetID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedUser.SubscriptionPrice)
+	assert.Equal(t, 700, *updatedUser.SubscriptionPrice)
+	assert.False(t, updatedUser.LegacyPaidMigrated)
+
+	assert.Empty(t, b.userStates.Get(adminID))
+}
+
+func TestAdminChangePriceFlow_MigrationCancelClearsSession(t *testing.T) {
+	dbFile := "test_admin_change_price_migration_cancel.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999996)
+	modID := int64(54324)
+	targetID := int64(12349)
+
+	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod-cancel", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AddModerator(modID, adminID))
+
+	_, err = db.CreateUser(targetID, "legacy_cancel", "Legacy Cancel", "uuid-target-cancel", nil, nil)
+	require.NoError(t, err)
+
+	expireDays := 30
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, targetID))
+
+	expireAt := time.Date(2026, time.April, 25, 0, 0, 0, 0, time.UTC)
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-target-cancel":
+				payload := fmt.Sprintf(
+					`{"response":{"uuid":"uuid-target-cancel","username":"legacy_cancel","status":"ACTIVE","expireAt":"%s"}}`,
+					expireAt.Format(time.RFC3339),
+				)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}),
+	})
+
+	b := &Bot{
+		db:         db,
+		remnawave:  client,
+		config:     &config.Config{AdminID: adminID, MinSubscriptionPrice: 400},
+		userStates: newStateMap(),
+	}
+
+	ctxID := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceID(ctxID, strconv.FormatInt(targetID, 10)))
+	require.Equal(t, StateWaitAdminChangePriceValue, b.userStates.Get(adminID))
+
+	ctxValue := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceValue(ctxValue, "710"))
+	require.Equal(t, StateWaitAdminChangePriceMigrationConfirm, b.userStates.Get(adminID))
+
+	ctxCancel := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceMigrationConfirm(ctxCancel, BtnCancel))
+
+	updatedUser, err := db.GetUserByTelegramID(targetID)
+	require.NoError(t, err)
+	assert.Nil(t, updatedUser.SubscriptionPrice)
+	assert.Empty(t, b.userStates.Get(adminID))
+}
+
+func TestAdminChangePriceFlow_DoesNotPromptForFreshTrial(t *testing.T) {
+	dbFile := "test_admin_change_price_fresh_trial.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999998)
+	modID := int64(54322)
+	targetID := int64(12347)
+	invitePrice := 500
+
+	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod-2", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AddModerator(modID, adminID))
+
+	_, err = db.CreateUser(targetID, "fresh", "Fresh", "uuid-target-2", &invitePrice, nil)
+	require.NoError(t, err)
+
+	expireDays := 30
+	inviteCode, err := db.CreateInviteWithPrice(modID, expireDays, invitePrice)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inviteCode, targetID))
+
+	initialUser, err := db.GetUserByTelegramID(targetID)
+	require.NoError(t, err)
+	require.NotNil(t, initialUser.SubscriptionPrice)
+	assert.Equal(t, invitePrice, *initialUser.SubscriptionPrice)
+
+	expireAt := time.Date(2026, time.April, 15, 0, 0, 0, 0, time.UTC)
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-target-2":
+				payload := fmt.Sprintf(
+					`{"response":{"uuid":"uuid-target-2","username":"fresh","status":"ACTIVE","expireAt":"%s"}}`,
+					expireAt.Format(time.RFC3339),
+				)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}),
+	})
+
+	b := &Bot{
+		db:         db,
+		remnawave:  client,
+		config:     &config.Config{AdminID: adminID, MinSubscriptionPrice: 400},
+		userStates: newStateMap(),
+	}
+
+	ctxID := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceID(ctxID, strconv.FormatInt(targetID, 10)))
+	require.Equal(t, StateWaitAdminChangePriceValue, b.userStates.Get(adminID))
+
+	ctxValue := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceValue(ctxValue, "650"))
+
+	msgValue, ok := ctxValue.sentMsg.(string)
+	require.True(t, ok)
+	assert.NotContains(t, msgValue, "Текущий период уже оплачен вручную")
+	assert.NotEqual(t, StateWaitAdminChangePriceMigrationConfirm, b.userStates.Get(adminID))
+
+	updatedUser, err := db.GetUserByTelegramID(targetID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedUser.SubscriptionPrice)
+	assert.Equal(t, 650, *updatedUser.SubscriptionPrice)
+	assert.False(t, updatedUser.LegacyPaidMigrated)
 }
 
 func TestProcessAdminUserInfo_ShowsNonSuccessStatusForGraceUser(t *testing.T) {

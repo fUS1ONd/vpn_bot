@@ -101,6 +101,21 @@ func TestAdminModeratorKeyboardContainsStatsButton(t *testing.T) {
 	assert.Contains(t, buttons, BtnAdminModStats)
 }
 
+func TestAdminChangePriceMigrationKeyboardContainsExpectedButtons(t *testing.T) {
+	keyboard := AdminChangePriceMigrationKeyboard()
+
+	var buttons []string
+	for _, row := range keyboard.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+
+	assert.Contains(t, buttons, BtnAdminMigrationPaidYes)
+	assert.Contains(t, buttons, BtnAdminMigrationPaidNo)
+	assert.Contains(t, buttons, BtnCancel)
+}
+
 func TestInstructionsKeyboardContainsUnifiedDesktopButton(t *testing.T) {
 	keyboard := InstructionsKeyboard()
 

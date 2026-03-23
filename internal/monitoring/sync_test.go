@@ -1,6 +1,10 @@
 package monitoring
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseBandwidthTag(t *testing.T) {
 	tests := []struct {
@@ -28,5 +32,31 @@ func TestParseBandwidthTag(t *testing.T) {
 				t.Errorf("ParseBandwidthTag(%v) = %d, want %d", tt.tags, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWriteFileAtomicallyReplacesContentAndCleansTempFile(t *testing.T) {
+	dir := t.TempDir()
+	targetFile := filepath.Join(dir, "targets.json")
+
+	if err := os.WriteFile(targetFile, []byte(`old-content`), 0644); err != nil {
+		t.Fatalf("подготовка старого файла: %v", err)
+	}
+
+	newContent := []byte(`[{"targets":["127.0.0.1:9100"]}]`)
+	if err := writeFileAtomically(targetFile, newContent, 0644); err != nil {
+		t.Fatalf("writeFileAtomically вернул ошибку: %v", err)
+	}
+
+	got, err := os.ReadFile(targetFile)
+	if err != nil {
+		t.Fatalf("чтение итогового файла: %v", err)
+	}
+	if string(got) != string(newContent) {
+		t.Fatalf("итоговый файл = %q, want %q", string(got), string(newContent))
+	}
+
+	if _, err := os.Stat(targetFile + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("временный файл не должен оставаться после успешной записи")
 	}
 }

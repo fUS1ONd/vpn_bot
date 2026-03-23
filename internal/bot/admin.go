@@ -15,15 +15,16 @@ import (
 
 // Состояния админа
 const (
-	StateWaitBanUser                   = "wait_ban_user"                    // Ожидание telegram_id для бана
-	StateWaitDeleteInvite              = "wait_delete_invite"               // Ожидание кода для удаления
-	StateWaitAddModerator              = "wait_add_moderator"               // Ожидание telegram_id для назначения модератора
-	StateWaitRemoveModerator           = "wait_remove_moderator"            // Ожидание telegram_id для снятия модератора
-	StateWaitAdminUserInfo             = "wait_admin_user_info"             // Ожидание telegram_id для карточки пользователя
-	StateWaitAdminChangePriceID        = "wait_admin_change_price_id"       // Ожидание telegram_id для смены цены
-	StateWaitAdminChangePriceValue     = "wait_admin_change_price_value"    // Ожидание новой цены подписки
-	StateWaitSwitchSubscriptionID      = "wait_switch_subscription_id"      // Ожидание telegram_id для смены тарифа
-	StateWaitSwitchSubscriptionConfirm = "wait_switch_subscription_confirm" // Ожидание подтверждения смены тарифа
+	StateWaitBanUser                          = "wait_ban_user"                             // Ожидание telegram_id для бана
+	StateWaitDeleteInvite                     = "wait_delete_invite"                        // Ожидание кода для удаления
+	StateWaitAddModerator                     = "wait_add_moderator"                        // Ожидание telegram_id для назначения модератора
+	StateWaitRemoveModerator                  = "wait_remove_moderator"                     // Ожидание telegram_id для снятия модератора
+	StateWaitAdminUserInfo                    = "wait_admin_user_info"                      // Ожидание telegram_id для карточки пользователя
+	StateWaitAdminChangePriceID               = "wait_admin_change_price_id"                // Ожидание telegram_id для смены цены
+	StateWaitAdminChangePriceValue            = "wait_admin_change_price_value"             // Ожидание новой цены подписки
+	StateWaitAdminChangePriceMigrationConfirm = "wait_admin_change_price_migration_confirm" // Ожидание подтверждения migration-case
+	StateWaitSwitchSubscriptionID             = "wait_switch_subscription_id"               // Ожидание telegram_id для смены тарифа
+	StateWaitSwitchSubscriptionConfirm        = "wait_switch_subscription_confirm"          // Ожидание подтверждения смены тарифа
 )
 
 type adminSwitchSession struct {
@@ -33,10 +34,14 @@ type adminSwitchSession struct {
 }
 
 type adminChangePriceSession struct {
-	TargetTelegramID int64
-	TargetLabel      string
-	CurrentPrice     int
-	HasCurrentPrice  bool
+	TargetTelegramID          int64
+	TargetLabel               string
+	CurrentPrice              int
+	HasCurrentPrice           bool
+	PendingPrice              int
+	HasPendingPrice           bool
+	ShouldAskMigrationConfirm bool
+	CurrentExpireAt           *time.Time
 }
 
 // isAdmin проверяет, является ли пользователь админом
@@ -48,7 +53,7 @@ func (b *Bot) isAdmin(c tele.Context) bool {
 func (b *Bot) handleAdminStart(c tele.Context) error {
 	return c.Send(MsgAdminWelcome, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminKeyboard(b.maintenanceMode),
+		ReplyMarkup: AdminKeyboard(b.isMaintenanceMode()),
 	})
 }
 
@@ -371,6 +376,21 @@ func (b *Bot) processAdminChangePriceID(c tele.Context, text string) error {
 		session.CurrentPrice = *dbUser.SubscriptionPrice
 		session.HasCurrentPrice = true
 	}
+	if dbUser.SubscriptionPrice == nil {
+		remUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
+		if err != nil {
+			slog.Error("Failed to load Remnawave user before migration check", "error", err, "telegram_id", targetID)
+			b.userStates.Delete(adminID)
+			b.clearAdminChangePriceSession(adminID)
+			return c.Send("Ошибка проверки пользователя, попробуйте позже", &tele.SendOptions{
+				ReplyMarkup: AdminManageKeyboard(),
+			})
+		} else if b.shouldPromptAdminChangePriceMigration(dbUser, invite, remUser) {
+			session.ShouldAskMigrationConfirm = true
+			expireAt := remUser.ExpireAt
+			session.CurrentExpireAt = &expireAt
+		}
+	}
 
 	b.setAdminChangePriceSession(adminID, session)
 	b.userStates.Set(adminID, StateWaitAdminChangePriceValue)
@@ -409,14 +429,35 @@ func (b *Bot) processAdminChangePriceValue(c tele.Context, text string) error {
 		return c.Send("Сессия изменения цены потеряна. Начните заново.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	if err := b.db.UpdateSubscriptionPrice(session.TargetTelegramID, newPrice); err != nil {
+	if session.ShouldAskMigrationConfirm {
+		session.PendingPrice = newPrice
+		session.HasPendingPrice = true
+		b.setAdminChangePriceSession(adminID, session)
+		b.userStates.Set(adminID, StateWaitAdminChangePriceMigrationConfirm)
+
+		expireText := "неизвестна"
+		if session.CurrentExpireAt != nil {
+			expireText = session.CurrentExpireAt.Format("02.01.2006")
+		}
+
+		return c.Send(
+			fmt.Sprintf(
+				"Срок в панели: до <b>%s</b>\n\nТекущий период уже оплачен вручную?\n\nНовая цена подписки: <b>%d руб.</b>",
+				expireText,
+				newPrice,
+			),
+			&tele.SendOptions{
+				ParseMode:   tele.ModeHTML,
+				ReplyMarkup: AdminChangePriceMigrationKeyboard(),
+			},
+		)
+	}
+
+	if err := b.applyAdminChangePrice(session.TargetTelegramID, newPrice, nil); err != nil {
 		slog.Error("Failed to update subscription price by admin", "error", err, "telegram_id", session.TargetTelegramID)
 		b.userStates.Delete(adminID)
 		b.clearAdminChangePriceSession(adminID)
 		return c.Send("Ошибка изменения цены", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-	if err := b.db.UpdateInviteSubscriptionPrice(session.TargetTelegramID, newPrice); err != nil {
-		slog.Error("Failed to update invite subscription price by admin", "error", err, "telegram_id", session.TargetTelegramID)
 	}
 
 	b.userStates.Delete(adminID)
@@ -429,6 +470,69 @@ func (b *Bot) processAdminChangePriceValue(c tele.Context, text string) error {
 			session.TargetLabel,
 			formatAdminOldPrice(session),
 			newPrice,
+		),
+		&tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: AdminManageKeyboard(),
+		},
+	)
+}
+
+// processAdminChangePriceMigrationConfirm завершает смену цены после migration-question.
+func (b *Bot) processAdminChangePriceMigrationConfirm(c tele.Context, text string) error {
+	adminID := c.Sender().ID
+	answer := strings.TrimSpace(text)
+
+	session, ok := b.getAdminChangePriceSession(adminID)
+	if !ok {
+		b.userStates.Delete(adminID)
+		return c.Send("Сессия изменения цены потеряна. Начните заново.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if !session.HasPendingPrice {
+		b.userStates.Delete(adminID)
+		b.clearAdminChangePriceSession(adminID)
+		return c.Send("Сессия изменения цены потеряна. Начните заново.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	var legacyPaidMigrated *bool
+	var successSuffix string
+	switch answer {
+	case BtnAdminMigrationPaidYes:
+		value := true
+		legacyPaidMigrated = &value
+		successSuffix = "Пользователь помечен как уже оплаченный."
+	case BtnAdminMigrationPaidNo:
+		value := false
+		legacyPaidMigrated = &value
+		successSuffix = "Пользователь оставлен в trial до первой оплаты."
+	case BtnCancel:
+		b.userStates.Delete(adminID)
+		b.clearAdminChangePriceSession(adminID)
+		return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	default:
+		return c.Send("Выберите вариант ответа или нажмите «Отмена».", &tele.SendOptions{
+			ReplyMarkup: AdminChangePriceMigrationKeyboard(),
+		})
+	}
+
+	if err := b.applyAdminChangePrice(session.TargetTelegramID, session.PendingPrice, legacyPaidMigrated); err != nil {
+		slog.Error("Failed to finalize admin price change", "error", err, "telegram_id", session.TargetTelegramID)
+		b.userStates.Delete(adminID)
+		b.clearAdminChangePriceSession(adminID)
+		return c.Send("Ошибка изменения цены", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	b.userStates.Delete(adminID)
+	b.clearAdminChangePriceSession(adminID)
+	b.notifyUserAboutPriceChange(session.TargetTelegramID, session.PendingPrice)
+
+	return c.Send(
+		fmt.Sprintf(
+			"✅ Цена подписки для %s изменена: %s → %d руб/мес\n%s",
+			session.TargetLabel,
+			formatAdminOldPrice(session),
+			session.PendingPrice,
+			successSuffix,
 		),
 		&tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
@@ -646,7 +750,7 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 	confirmedPayments, err := b.db.GetConfirmedPaymentsByMonth(year, month)
 	if err != nil {
 		slog.Error("Failed to load monthly confirmed payments for admin stats", "error", err)
-		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
 	}
 
 	monthEarnings := &database.MonthlyEarnings{}
@@ -663,25 +767,25 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 	trialsThisMonth, err := b.db.CountTrialsByMonth(year, month)
 	if err != nil {
 		slog.Error("Failed to count trials for admin stats", "error", err)
-		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
 	}
 
 	firstPayments, err := b.db.CountFirstPaymentsByMonth(year, month)
 	if err != nil {
 		slog.Error("Failed to count first payments for admin stats", "error", err)
-		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
 	}
 
 	dbUsers, err := b.db.GetAllUsers()
 	if err != nil {
 		slog.Error("Failed to load DB users for admin stats", "error", err)
-		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
 	}
 
 	remUsers, err := b.remnawave.GetAllUsers()
 	if err != nil {
 		slog.Error("Failed to load Remnawave users for admin stats", "error", err)
-		return c.Send("Ошибка получения статистики из панели", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+		return c.Send("Ошибка получения статистики из панели", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
 	}
 
 	byTelegramID := make(map[int64]remnawave.User, len(remUsers))
@@ -769,7 +873,7 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminKeyboard(b.maintenanceMode),
+		ReplyMarkup: AdminKeyboard(b.isMaintenanceMode()),
 	})
 }
 
@@ -779,15 +883,15 @@ func (b *Bot) handleAdminMaintenanceToggle(c tele.Context) error {
 		return nil
 	}
 
-	b.maintenanceMode = !b.maintenanceMode
+	enabled := b.toggleMaintenanceMode()
 
 	msg := "🔧 Режим обслуживания включён. Оплата и кики приостановлены."
-	if !b.maintenanceMode {
+	if !enabled {
 		msg = "▶️ Штатный режим восстановлен. Оплата и scheduler работают."
 	}
 
 	return c.Send(msg, &tele.SendOptions{
-		ReplyMarkup: AdminKeyboard(b.maintenanceMode),
+		ReplyMarkup: AdminKeyboard(enabled),
 	})
 }
 
@@ -1318,6 +1422,34 @@ func (b *Bot) notifyUserAboutPriceChange(telegramID int64, newPrice int) {
 	if err != nil {
 		slog.Error("Failed to notify user about price change", "error", err, "telegram_id", telegramID)
 	}
+}
+
+func (b *Bot) applyAdminChangePrice(telegramID int64, newPrice int, legacyPaidMigrated *bool) error {
+	if err := b.db.UpdateSubscriptionPriceAndLegacyPaidMigrated(telegramID, newPrice, legacyPaidMigrated); err != nil {
+		return err
+	}
+	if err := b.db.UpdateInviteSubscriptionPrice(telegramID, newPrice); err != nil {
+		slog.Error("Failed to update invite subscription price by admin", "error", err, "telegram_id", telegramID)
+	}
+	return nil
+}
+
+func (b *Bot) shouldPromptAdminChangePriceMigration(dbUser *database.User, invite *database.Invite, remUser *remnawave.User) bool {
+	if dbUser == nil || invite == nil || invite.ExpireDays == nil || dbUser.SubscriptionPrice != nil || remUser == nil {
+		return false
+	}
+	if remUser.Status != remnawave.StatusActive {
+		return false
+	}
+	if remUser.ExpireAt.Year() >= 2099 || !remUser.ExpireAt.After(time.Now().UTC()) {
+		return false
+	}
+	hasPaid, err := b.db.HasConfirmedPayment(dbUser.TelegramID)
+	if err != nil {
+		slog.Error("Failed to check confirmed payments before migration prompt", "error", err, "telegram_id", dbUser.TelegramID)
+		return false
+	}
+	return !hasPaid
 }
 
 func (b *Bot) describeAdminUserSubscription(telegramID int64, remUser *remnawave.User) (string, string) {

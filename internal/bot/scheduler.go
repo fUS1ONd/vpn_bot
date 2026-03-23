@@ -129,7 +129,7 @@ func (b *Bot) processTrialUser(telegramID int64, dbUser database.User, expireAt,
 
 	// Триал истёк — кик
 	if !now.Before(expireAt) {
-		if b.maintenanceMode {
+		if b.isMaintenanceMode() {
 			slog.Info("Scheduler: maintenance mode, пропускаем кик триального пользователя", "telegram_id", telegramID)
 			return
 		}
@@ -182,7 +182,7 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 			return // Оплатил — callback уже обработал
 		}
 
-		if !b.maintenanceMode {
+		if !b.isMaintenanceMode() {
 			// Disable в Remnawave (если ещё не disabled)
 			if err := b.remnawave.DisableUser(dbUser.RemnawaveUUID); err != nil {
 				slog.Warn("Scheduler: не удалось disable пользователя", "error", err, "telegram_id", telegramID)
@@ -196,7 +196,7 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 	// Grace period кик: expireAt + 72 часа
 	graceDeadline := expireAt.Add(72 * time.Hour)
 	if !now.Before(graceDeadline) {
-		if b.maintenanceMode {
+		if b.isMaintenanceMode() {
 			slog.Info("Scheduler: maintenance mode, пропускаем grace kick", "telegram_id", telegramID)
 			return
 		}
@@ -236,6 +236,14 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 // confirmed_not_activated уже не считается "не платил": деньги подтверждены, просто
 // активация доступа в панели временно отложена на retry.
 func (b *Bot) isTrialUser(telegramID int64) bool {
+	user, err := b.db.GetUserByTelegramID(telegramID)
+	if err != nil || user == nil {
+		return false
+	}
+	if user.LegacyPaidMigrated {
+		return false
+	}
+
 	invite, err := b.db.GetInviteByUsedBy(telegramID)
 	if err != nil || invite == nil || invite.ExpireDays == nil {
 		return false // Админский инвайт или нет инвайта — не триал

@@ -8,7 +8,7 @@ import (
 // CreateUser создаёт нового пользователя
 func (db *DB) CreateUser(telegramID int64, username, firstName, remnawaveUUID string, subscriptionPrice *int, moderatorID *int64) (*User, error) {
 	_, err := db.conn.Exec(
-		`INSERT INTO users (telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO users (telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, legacy_paid_migrated) VALUES (?, ?, ?, ?, ?, ?, 0)`,
 		telegramID, username, firstName, remnawaveUUID, subscriptionPrice, moderatorID,
 	)
 	if err != nil {
@@ -24,10 +24,11 @@ func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 	var firstName sql.NullString
 	var subPrice sql.NullInt64
 	var modID sql.NullInt64
+	var legacyPaidMigrated sql.NullInt64
 	err := db.conn.QueryRow(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, created_at FROM users WHERE telegram_id = ?`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, legacy_paid_migrated, created_at FROM users WHERE telegram_id = ?`,
 		telegramID,
-	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &user.CreatedAt)
+	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &legacyPaidMigrated, &user.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -46,6 +47,7 @@ func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 	if modID.Valid {
 		user.ModeratorID = &modID.Int64
 	}
+	user.LegacyPaidMigrated = legacyPaidMigrated.Valid && legacyPaidMigrated.Int64 != 0
 
 	return &user, nil
 }
@@ -56,10 +58,11 @@ func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
 	var firstName sql.NullString
 	var subPrice sql.NullInt64
 	var modID sql.NullInt64
+	var legacyPaidMigrated sql.NullInt64
 	err := db.conn.QueryRow(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, created_at FROM users WHERE remnawave_uuid = ?`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, legacy_paid_migrated, created_at FROM users WHERE remnawave_uuid = ?`,
 		uuid,
-	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &user.CreatedAt)
+	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &legacyPaidMigrated, &user.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -78,6 +81,7 @@ func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
 	if modID.Valid {
 		user.ModeratorID = &modID.Int64
 	}
+	user.LegacyPaidMigrated = legacyPaidMigrated.Valid && legacyPaidMigrated.Int64 != 0
 
 	return &user, nil
 }
@@ -85,7 +89,7 @@ func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
 // GetAllUsers получает всех пользователей
 func (db *DB) GetAllUsers() ([]User, error) {
 	rows, err := db.conn.Query(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, created_at FROM users ORDER BY created_at`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, legacy_paid_migrated, created_at FROM users ORDER BY created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query users: %w", err)
@@ -98,7 +102,8 @@ func (db *DB) GetAllUsers() ([]User, error) {
 		var firstName sql.NullString
 		var subPrice sql.NullInt64
 		var modID sql.NullInt64
-		if err := rows.Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &user.CreatedAt); err != nil {
+		var legacyPaidMigrated sql.NullInt64
+		if err := rows.Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &legacyPaidMigrated, &user.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
 		}
 		if firstName.Valid {
@@ -111,6 +116,7 @@ func (db *DB) GetAllUsers() ([]User, error) {
 		if modID.Valid {
 			user.ModeratorID = &modID.Int64
 		}
+		user.LegacyPaidMigrated = legacyPaidMigrated.Valid && legacyPaidMigrated.Int64 != 0
 		users = append(users, user)
 	}
 
@@ -124,6 +130,51 @@ func (db *DB) GetAllUsers() ([]User, error) {
 // UpdateSubscriptionPrice обновляет цену подписки пользователя
 func (db *DB) UpdateSubscriptionPrice(telegramID int64, price int) error {
 	_, err := db.conn.Exec(`UPDATE users SET subscription_price = ? WHERE telegram_id = ?`, price, telegramID)
+	return err
+}
+
+// UpdateSubscriptionPriceAndLegacyPaidMigrated обновляет цену и флаг migration в одной транзакции.
+func (db *DB) UpdateSubscriptionPriceAndLegacyPaidMigrated(telegramID int64, price int, legacyPaidMigrated *bool) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+
+	rollback := func(err error) error {
+		if rbErr := tx.Rollback(); rbErr != nil {
+			return fmt.Errorf("%w: rollback failed: %v", err, rbErr)
+		}
+		return err
+	}
+
+	if _, err := tx.Exec(`UPDATE users SET subscription_price = ? WHERE telegram_id = ?`, price, telegramID); err != nil {
+		return rollback(err)
+	}
+
+	if legacyPaidMigrated != nil {
+		intValue := 0
+		if *legacyPaidMigrated {
+			intValue = 1
+		}
+		if _, err := tx.Exec(`UPDATE users SET legacy_paid_migrated = ? WHERE telegram_id = ?`, intValue, telegramID); err != nil {
+			return rollback(err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// SetLegacyPaidMigrated помечает пользователя как переведённого со старой ручной оплаты.
+func (db *DB) SetLegacyPaidMigrated(telegramID int64, value bool) error {
+	var intValue int
+	if value {
+		intValue = 1
+	}
+	_, err := db.conn.Exec(`UPDATE users SET legacy_paid_migrated = ? WHERE telegram_id = ?`, intValue, telegramID)
 	return err
 }
 

@@ -45,6 +45,8 @@ const (
 	BtnAdminSwitchSubscription = "♾️ Сменить тариф"
 	BtnAdminSwitchInfinite     = "♾️ Перевести на бессрочную"
 	BtnAdminChangePrice        = "✏️ Изменить цену"
+	BtnAdminMigrationPaidYes   = "✅ Да, считать оплаченной"
+	BtnAdminMigrationPaidNo    = "❌ Нет, оставить trial"
 
 	// Кнопки подтверждения
 	BtnConfirmYes = "Да"
@@ -181,6 +183,16 @@ func AdminModeratorKeyboard() *tele.ReplyMarkup {
 		menu.Row(menu.Text(BtnAdminListMods), menu.Text(BtnAdminModStats)),
 		menu.Row(menu.Text(BtnAdminRemoveMod)),
 		menu.Row(menu.Text(BtnAdminBack)),
+	)
+	return menu
+}
+
+// AdminChangePriceMigrationKeyboard возвращает меню подтверждения migration-case.
+func AdminChangePriceMigrationKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnAdminMigrationPaidYes), menu.Text(BtnAdminMigrationPaidNo)),
+		menu.Row(menu.Text(BtnCancel)),
 	)
 	return menu
 }
