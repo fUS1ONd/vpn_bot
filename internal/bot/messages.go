@@ -64,14 +64,14 @@ const (
 
 	MsgInstructionIOS = `<b>Настройка на iOS (iPhone/iPad)</b>
 
-1. Скачайте приложение <b>v2raytun</b> из App Store:
-   https://apps.apple.com/app/v2raytun/id6476628951
+1. Скачайте приложение <b>Happ</b> из App Store:
+   https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973
 
 2. Откройте приложение
 
 3. Нажмите "+" в правом верхнем углу
 
-4. Выберите "Добавить из буфера обмена"
+4. Выберите "Вставить из буфера обмена"
 
 5. Выберите сервер и включите VPN переключателем
 
@@ -80,10 +80,10 @@ const (
 
 	MsgInstructionAndroid = `<b>Настройка на Android</b>
 
-1. Скачайте приложение <b>v2raytun</b> из Play Market:
-   https://play.google.com/store/apps/details?id=com.v2raytun.android
+1. Скачайте приложение <b>Happ</b> из Play Market:
+   https://play.google.com/store/apps/details?id=com.happproxy
 
-   Или APK: https://github.com/DigneZzZ/v2raytun/releases/
+   Или APK: https://github.com/Happ-proxy/happ-android/releases/latest/download/Happ.apk
 
 2. Откройте приложение
 
