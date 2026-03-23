@@ -35,3 +35,16 @@ func (sm *stateMap) Delete(telegramID int64) {
 	defer sm.mu.Unlock()
 	delete(sm.m, telegramID)
 }
+
+// DeleteIfOneOf удаляет состояние только если оно совпадает с одним из переданных
+func (sm *stateMap) DeleteIfOneOf(telegramID int64, states ...string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	cur := sm.m[telegramID]
+	for _, s := range states {
+		if cur == s {
+			delete(sm.m, telegramID)
+			return
+		}
+	}
+}

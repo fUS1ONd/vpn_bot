@@ -156,8 +156,8 @@ func (b *Bot) paymentActivatedMessage(telegramID int64) string {
 }
 
 func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Payment, notifyUser bool) {
-	// Сбрасываем состояние ожидания оплаты
-	h.bot.userStates.Delete(payment.TelegramID)
+	// Сбрасываем состояние только если пользователь всё ещё в платёжном flow
+	h.bot.userStates.DeleteIfOneOf(payment.TelegramID, StateWaitPaymentMethod, StateWaitPaymentResult)
 
 	if notifyUser {
 		_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, h.bot.paymentActivatedMessage(payment.TelegramID), h.bot.userKeyboard(payment.TelegramID))
@@ -399,7 +399,7 @@ func (h *paymentCallbackHandler) handleCanceled(payment *database.Payment) error
 	if err := h.bot.db.UpdatePaymentStatus(payment.ID, "canceled"); err != nil {
 		return fmt.Errorf("update status to canceled: %w", err)
 	}
-	h.bot.userStates.Delete(payment.TelegramID)
+	h.bot.userStates.DeleteIfOneOf(payment.TelegramID, StateWaitPaymentMethod, StateWaitPaymentResult)
 	_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, "❌ Платёж отменён. Вы можете попробовать снова.", h.bot.userKeyboard(payment.TelegramID))
 	return nil
 }
