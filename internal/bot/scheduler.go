@@ -13,45 +13,27 @@ import (
 )
 
 const (
-	notificationExpire3d    = "expire_3d"
-	notificationExpireToday = "expire_today"
+	// Триал
+	notificationTrialExpire1d = "trial_expire_1d" // За 1 день до конца триала
+	notificationTrialExpired  = "trial_expired"   // Триал истёк
+
+	// Оплаченная подписка
+	notificationExpire3d  = "expire_3d"  // За 3 дня до конца
+	notificationExpire1d  = "expire_1d"  // За 1 день до конца
+	notificationExpired   = "expired"    // Подписка истекла (начало grace)
+	notificationGraceKick = "grace_kick" // Кик после grace period
 )
 
-type subscriptionDecision struct {
-	ThreeDaysMessage   string
-	ExpireTodayMessage string
-	ShouldKick         bool
-}
-
-// StartScheduler запускает ежедневную проверку подписок в 12:00 по Москве.
+// StartScheduler запускает проверку подписок каждые 30 минут + первый проход при старте.
 func (b *Bot) StartScheduler(ctx context.Context) {
-	msk, err := time.LoadLocation("Europe/Moscow")
-	if err != nil {
-		slog.Error("Failed to load Europe/Moscow location", "error", err)
-		return
-	}
+	// Первый проход при старте — не ждём 30 минут
+	slog.Info("Scheduler: running initial pass on startup")
+	b.runSubscriptionSchedulerPass()
 
-	now := time.Now().In(msk)
-	nextRun := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, msk)
-	if !now.Before(nextRun) {
-		nextRun = nextRun.AddDate(0, 0, 1)
-	}
-
-	firstTimer := time.NewTimer(time.Until(nextRun))
-	defer firstTimer.Stop()
-
-	slog.Info("Subscription scheduler initialized", "first_run", nextRun.Format(time.RFC3339))
-
-	select {
-	case <-ctx.Done():
-		slog.Info("Subscription scheduler stopped before first run")
-		return
-	case <-firstTimer.C:
-		b.runSubscriptionSchedulerPass()
-	}
-
-	ticker := time.NewTicker(24 * time.Hour)
+	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
+
+	slog.Info("Subscription scheduler started", "interval", "30m")
 
 	for {
 		select {
@@ -65,6 +47,20 @@ func (b *Bot) StartScheduler(ctx context.Context) {
 }
 
 func (b *Bot) runSubscriptionSchedulerPass() {
+	now := time.Now().UTC()
+
+	// 1. Протухание старых PENDING платежей
+	expired, err := b.db.ExpireOldPendingPayments()
+	if err != nil {
+		slog.Error("Scheduler: ошибка при протухании pending платежей", "error", err)
+	} else if expired > 0 {
+		slog.Info("Scheduler: протухли pending платежи", "count", expired)
+	}
+
+	// 2. Retry confirmed_not_activated платежей
+	b.retryConfirmedNotActivated()
+
+	// 3. Получаем пользователей
 	remUsers, err := b.remnawave.GetAllUsers()
 	if err != nil {
 		slog.Error("Scheduler failed to get users from Remnawave", "error", err)
@@ -82,8 +78,6 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 		dbByTelegramID[user.TelegramID] = user
 	}
 
-	now := time.Now().UTC()
-
 	for _, user := range remUsers {
 		if user.TelegramID == nil || *user.TelegramID == 0 {
 			continue
@@ -95,59 +89,213 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 			continue
 		}
 
+		// Бесконечная подписка — пропуск
 		if user.ExpireAt.Year() >= 2099 {
 			continue
 		}
 
-		invite, err := b.db.GetInviteByUsedBy(telegramID)
+		// Определяем тип подписки
+		isTrial := b.isTrialUser(telegramID)
+
+		if isTrial {
+			b.processTrialUser(telegramID, dbUser, user.ExpireAt, now)
+		} else {
+			b.processPaidUser(telegramID, dbUser, user.ExpireAt, now)
+		}
+	}
+}
+
+// processTrialUser обрабатывает триального пользователя.
+// Триал: уведомление за 1 день → кик при expireAt (без grace period).
+func (b *Bot) processTrialUser(telegramID int64, dbUser database.User, expireAt, now time.Time) {
+	expireDay := dayUTC(expireAt)
+	nowDay := dayUTC(now)
+
+	// За 1 день до конца триала
+	if expireDay.Equal(nowDay.AddDate(0, 0, 1)) {
+		b.sendNotification(telegramID, notificationTrialExpire1d,
+			"⏳ Ваш пробный период заканчивается завтра.\n\nОплатите подписку, чтобы сохранить доступ к VPN.")
+	}
+
+	// Триал истёк — кик
+	if !expireDay.After(nowDay) {
+		if b.maintenanceMode {
+			slog.Info("Scheduler: maintenance mode, пропускаем кик триального пользователя", "telegram_id", telegramID)
+			return
+		}
+
+		// Защита: проверяем, не оплатил ли пользователь
+		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt.Add(-24*time.Hour))
 		if err != nil {
-			slog.Error("Scheduler failed to get invite by used_by", "error", err, "telegram_id", telegramID)
-			continue
+			slog.Error("Scheduler: ошибка проверки оплаты при кике триала", "error", err, "telegram_id", telegramID)
+			return
+		}
+		if hasPaid {
+			slog.Info("Scheduler: пользователь оплатил во время триала, пропускаем кик", "telegram_id", telegramID)
+			return
 		}
 
-		// Админские (бессрочные) и старые записи без инвайта не участвуют в монетизационной логике.
-		if invite == nil || invite.ExpireDays == nil {
-			continue
-		}
+		b.sendNotification(telegramID, notificationTrialExpired,
+			"❌ Ваш пробный период закончился.\n\nДля продолжения использования VPN оплатите подписку по новому приглашению.")
+		b.handleAutoKick(telegramID, dbUser.RemnawaveUUID)
+	}
+}
 
-		curatorActive := b.isModerator(invite.CreatedBy)
+// processPaidUser обрабатывает пользователя с оплаченной подпиской.
+// Уведомления за 3д/1д → disable при expireAt → кик через 72ч grace.
+func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, now time.Time) {
+	expireDay := dayUTC(expireAt)
+	nowDay := dayUTC(now)
 
-		sent3d, err := b.db.WasNotificationSent(telegramID, notificationExpire3d)
+	// За 3 дня до конца
+	if expireDay.Equal(nowDay.AddDate(0, 0, 3)) {
+		b.sendNotification(telegramID, notificationExpire3d,
+			"⏳ Ваша подписка заканчивается через 3 дня.\n\nНажмите \"💳 Продлить подписку\" чтобы продлить доступ.")
+	}
+
+	// За 1 день до конца
+	if expireDay.Equal(nowDay.AddDate(0, 0, 1)) {
+		b.sendNotification(telegramID, notificationExpire1d,
+			"⚠️ Ваша подписка заканчивается завтра!\n\nПродлите сейчас, чтобы не потерять доступ к VPN.")
+	}
+
+	// Подписка истекла — disable + начало grace period
+	if !expireDay.After(nowDay) {
+		// Защита: проверяем, не оплатил ли пользователь после expireAt
+		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt.Add(-24*time.Hour))
 		if err != nil {
-			slog.Error("Scheduler failed to check expire_3d marker", "error", err, "telegram_id", telegramID)
-			continue
+			slog.Error("Scheduler: ошибка проверки оплаты", "error", err, "telegram_id", telegramID)
+			return
 		}
-		sentToday, err := b.db.WasNotificationSent(telegramID, notificationExpireToday)
-		if err != nil {
-			slog.Error("Scheduler failed to check expire_today marker", "error", err, "telegram_id", telegramID)
-			continue
+		if hasPaid {
+			return // Оплатил — callback уже обработал
 		}
 
-		decision := decideSubscriptionActions(user.ExpireAt, now, curatorActive, sent3d, sentToday)
-
-		if decision.ThreeDaysMessage != "" {
-			if err := b.sendSchedulerMessage(telegramID, decision.ThreeDaysMessage); err == nil {
-				if err := b.db.MarkNotificationSent(telegramID, notificationExpire3d); err != nil {
-					slog.Error("Scheduler failed to persist expire_3d marker", "error", err, "telegram_id", telegramID)
-				}
-			} else {
-				logSchedulerSendError("expire_3d", telegramID, err)
+		if !b.maintenanceMode {
+			// Disable в Remnawave (если ещё не disabled)
+			if err := b.remnawave.DisableUser(dbUser.RemnawaveUUID); err != nil {
+				slog.Warn("Scheduler: не удалось disable пользователя", "error", err, "telegram_id", telegramID)
 			}
 		}
 
-		if decision.ExpireTodayMessage != "" {
-			if err := b.sendSchedulerMessage(telegramID, decision.ExpireTodayMessage); err == nil {
-				if err := b.db.MarkNotificationSent(telegramID, notificationExpireToday); err != nil {
-					slog.Error("Scheduler failed to persist expire_today marker", "error", err, "telegram_id", telegramID)
-				}
-			} else {
-				logSchedulerSendError("expire_today", telegramID, err)
-			}
+		b.sendNotification(telegramID, notificationExpired,
+			"⚠️ Ваша подписка истекла. VPN деактивирован.\n\nУ вас есть 3 дня, чтобы оплатить и восстановить доступ.\nПосле этого аккаунт будет удалён.")
+	}
+
+	// Grace period кик: expireAt + 72 часа
+	graceDeadline := expireAt.Add(72 * time.Hour)
+	if now.After(graceDeadline) {
+		if b.maintenanceMode {
+			slog.Info("Scheduler: maintenance mode, пропускаем grace kick", "telegram_id", telegramID)
+			return
 		}
 
-		if decision.ShouldKick {
-			b.handleAutoKick(telegramID, dbUser.RemnawaveUUID)
+		// Защита: проверяем оплату за весь grace period
+		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt.Add(-24*time.Hour))
+		if err != nil {
+			slog.Error("Scheduler: ошибка проверки оплаты перед grace kick", "error", err, "telegram_id", telegramID)
+			return
 		}
+		if hasPaid {
+			return
+		}
+
+		// Перед киком проверяем свежий статус через API — вдруг callback прошёл
+		freshUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
+		if err == nil && freshUser.Status == "ACTIVE" && freshUser.ExpireAt.After(now) {
+			slog.Info("Scheduler: пользователь активен при проверке перед grace kick, пропускаем",
+				"telegram_id", telegramID)
+			return
+		}
+
+		b.sendNotification(telegramID, notificationGraceKick,
+			"❌ Ваш доступ удалён. Вы можете получить новое приглашение для повторного подключения.")
+		b.handleAutoKick(telegramID, dbUser.RemnawaveUUID)
+	}
+}
+
+// isTrialUser проверяет, находится ли пользователь на триале.
+// Триальный = приглашён модераторским инвайтом (expire_days != NULL) И ни разу не платил.
+func (b *Bot) isTrialUser(telegramID int64) bool {
+	invite, err := b.db.GetInviteByUsedBy(telegramID)
+	if err != nil || invite == nil || invite.ExpireDays == nil {
+		return false // Админский инвайт или нет инвайта — не триал
+	}
+
+	hasPaid, err := b.db.HasConfirmedPayment(telegramID)
+	if err != nil {
+		return false
+	}
+	return !hasPaid
+}
+
+// retryConfirmedNotActivated повторяет активацию для платежей со статусом confirmed_not_activated
+func (b *Bot) retryConfirmedNotActivated() {
+	payments, err := b.db.GetConfirmedNotActivated()
+	if err != nil {
+		slog.Error("Scheduler: ошибка получения confirmed_not_activated", "error", err)
+		return
+	}
+
+	if len(payments) == 0 {
+		return
+	}
+
+	slog.Info("Scheduler: retry confirmed_not_activated", "count", len(payments))
+	handler := &paymentCallbackHandler{bot: b}
+
+	for _, p := range payments {
+		payment := p // копируем для замыкания
+		if err := handler.activateSubscription(&payment); err != nil {
+			slog.Warn("Scheduler: retry активации не удался",
+				"error", err, "payment_id", payment.ID, "telegram_id", payment.TelegramID)
+			continue
+		}
+
+		// Успешно активирован — обновляем статус
+		if err := b.db.ConfirmPayment(payment.ID); err != nil {
+			slog.Error("Scheduler: ошибка обновления статуса после retry",
+				"error", err, "payment_id", payment.ID)
+			continue
+		}
+
+		// Создаём earnings
+		handler.createEarningRecord(&payment)
+
+		// Уведомляем пользователя
+		remUser, _ := b.remnawave.GetUserByTelegramID(payment.TelegramID)
+		var msg string
+		if remUser != nil {
+			expireDate := remUser.ExpireAt.Format("02.01.2006")
+			msg = fmt.Sprintf("✅ Оплата прошла! Ваша подписка активна до <b>%s</b>.\n\nЛимит трафика снят — пользуйтесь без ограничений.", expireDate)
+		} else {
+			msg = "✅ Оплата прошла! Подписка активирована."
+		}
+		_ = b.sendSchedulerMessage(payment.TelegramID, msg)
+		b.db.ClearNotifications(payment.TelegramID)
+
+		slog.Info("Scheduler: retry активации успешен", "payment_id", payment.ID, "telegram_id", payment.TelegramID)
+	}
+}
+
+// sendNotification отправляет уведомление, если оно ещё не было отправлено
+func (b *Bot) sendNotification(telegramID int64, notificationType, message string) {
+	sent, err := b.db.WasNotificationSent(telegramID, notificationType)
+	if err != nil {
+		slog.Error("Scheduler: ошибка проверки уведомления", "error", err, "type", notificationType, "telegram_id", telegramID)
+		return
+	}
+	if sent {
+		return
+	}
+
+	if err := b.sendSchedulerMessage(telegramID, message); err != nil {
+		logSchedulerSendError(notificationType, telegramID, err)
+		return
+	}
+
+	if err := b.db.MarkNotificationSent(telegramID, notificationType); err != nil {
+		slog.Error("Scheduler: ошибка сохранения маркера уведомления", "error", err, "type", notificationType, "telegram_id", telegramID)
 	}
 }
 
@@ -178,20 +326,17 @@ func (b *Bot) handleAutoKick(telegramID int64, userUUID string) {
 	if err := b.db.ClearNotifications(telegramID); err != nil {
 		slog.Warn("Scheduler failed to clear notifications during auto-kick", "error", err, "telegram_id", telegramID)
 	}
-
-	_ = b.sendSchedulerMessage(telegramID, "❌ Ваш доступ удалён. Вы можете получить новое приглашение для повторного подключения.")
 }
 
 func (b *Bot) sendSchedulerMessage(telegramID int64, message string) error {
 	if b.bot == nil {
 		return fmt.Errorf("telegram bot is not initialized")
 	}
-	_, err := b.bot.Send(&tele.User{ID: telegramID}, message)
+	_, err := b.bot.Send(&tele.User{ID: telegramID}, message, &tele.SendOptions{ParseMode: tele.ModeHTML})
 	return err
 }
 
 // isSchedulerForbiddenError проверяет, заблокировал ли пользователь бот или деактивирован.
-// Использует errors.Is вместо хрупкого strings.Contains("403").
 func isSchedulerForbiddenError(err error) bool {
 	return errors.Is(err, tele.ErrBlockedByUser) ||
 		errors.Is(err, tele.ErrUserIsDeactivated) ||
@@ -204,35 +349,6 @@ func logSchedulerSendError(msgType string, telegramID int64, err error) {
 		return
 	}
 	slog.Warn("Scheduler failed to send message", "type", msgType, "telegram_id", telegramID, "error", err)
-}
-
-func decideSubscriptionActions(expireAt, now time.Time, curatorActive bool, sent3d, sentToday bool) subscriptionDecision {
-	expireDay := dayUTC(expireAt)
-	nowDay := dayUTC(now)
-
-	decision := subscriptionDecision{}
-
-	if expireDay.Equal(nowDay.AddDate(0, 0, 3)) && !sent3d {
-		if curatorActive {
-			decision.ThreeDaysMessage = "⏳ Ваша подписка заканчивается через 3 дня.\nОбратитесь к вашему куратору для продления."
-		} else {
-			decision.ThreeDaysMessage = "⏳ Ваша подписка заканчивается через 3 дня.\nВаш куратор больше не обслуживает подписки.\nПодписка не будет продлена."
-		}
-	}
-
-	if !expireDay.After(nowDay) && !sentToday {
-		if curatorActive {
-			decision.ExpireTodayMessage = "⚠️ Ваша подписка истекла.\nУ вас есть 3 дня, чтобы продлить через куратора,\nиначе доступ будет удалён."
-		} else {
-			decision.ExpireTodayMessage = "⚠️ Ваша подписка истекла.\nВаш куратор больше не обслуживает подписки.\nДоступ будет удалён через 3 дня."
-		}
-	}
-
-	if expireDay.AddDate(0, 0, 3).Before(nowDay) {
-		decision.ShouldKick = true
-	}
-
-	return decision
 }
 
 func dayUTC(t time.Time) time.Time {

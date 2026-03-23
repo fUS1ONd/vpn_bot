@@ -233,6 +233,18 @@ func (db *DB) HasConfirmedPayment(telegramID int64) (bool, error) {
 	return exists, err
 }
 
+// HasConfirmedPaymentSince проверяет, есть ли подтверждённый платёж после указанной даты.
+// Используется scheduler для защиты от ложного кика/disable — если пользователь оплатил
+// после expireAt, подписка уже активирована через callback.
+func (db *DB) HasConfirmedPaymentSince(telegramID int64, since time.Time) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND status = 'confirmed' AND confirmed_at >= ?)`,
+		telegramID, since,
+	).Scan(&exists)
+	return exists, err
+}
+
 // CountConfirmedPaymentsByMonth считает платежи за месяц (для статистики)
 func (db *DB) CountConfirmedPaymentsByMonth(year int, month int) (int, error) {
 	var count int
