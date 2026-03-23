@@ -25,7 +25,7 @@ func TestAdminManageKeyboardDoesNotContainAddTrafficButton(t *testing.T) {
 	assert.Contains(t, buttons, BtnAdminBack)
 }
 
-func TestModeratorMenuKeyboardContainsSubscriptionButtons(t *testing.T) {
+func TestModeratorMenuKeyboardContainsNewButtons(t *testing.T) {
 	keyboard := ModeratorMenuKeyboard()
 
 	var buttons []string
@@ -36,7 +36,8 @@ func TestModeratorMenuKeyboardContainsSubscriptionButtons(t *testing.T) {
 	}
 
 	assert.Contains(t, buttons, BtnModSubscribers)
-	assert.Contains(t, buttons, BtnModExtend)
+	assert.Contains(t, buttons, BtnModEarnings)
+	assert.NotContains(t, buttons, "⏳ Продлить подписку")
 }
 
 func TestAdminModeratorKeyboardContainsStatsButton(t *testing.T) {

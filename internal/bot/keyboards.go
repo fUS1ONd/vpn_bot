@@ -51,7 +51,8 @@ const (
 	BtnModCreate      = "📨 Создать приглашение"
 	BtnModView        = "📋 Мои приглашения"
 	BtnModSubscribers = "👥 Мои подписчики"
-	BtnModExtend      = "⏳ Продлить подписку"
+	BtnModEarnings    = "💰 Мой заработок"
+	BtnModChangePrice = "✏️ Изменить цену"
 	BtnModDelete      = "🗑 Удалить приглашение"
 	BtnModBack        = "🔙 В меню"
 
@@ -133,9 +134,17 @@ func ModeratorMenuKeyboard() *tele.ReplyMarkup {
 	menu.Reply(
 		menu.Row(menu.Text(BtnModCreate)),
 		menu.Row(menu.Text(BtnModView), menu.Text(BtnModSubscribers)),
-		menu.Row(menu.Text(BtnModExtend)),
-		menu.Row(menu.Text(BtnModDelete)),
+		menu.Row(menu.Text(BtnModEarnings), menu.Text(BtnModDelete)),
 		menu.Row(menu.Text(BtnModBack)),
+	)
+	return menu
+}
+
+// ModeratorSubscribersKeyboard возвращает клавиатуру для списка подписчиков модератора.
+func ModeratorSubscribersKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnModChangePrice), menu.Text(BtnModBack)),
 	)
 	return menu
 }

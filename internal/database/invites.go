@@ -24,10 +24,11 @@ type InviteWithUser struct {
 // Subscriber содержит подписчика модератора.
 // Поля профиля могут быть nil, если пользователь удалён из users.
 type Subscriber struct {
-	TelegramID    int64
-	Username      *string
-	FirstName     *string
-	RemnawaveUUID *string
+	TelegramID        int64
+	Username          *string
+	FirstName         *string
+	RemnawaveUUID     *string
+	SubscriptionPrice *int
 }
 
 // CreateInvite создаёт новый инвайт
@@ -167,6 +168,29 @@ func (db *DB) UpdateInviteExpireDays(usedBy int64, expireDays *int) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update invite expire_days: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get affected rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("invite not found")
+	}
+
+	return nil
+}
+
+// UpdateInviteSubscriptionPrice обновляет цену подписки в инвайте пользователя.
+func (db *DB) UpdateInviteSubscriptionPrice(usedBy int64, price int) error {
+	result, err := db.conn.Exec(
+		`UPDATE invites
+		 SET subscription_price = ?
+		 WHERE used_by = ? AND kicked_at IS NULL`,
+		price, usedBy,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update invite subscription price: %w", err)
 	}
 
 	rows, err := result.RowsAffected()
@@ -515,7 +539,8 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 // Пользователи без записи в users также возвращаются (LEFT JOIN).
 func (db *DB) GetSubscribersByModerator(moderatorID int64) ([]Subscriber, error) {
 	rows, err := db.conn.Query(
-		`SELECT i.used_by, u.username, u.first_name, u.remnawave_uuid
+		`SELECT i.used_by, u.username, u.first_name, u.remnawave_uuid,
+		        COALESCE(u.subscription_price, i.subscription_price)
 		 FROM invites i
 		 LEFT JOIN users u ON i.used_by = u.telegram_id
 		 WHERE i.created_by = ? AND i.used_by IS NOT NULL
@@ -534,8 +559,9 @@ func (db *DB) GetSubscribersByModerator(moderatorID int64) ([]Subscriber, error)
 		var username sql.NullString
 		var firstName sql.NullString
 		var remnawaveUUID sql.NullString
+		var subscriptionPrice sql.NullInt64
 
-		if err := rows.Scan(&usedBy, &username, &firstName, &remnawaveUUID); err != nil {
+		if err := rows.Scan(&usedBy, &username, &firstName, &remnawaveUUID, &subscriptionPrice); err != nil {
 			return nil, fmt.Errorf("failed to scan subscriber: %w", err)
 		}
 
@@ -554,6 +580,10 @@ func (db *DB) GetSubscribersByModerator(moderatorID int64) ([]Subscriber, error)
 		if remnawaveUUID.Valid {
 			v := remnawaveUUID.String
 			sub.RemnawaveUUID = &v
+		}
+		if subscriptionPrice.Valid {
+			v := int(subscriptionPrice.Int64)
+			sub.SubscriptionPrice = &v
 		}
 		subscribers = append(subscribers, sub)
 	}

@@ -25,21 +25,21 @@ const (
 
 // Bot представляет Telegram бота
 type Bot struct {
-	bot             *tele.Bot
-	db              *database.DB
-	remnawave       *remnawave.Client
-	config          *config.Config
-	userStates      *stateMap
-	metricsClient   *monitoring.MetricsClient // клиент метрик VM
-	dashboardMgr    *dashboardManager         // менеджер сессий дашборда
-	sdConfigsPath   string                    // путь к sd_configs (для чтения targets)
-	render          *render.Client            // клиент render-сервиса (nil если не настроен)
-	platega         *platega.Client           // Platega API клиент (nil если не настроен)
-	maintenanceMode bool                      // Режим обслуживания (сбрасывается при перезапуске)
-	modExtendMu     sync.RWMutex
-	modExtendData   map[int64]modExtendSession // pending-данные продления для модератора
-	adminSwitchMu   sync.RWMutex
-	adminSwitchData map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
+	bot                *tele.Bot
+	db                 *database.DB
+	remnawave          *remnawave.Client
+	config             *config.Config
+	userStates         *stateMap
+	metricsClient      *monitoring.MetricsClient // клиент метрик VM
+	dashboardMgr       *dashboardManager         // менеджер сессий дашборда
+	sdConfigsPath      string                    // путь к sd_configs (для чтения targets)
+	render             *render.Client            // клиент render-сервиса (nil если не настроен)
+	platega            *platega.Client           // Platega API клиент (nil если не настроен)
+	maintenanceMode    bool                      // Режим обслуживания (сбрасывается при перезапуске)
+	modChangePriceMu   sync.RWMutex
+	modChangePriceData map[int64]modChangePriceSession // pending-данные изменения цены для модератора
+	adminSwitchMu      sync.RWMutex
+	adminSwitchData    map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
 }
 
 // New создаёт нового Telegram бота
@@ -55,16 +55,16 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	}
 
 	bot := &Bot{
-		bot:             b,
-		db:              db,
-		remnawave:       remnawaveClient,
-		config:          cfg,
-		userStates:      newStateMap(),
-		metricsClient:   monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
-		dashboardMgr:    newDashboardManager(),
-		sdConfigsPath:   cfg.SDConfigsPath,
-		modExtendData:   make(map[int64]modExtendSession),
-		adminSwitchData: make(map[int64]adminSwitchSession),
+		bot:                b,
+		db:                 db,
+		remnawave:          remnawaveClient,
+		config:             cfg,
+		userStates:         newStateMap(),
+		metricsClient:      monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
+		dashboardMgr:       newDashboardManager(),
+		sdConfigsPath:      cfg.SDConfigsPath,
+		modChangePriceData: make(map[int64]modChangePriceSession),
+		adminSwitchData:    make(map[int64]adminSwitchSession),
 	}
 
 	// Middleware для логирования
@@ -297,21 +297,28 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		}
 		return b.processModeratorDeleteInvite(c, text)
 
-	case StateWaitModExtendID:
+	case StateWaitModInvitePrice:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			b.clearModExtendSession(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 		}
-		return b.processModExtendID(c, text)
+		return b.processModeratorInvitePrice(c, text)
 
-	case StateWaitModExtendConfirm:
+	case StateWaitModChangePriceID:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			b.clearModExtendSession(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+			b.clearModChangePriceSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
 		}
-		return b.processModExtendConfirm(c, text)
+		return b.processModChangePriceID(c, text)
+
+	case StateWaitModChangePriceValue:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearModChangePriceSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
+		}
+		return b.processModChangePriceValue(c, text)
 
 	case StateWaitAddModerator:
 		if text == BtnCancel {
@@ -405,8 +412,10 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleModeratorDeleteInviteRequest(c)
 		case BtnModSubscribers:
 			return b.handleModSubscribers(c)
-		case BtnModExtend:
-			return b.handleModExtend(c)
+		case BtnModEarnings:
+			return b.handleModeratorEarnings(c)
+		case BtnModChangePrice:
+			return b.handleModChangePriceRequest(c)
 		case BtnModBack:
 			return b.handleModeratorBack(c)
 		}
@@ -764,7 +773,8 @@ func isMenuNavigationButton(text string) bool {
 		BtnModCreate,
 		BtnModView,
 		BtnModSubscribers,
-		BtnModExtend,
+		BtnModEarnings,
+		BtnModChangePrice,
 		BtnModDelete,
 		BtnModBack,
 		BtnAdminManage,
