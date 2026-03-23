@@ -31,6 +31,8 @@ make logs
 | `DB_PATH`                      | —            | Путь к SQLite-базе (дефолт: `/app/data/bot.db`)             |
 | `REMNAWAVE_DEFAULT_SQUAD_UUIDS` | —            | Список UUID internal squads через запятую; новые пользователи добавляются во все перечисленные сквады |
 | `VICTORIA_METRICS_URL`         | —            | URL VictoriaMetrics (дефолт: `http://victoriametrics:8428`) |
+| `CALLBACK_PORT`                | —            | Порт встроенного callback-сервера Platega (дефолт: `8080`)  |
+| `MIN_SUBSCRIPTION_PRICE`       | —            | Минимальная цена подписки для модераторов (дефолт: `400`)   |
 | `TRIAL_TRAFFIC_LIMIT_GB`       | —            | Лимит трафика для триала в ГБ (дефолт: `1`)                 |
 | `PLATEGA_MERCHANT_ID`          | —            | Merchant ID Platega для пользовательской оплаты             |
 | `PLATEGA_SECRET`               | —            | Секретный ключ Platega                                      |
@@ -50,6 +52,8 @@ REMNAWAVE_DEFAULT_SQUAD_UUIDS=uuid-1,uuid-2,uuid-3
 
 Для обратной совместимости бот также понимает legacy-переменную `REMNAWAVE_DEFAULT_SQUAD_UUID`, если новый список не задан.
 
+Если `PLATEGA_MERCHANT_ID` и `PLATEGA_SECRET` не заданы, бот запускается как раньше: callback-сервер не поднимается, кнопки оплаты не показываются.
+
 ## Функциональность
 
 ### Пользователь
@@ -59,7 +63,7 @@ REMNAWAVE_DEFAULT_SQUAD_UUIDS=uuid-1,uuid-2,uuid-3
 | `/start`        | Регистрация по инвайт-коду или вход для зарегистрированных           |
 | `/start <code>` | Автоматическая активация кода из ссылки-приглашения                  |
 | `👤 Мой статус` | Статус подписки по типу (триал / оплаченная / grace / бессрочная), трафик и ссылка |
-| `💳 Оплатить подписку` / `💳 Продлить подписку` | Запуск flow оплаты: выбор способа, ссылка, ручная проверка |
+| `💳 Оплатить подписку` / `💳 Продлить подписку` | Запуск flow оплаты: выбор способа, ссылка, ручная проверка; кнопка скрыта без Platega или при `subscription_price = NULL` |
 | `📡 Серверы`    | Live-дашборд мониторинга нод (обновляется каждые 5 сек)              |
 | `📚 Инструкции` | Инструкции по настройке клиентов: iOS, Android, ПК                  |
 | `ℹ️ Информация` | Помощь, контакт для вопросов и ссылки на документы сервиса           |
@@ -118,6 +122,7 @@ REMNAWAVE_DEFAULT_SQUAD_UUIDS=uuid-1,uuid-2,uuid-3
 4. в точный `expireAt` оплаченная подписка переводится в `DISABLED`, затем даётся 72 часа grace period;
 5. после grace period пользователь удаляется, если свежая оплата не подтверждена;
 6. в `maintenance mode` disable и автокики блокируются.
+7. legacy-пользователи без инвайта и без `subscription_price` пропускаются новым payment-scheduler и продолжают жить по старой модели.
 
 **Flow оплаты**:
 1. пользователь выбирает `💳 Оплатить подписку` или `💳 Продлить подписку`;
@@ -181,7 +186,9 @@ vpn_bot/
 │   └── migrator/          → Утилита миграции пользователей из старой БД
 ├── internal/
 │   ├── bot/               → Обработчики, клавиатуры, дашборд, состояния, scheduler
-│   ├── database/          → SQLite (users, invites, moderators, bans, notifications)
+│   ├── callback/          → HTTP callback-сервер Platega
+│   ├── database/          → SQLite (users, invites, payments, moderator_earnings, moderators, bans, notifications)
+│   ├── platega/           → HTTP-клиент Platega
 │   ├── remnawave/         → HTTP-клиент Remnawave API
 │   ├── monitoring/        → Метрики, алерты, service discovery
 │   └── config/            → Загрузка конфигурации

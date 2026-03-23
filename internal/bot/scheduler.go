@@ -89,6 +89,19 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 			continue
 		}
 
+		invite, err := b.db.GetInviteByUsedBy(telegramID)
+		if err != nil {
+			slog.Warn("Scheduler: не удалось получить инвайт пользователя", "error", err, "telegram_id", telegramID)
+			continue
+		}
+
+		// Legacy-пользователи без инвайта и без цены остаются на старой модели:
+		// scheduler оплаты их не трогает, чтобы не ломать обратную совместимость.
+		if invite == nil && dbUser.SubscriptionPrice == nil {
+			slog.Info("Scheduler: пропускаем legacy-пользователя без инвайта и цены", "telegram_id", telegramID)
+			continue
+		}
+
 		// Бесконечная подписка — пропуск
 		if user.ExpireAt.Year() >= 2099 {
 			continue

@@ -263,6 +263,63 @@ func TestSchedulerTrialNotKickedIfPaid(t *testing.T) {
 	assert.NotNil(t, dbUser, "оплативший пользователь не должен быть кикнут")
 }
 
+func TestSchedulerSkipsLegacyUserWithoutInvite(t *testing.T) {
+	b, db := setupSchedulerTestBot(t)
+
+	userID := int64(260)
+	_, err := db.CreateUser(userID, "legacy_user", "Legacy", "uuid-260", nil, nil)
+	require.NoError(t, err)
+
+	invite, err := db.GetInviteByUsedBy(userID)
+	require.NoError(t, err)
+	require.Nil(t, invite, "legacy-пользователь не должен иметь связанного инвайта")
+
+	var disableCalled bool
+	var deleteCalled bool
+	expireAt := time.Now().UTC().Add(-2 * time.Hour)
+
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users":
+				payload := fmt.Sprintf(`{"response":{"users":[{"uuid":"uuid-260","username":"legacy_user","status":"ACTIVE","telegramId":260,"expireAt":"%s"}],"total":1}}`,
+					expireAt.Format(time.RFC3339))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/users":
+				disableCalled = true
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodDelete && r.URL.Path == "/api/users/uuid-260":
+				deleteCalled = true
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, fmt.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+			}
+		}),
+	})
+	b.remnawave = client
+
+	b.runSubscriptionSchedulerPass()
+
+	dbUser, err := db.GetUserByTelegramID(userID)
+	require.NoError(t, err)
+	assert.NotNil(t, dbUser, "legacy-пользователь без инвайта не должен обрабатываться scheduler")
+	assert.False(t, disableCalled, "scheduler не должен disable-ить legacy-пользователя без инвайта")
+	assert.False(t, deleteCalled, "scheduler не должен кикать legacy-пользователя без инвайта")
+}
+
 // TestSchedulerPaidDisableAndGraceKick проверяет disable при expireAt и кик через 72ч
 func TestSchedulerPaidDisableAndGraceKick(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
