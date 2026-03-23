@@ -20,6 +20,12 @@ type Payment struct {
 	ConfirmedAt          *time.Time
 }
 
+// MonthlyConfirmedPayment хранит подтверждённый платёж месяца и долю модератора.
+type MonthlyConfirmedPayment struct {
+	Payment
+	ShareAmount int
+}
+
 // CreatePayment создаёт новый платёж
 func (db *DB) CreatePayment(p *Payment) (int64, error) {
 	res, err := db.conn.Exec(
@@ -251,25 +257,85 @@ func (db *DB) HasConfirmedPaymentSince(telegramID int64, since time.Time) (bool,
 	return exists, err
 }
 
-// CountConfirmedPaymentsByMonth считает платежи за месяц (для статистики)
+// GetConfirmedPaymentsByMonth возвращает финансово подтверждённые платежи за месяц.
+// Платежи без moderator_earnings остаются в выборке, а доля модератора для них равна нулю.
+func (db *DB) GetConfirmedPaymentsByMonth(year int, month int) ([]MonthlyConfirmedPayment, error) {
+	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 1, 0)
+
+	rows, err := db.conn.Query(
+		`SELECT p.id, p.telegram_id, p.moderator_id, p.amount, p.payment_method, p.status,
+		        p.platega_transaction_id, p.redirect_url, p.expires_at, p.created_at, p.confirmed_at,
+		        COALESCE(me.share_amount, 0)
+		 FROM payments p
+		 LEFT JOIN (
+		     SELECT payment_id, COALESCE(SUM(share_amount), 0) AS share_amount
+		     FROM moderator_earnings
+		     GROUP BY payment_id
+		 ) me ON me.payment_id = p.id
+		 WHERE p.confirmed_at >= ? AND p.confirmed_at < ?
+		 ORDER BY p.confirmed_at ASC, p.id ASC`,
+		start, end,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var payments []MonthlyConfirmedPayment
+	for rows.Next() {
+		var p MonthlyConfirmedPayment
+		var modID sql.NullInt64
+		var txID sql.NullString
+		var redirectURL sql.NullString
+		var expiresAt sql.NullTime
+		var confirmedAt sql.NullTime
+
+		if err := rows.Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt, &p.ShareAmount); err != nil {
+			return nil, err
+		}
+
+		if modID.Valid {
+			p.ModeratorID = &modID.Int64
+		}
+		if txID.Valid {
+			p.PlategaTransactionID = &txID.String
+		}
+		if redirectURL.Valid {
+			p.RedirectURL = &redirectURL.String
+		}
+		if expiresAt.Valid {
+			p.ExpiresAt = &expiresAt.Time
+		}
+		if confirmedAt.Valid {
+			p.ConfirmedAt = &confirmedAt.Time
+		}
+
+		payments = append(payments, p)
+	}
+
+	return payments, rows.Err()
+}
+
+// CountConfirmedPaymentsByMonth считает финансово подтверждённые платежи за месяц.
 func (db *DB) CountConfirmedPaymentsByMonth(year int, month int) (int, error) {
 	var count int
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	err := db.conn.QueryRow(
-		`SELECT COUNT(*) FROM payments WHERE status = 'confirmed' AND confirmed_at >= ? AND confirmed_at < ?`,
+		`SELECT COUNT(*) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ?`,
 		start, end,
 	).Scan(&count)
 	return count, err
 }
 
-// SumConfirmedPaymentsByMonth возвращает сумму платежей за месяц
+// SumConfirmedPaymentsByMonth возвращает сумму финансово подтверждённых платежей за месяц.
 func (db *DB) SumConfirmedPaymentsByMonth(year int, month int) (int, error) {
 	var sum int
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	err := db.conn.QueryRow(
-		`SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'confirmed' AND confirmed_at >= ? AND confirmed_at < ?`,
+		`SELECT COALESCE(SUM(amount), 0) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ?`,
 		start, end,
 	).Scan(&sum)
 	return sum, err
@@ -292,11 +358,12 @@ func (db *DB) CountFirstPaymentsByMonth(year int, month int) (int, error) {
 	var count int
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
-	// Считаем пользователей, у которых первый confirmed платёж попал в этот месяц
+	// Считаем пользователей, у которых первая финансово подтверждённая оплата попала в этот месяц.
 	err := db.conn.QueryRow(
 		`SELECT COUNT(*) FROM (
 		    SELECT telegram_id, MIN(confirmed_at) as first_payment
-		    FROM payments WHERE status = 'confirmed'
+		    FROM payments
+		    WHERE confirmed_at IS NOT NULL
 		    GROUP BY telegram_id
 		    HAVING first_payment >= ? AND first_payment < ?
 		)`, start, end,

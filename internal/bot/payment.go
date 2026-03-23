@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +23,8 @@ var defaultPaymentRetryDelays = []time.Duration{
 	1 * time.Minute,
 	5 * time.Minute,
 }
+
+const paymentStatusConfirmedActivationFailed = "confirmed_activation_failed"
 
 func getPaymentMutex(telegramID int64) *sync.Mutex {
 	mu, _ := paymentMu.LoadOrStore(telegramID, &sync.Mutex{})
@@ -68,8 +71,27 @@ func (h *paymentCallbackHandler) HandlePaymentCallback(payload platega.CallbackP
 	}
 }
 
-// handleConfirmed обрабатывает успешный платёж
+// handleConfirmed обрабатывает успешный платёж и уведомляет пользователя.
 func (h *paymentCallbackHandler) handleConfirmed(payment *database.Payment) error {
+	return h.handleConfirmedWithNotification(payment, true)
+}
+
+// handleConfirmedSilently обрабатывает успешный платёж без отдельного push-уведомления.
+// Используется для ручной проверки оплаты, чтобы не дублировать финальное сообщение.
+func (h *paymentCallbackHandler) handleConfirmedSilently(payment *database.Payment) error {
+	return h.handleConfirmedWithNotification(payment, false)
+}
+
+func (h *paymentCallbackHandler) handleConfirmedWithNotification(payment *database.Payment, notifyUser bool) error {
+	freshPayment, err := h.bot.db.GetPaymentByID(payment.ID)
+	if err != nil {
+		return fmt.Errorf("reload payment before confirm: %w", err)
+	}
+	if freshPayment == nil {
+		return fmt.Errorf("payment not found: id=%d", payment.ID)
+	}
+	payment = freshPayment
+
 	// Идемпотентность: если платёж уже confirmed — пропускаем
 	if payment.Status == "confirmed" {
 		slog.Info("Платёж уже подтверждён, пропускаем", "payment_id", payment.ID)
@@ -89,6 +111,19 @@ func (h *paymentCallbackHandler) handleConfirmed(payment *database.Payment) erro
 	// Пытаемся активировать подписку один раз.
 	// Долгие retry выполняет scheduler, чтобы не держать callback/manual-check path открытым.
 	if err := h.activateSubscription(payment); err != nil {
+		if isTerminalActivationError(err) {
+			slog.Error("Активация подписки невозможна, переводим платёж в terminal-статус",
+				"error", err, "payment_id", payment.ID, "telegram_id", payment.TelegramID)
+			if updateErr := h.bot.db.UpdatePaymentStatus(payment.ID, paymentStatusConfirmedActivationFailed); updateErr != nil {
+				return fmt.Errorf("update status to %s: %w", paymentStatusConfirmedActivationFailed, updateErr)
+			}
+			h.bot.sendAdminAlert(fmt.Sprintf(
+				"⚠️ Платёж #%d подтверждён, но активация подписки невозможна для %d: %v",
+				payment.ID, payment.TelegramID, err,
+			))
+			return nil
+		}
+
 		slog.Error("Не удалось активировать подписку после подтверждения, помечаем для scheduler",
 			"error", err, "payment_id", payment.ID)
 		if updateErr := h.bot.db.UpdatePaymentStatus(payment.ID, "confirmed_not_activated"); updateErr != nil {
@@ -106,23 +141,24 @@ func (h *paymentCallbackHandler) handleConfirmed(payment *database.Payment) erro
 		return nil // Не возвращаем ошибку — платёж уже сохранён
 	}
 
-	h.finalizeActivatedPayment(payment)
+	h.finalizeActivatedPayment(payment, notifyUser)
 	return nil
 }
 
-func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Payment) {
-	// Уведомляем пользователя
-	remUser, _ := h.bot.remnawave.GetUserByTelegramID(payment.TelegramID)
+func (b *Bot) paymentActivatedMessage(telegramID int64) string {
+	remUser, _ := b.remnawave.GetUserByTelegramID(telegramID)
 
-	var msg string
 	if remUser != nil {
 		expireDate := remUser.ExpireAt.Format("02.01.2006")
-		msg = fmt.Sprintf("✅ Оплата прошла! Ваша подписка активна до <b>%s</b>.\n\nЛимит трафика снят — пользуйтесь без ограничений.\n\nБлиже к концу подписки мы напомним о продлении.", expireDate)
-	} else {
-		msg = "✅ Оплата прошла! Подписка активирована."
+		return fmt.Sprintf("✅ Оплата прошла! Ваша подписка активна до <b>%s</b>.\n\nЛимит трафика снят — пользуйтесь без ограничений.\n\nБлиже к концу подписки мы напомним о продлении.", expireDate)
 	}
+	return "✅ Оплата прошла! Подписка активирована."
+}
 
-	_ = h.bot.sendSchedulerMessage(payment.TelegramID, msg)
+func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Payment, notifyUser bool) {
+	if notifyUser {
+		_ = h.bot.sendSchedulerMessage(payment.TelegramID, h.bot.paymentActivatedMessage(payment.TelegramID))
+	}
 
 	// Очищаем уведомления (пользователь мог быть в grace period)
 	h.bot.db.ClearNotifications(payment.TelegramID)
@@ -172,6 +208,16 @@ func nextRetryDelay(delays []time.Duration, attempt int) string {
 	return delays[attempt+1].String()
 }
 
+func isTerminalActivationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "user not found: telegram_id=") ||
+		strings.Contains(msg, "API error 404")
+}
+
 func (b *Bot) retryConfirmedPaymentActivation(paymentID int64, source string) bool {
 	payment, err := b.db.GetPaymentByID(paymentID)
 	if err != nil {
@@ -199,6 +245,25 @@ func (b *Bot) retryConfirmedPaymentActivation(paymentID int64, source string) bo
 
 	handler := &paymentCallbackHandler{bot: b}
 	if err := handler.activateSubscription(payment); err != nil {
+		if isTerminalActivationError(err) {
+			slog.Error("Retry активации упёрся в terminal-ошибку, останавливаем повторные попытки",
+				"error", err,
+				"payment_id", paymentID,
+				"telegram_id", payment.TelegramID,
+				"source", source,
+			)
+			if updateErr := b.db.UpdatePaymentStatus(payment.ID, paymentStatusConfirmedActivationFailed); updateErr != nil {
+				slog.Error("Не удалось обновить статус после terminal-ошибки активации",
+					"error", updateErr, "payment_id", paymentID, "source", source)
+				return false
+			}
+			b.sendAdminAlert(fmt.Sprintf(
+				"⚠️ Retry активации остановлен: платёж #%d подтверждён, но подписку невозможно активировать для %d: %v",
+				payment.ID, payment.TelegramID, err,
+			))
+			return true
+		}
+
 		slog.Warn("Не удалось активировать подписку при retry",
 			"error", err,
 			"payment_id", paymentID,
@@ -214,7 +279,7 @@ func (b *Bot) retryConfirmedPaymentActivation(paymentID int64, source string) bo
 		return false
 	}
 
-	handler.finalizeActivatedPayment(payment)
+	handler.finalizeActivatedPayment(payment, true)
 	slog.Info("Retry активации успешен",
 		"payment_id", paymentID,
 		"telegram_id", payment.TelegramID,
@@ -388,6 +453,13 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 
 	paymentMethodStr := platega.PaymentMethodString(paymentMethodInt)
 
+	// Сериализуем весь create-flow по telegram_id.
+	// Иначе два быстрых нажатия могут одновременно пройти проверку pending
+	// и создать две живые ссылки на оплату.
+	mu := getPaymentMutex(telegramID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	// Проверяем наличие активного PENDING платежа
 	pending, err := b.db.GetPendingPayment(telegramID)
 	if err != nil {
@@ -404,7 +476,9 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 			return pending, url, nil
 		}
 		// Другой способ — помечаем старый как expired
-		b.db.UpdatePaymentStatus(pending.ID, "expired")
+		if err := b.db.UpdatePaymentStatus(pending.ID, "expired"); err != nil {
+			return nil, "", fmt.Errorf("expire previous pending: %w", err)
+		}
 	}
 
 	// Создаём платёж в Platega
@@ -482,9 +556,9 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	}
 
 	if status.Status == platega.StatusConfirmed {
-		// Платёж подтверждён — обрабатываем как callback (мьютекс уже взят)
+		// Платёж подтверждён — синхронизируем его без отдельного push-уведомления.
 		handler := &paymentCallbackHandler{bot: b}
-		if err := handler.handleConfirmed(pending); err != nil {
+		if err := handler.handleConfirmedSilently(pending); err != nil {
 			return "", err
 		}
 
@@ -501,7 +575,7 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 
 	if status.Status == platega.StatusManualConfirmed {
 		handler := &paymentCallbackHandler{bot: b}
-		if err := handler.handleConfirmed(pending); err != nil {
+		if err := handler.handleConfirmedSilently(pending); err != nil {
 			return "", err
 		}
 

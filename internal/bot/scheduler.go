@@ -214,7 +214,12 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 
 		// Перед киком проверяем свежий статус через API — вдруг callback прошёл
 		freshUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
-		if err == nil && freshUser.Status == "ACTIVE" && freshUser.ExpireAt.After(now) {
+		if err != nil {
+			slog.Warn("Scheduler: не удалось проверить свежий статус перед grace kick",
+				"error", err, "telegram_id", telegramID)
+			return
+		}
+		if freshUser.Status == "ACTIVE" && freshUser.ExpireAt.After(now) {
 			slog.Info("Scheduler: пользователь активен при проверке перед grace kick, пропускаем",
 				"telegram_id", telegramID)
 			return
@@ -298,6 +303,11 @@ func (b *Bot) handleAutoKick(telegramID int64, userUUID string) {
 			slog.Debug("Scheduler auto-kick: user already absent in Remnawave", "telegram_id", telegramID)
 		} else {
 			slog.Warn("Scheduler failed to delete user from Remnawave during auto-kick", "error", err, "telegram_id", telegramID)
+			b.sendAdminAlert(fmt.Sprintf(
+				"⚠️ Auto-kick не завершён: не удалось удалить пользователя %d из Remnawave: %v",
+				telegramID, err,
+			))
+			return
 		}
 	}
 

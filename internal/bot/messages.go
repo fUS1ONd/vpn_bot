@@ -240,6 +240,7 @@ func formatGraceStatus(remUser *remnawave.User, dbUser *database.User) string {
 	}
 
 	msg += "\nОплатите подписку, чтобы восстановить доступ."
+	msg += fmt.Sprintf("\nЕсли не оплатить до %s, аккаунт будет удалён.", graceDeadline.Format("02.01.2006"))
 	return msg
 }
 

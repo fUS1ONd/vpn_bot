@@ -469,6 +469,21 @@ func TestHandleTextMessage_ModeratorButtons(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
+	t.Run("Кнопка_Назад_из_экрана_подписчиков", func(t *testing.T) {
+		b.userStates.Set(modID, StateModSubscribers)
+		ctx := &MockContext{
+			sender:  user,
+			message: &tele.Message{Text: BtnBack},
+		}
+		err := b.handleTextMessage(ctx)
+		assert.NoError(t, err)
+
+		sentStr, ok := ctx.sentMsg.(string)
+		assert.True(t, ok)
+		assert.Contains(t, sentStr, "Приглашения")
+		assert.Empty(t, b.userStates.Get(modID))
+	})
+
 	t.Run("Кнопка_Создать_запрашивает_цену", func(t *testing.T) {
 		ctx := &MockContext{
 			sender:  user,
@@ -655,6 +670,20 @@ func TestProcessModChangePrice_UpdatesTrialSubscriber(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(code, 9001))
 
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-9001" {
+				payload := `{"response":{"uuid":"uuid-9001","username":"trial","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
+	})
+
 	ctxID := &MockContext{sender: &tele.User{ID: modID}, message: &tele.Message{Text: "9001"}}
 	require.NoError(t, b.processModChangePriceID(ctxID, "9001"))
 	require.Equal(t, StateWaitModChangePriceValue, b.userStates.Get(modID))
@@ -776,6 +805,41 @@ func TestProcessModChangePriceID_RejectsPaidSubscriber(t *testing.T) {
 	msg, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
 	assert.Contains(t, msg, "уже оплатил")
+	assert.Empty(t, b.userStates.Get(modID))
+}
+
+func TestProcessModChangePriceID_RejectsGraceSubscriber(t *testing.T) {
+	b, db, _, modID := setupModeratorTestBot(t)
+	price := 500
+	_, err := db.CreateUser(401, "grace", "Grace", "uuid-401", &price, &modID)
+	require.NoError(t, err)
+	code, err := db.CreateInviteWithPrice(modID, 30, price)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(code, 401))
+
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-401" {
+				payload := `{"response":{"uuid":"uuid-401","username":"grace","status":"DISABLED","expireAt":"2026-03-01T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
+	})
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: modID},
+		message: &tele.Message{Text: "401"},
+	}
+	require.NoError(t, b.processModChangePriceID(ctx, "401"))
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "уже не на пробном периоде")
 	assert.Empty(t, b.userStates.Get(modID))
 }
 

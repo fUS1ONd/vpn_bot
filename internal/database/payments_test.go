@@ -188,6 +188,222 @@ func TestConfirmPaymentPreservesExistingConfirmedAt(t *testing.T) {
 	assert.True(t, got.ConfirmedAt.Equal(original), "confirmed_at не должен перезаписываться при retry")
 }
 
+func TestGetConfirmedPaymentsByMonth(t *testing.T) {
+	dbFile := "test_payments_confirmed_month.db"
+	db, err := New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	targetMonth := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC)
+	targetAdminConfirmedAt := targetMonth.Add(9 * 24 * time.Hour)
+	targetModeratorConfirmedAt := targetMonth.Add(10 * 24 * time.Hour)
+	targetNotActivatedConfirmedAt := targetMonth.Add(11 * 24 * time.Hour)
+	targetChargebackedConfirmedAt := targetMonth.Add(12 * 24 * time.Hour)
+	previousMonthConfirmedAt := targetMonth.AddDate(0, -1, 0).Add(20 * 24 * time.Hour)
+
+	modID := int64(100)
+
+	adminPaymentID, err := db.CreatePayment(&Payment{
+		TelegramID:    200,
+		Amount:        1000,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(adminPaymentID))
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, targetAdminConfirmedAt, adminPaymentID)
+	require.NoError(t, err)
+
+	moderatorPaymentID, err := db.CreatePayment(&Payment{
+		TelegramID:    201,
+		ModeratorID:   &modID,
+		Amount:        500,
+		PaymentMethod: "card",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(moderatorPaymentID))
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, targetModeratorConfirmedAt, moderatorPaymentID)
+	require.NoError(t, err)
+	_, err = db.CreateEarning(&ModeratorEarning{
+		PaymentID:     moderatorPaymentID,
+		ModeratorID:   modID,
+		GrossAmount:   500,
+		PlategaFee:    60,
+		WithdrawalFee: 8,
+		NetAmount:     432,
+		SharePercent:  15,
+		ShareAmount:   66,
+	})
+	require.NoError(t, err)
+
+	previousMonthPaymentID, err := db.CreatePayment(&Payment{
+		TelegramID:    202,
+		ModeratorID:   &modID,
+		Amount:        700,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(previousMonthPaymentID))
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, previousMonthConfirmedAt, previousMonthPaymentID)
+	require.NoError(t, err)
+	_, err = db.CreateEarning(&ModeratorEarning{
+		PaymentID:     previousMonthPaymentID,
+		ModeratorID:   modID,
+		GrossAmount:   700,
+		PlategaFee:    70,
+		WithdrawalFee: 12,
+		NetAmount:     618,
+		SharePercent:  15,
+		ShareAmount:   92,
+	})
+	require.NoError(t, err)
+
+	notActivatedPaymentID, err := db.CreatePayment(&Payment{
+		TelegramID:    203,
+		ModeratorID:   &modID,
+		Amount:        800,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(notActivatedPaymentID))
+	_, err = db.Conn().Exec(`UPDATE payments SET status = 'confirmed_not_activated', confirmed_at = ? WHERE id = ?`, targetNotActivatedConfirmedAt, notActivatedPaymentID)
+	require.NoError(t, err)
+	_, err = db.CreateEarning(&ModeratorEarning{
+		PaymentID:     notActivatedPaymentID,
+		ModeratorID:   modID,
+		GrossAmount:   800,
+		PlategaFee:    80,
+		WithdrawalFee: 14,
+		NetAmount:     706,
+		SharePercent:  15,
+		ShareAmount:   105,
+	})
+	require.NoError(t, err)
+
+	chargebackedPaymentID, err := db.CreatePayment(&Payment{
+		TelegramID:    204,
+		Amount:        600,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(chargebackedPaymentID))
+	_, err = db.Conn().Exec(`UPDATE payments SET status = 'chargebacked', confirmed_at = ? WHERE id = ?`, targetChargebackedConfirmedAt, chargebackedPaymentID)
+	require.NoError(t, err)
+
+	payments, err := db.GetConfirmedPaymentsByMonth(2026, 3)
+	require.NoError(t, err)
+	require.Len(t, payments, 4)
+
+	byTelegramID := make(map[int64]MonthlyConfirmedPayment, len(payments))
+	for _, payment := range payments {
+		byTelegramID[payment.TelegramID] = payment
+	}
+
+	adminPayment, ok := byTelegramID[200]
+	require.True(t, ok)
+	assert.Nil(t, adminPayment.ModeratorID)
+	assert.Equal(t, 1000, adminPayment.Amount)
+	assert.Equal(t, 0, adminPayment.ShareAmount)
+
+	moderatorPayment, ok := byTelegramID[201]
+	require.True(t, ok)
+	require.NotNil(t, moderatorPayment.ModeratorID)
+	assert.Equal(t, modID, *moderatorPayment.ModeratorID)
+	assert.Equal(t, 500, moderatorPayment.Amount)
+	assert.Equal(t, 66, moderatorPayment.ShareAmount)
+
+	_, ok = byTelegramID[202]
+	assert.False(t, ok, "платёж из предыдущего месяца не должен попадать в выборку")
+
+	notActivatedPayment, ok := byTelegramID[203]
+	require.True(t, ok)
+	require.NotNil(t, notActivatedPayment.ModeratorID)
+	assert.Equal(t, modID, *notActivatedPayment.ModeratorID)
+	assert.Equal(t, 800, notActivatedPayment.Amount)
+	assert.Equal(t, 105, notActivatedPayment.ShareAmount)
+
+	chargebackedPayment, ok := byTelegramID[204]
+	require.True(t, ok)
+	assert.Equal(t, 600, chargebackedPayment.Amount)
+	assert.Equal(t, 0, chargebackedPayment.ShareAmount)
+}
+
+func TestCountFirstPaymentsByMonth_IncludesFinanciallyConfirmedStatuses(t *testing.T) {
+	dbFile := "test_payments_first_payments_month.db"
+	db, err := New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	firstConfirmedID, err := db.CreatePayment(&Payment{
+		TelegramID:    301,
+		Amount:        500,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(firstConfirmedID))
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, time.Date(2026, time.March, 5, 12, 0, 0, 0, time.UTC), firstConfirmedID)
+	require.NoError(t, err)
+
+	firstNotActivatedID, err := db.CreatePayment(&Payment{
+		TelegramID:    302,
+		Amount:        500,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(firstNotActivatedID))
+	_, err = db.Conn().Exec(`UPDATE payments SET status = 'confirmed_not_activated', confirmed_at = ? WHERE id = ?`, time.Date(2026, time.March, 6, 12, 0, 0, 0, time.UTC), firstNotActivatedID)
+	require.NoError(t, err)
+
+	chargebackedID, err := db.CreatePayment(&Payment{
+		TelegramID:    303,
+		Amount:        500,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(chargebackedID))
+	_, err = db.Conn().Exec(`UPDATE payments SET status = 'chargebacked', confirmed_at = ? WHERE id = ?`, time.Date(2026, time.March, 7, 12, 0, 0, 0, time.UTC), chargebackedID)
+	require.NoError(t, err)
+
+	previousMonthID, err := db.CreatePayment(&Payment{
+		TelegramID:    304,
+		Amount:        500,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(previousMonthID))
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, time.Date(2026, time.February, 20, 12, 0, 0, 0, time.UTC), previousMonthID)
+	require.NoError(t, err)
+
+	secondMarchPaymentID, err := db.CreatePayment(&Payment{
+		TelegramID:    304,
+		Amount:        500,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(secondMarchPaymentID))
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, time.Date(2026, time.March, 8, 12, 0, 0, 0, time.UTC), secondMarchPaymentID)
+	require.NoError(t, err)
+
+	count, err := db.CountFirstPaymentsByMonth(2026, 3)
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+}
+
 func TestExpireOldPendingPayments(t *testing.T) {
 	dbFile := "test_payments_expire.db"
 	db, err := New(dbFile)

@@ -19,6 +19,7 @@ const (
 	StateWaitModInvitePrice      = "wait_mod_invite_price"       // Ожидание цены нового инвайта
 	StateWaitModChangePriceID    = "wait_mod_change_price_id"    // Ожидание telegram_id подписчика
 	StateWaitModChangePriceValue = "wait_mod_change_price_value" // Ожидание новой цены подписки
+	StateModSubscribers          = "mod_subscribers"             // Открыт экран списка подписчиков
 )
 
 type modChangePriceSession struct {
@@ -39,6 +40,7 @@ func (b *Bot) isModerator(telegramID int64) bool {
 
 // handleModeratorMenu показывает подменю модератора.
 func (b *Bot) handleModeratorMenu(c tele.Context) error {
+	b.userStates.Delete(c.Sender().ID)
 	return c.Send("<b>🎟 Приглашения</b>\n\nВыберите действие:", &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: ModeratorMenuKeyboard(),
@@ -217,6 +219,7 @@ func (b *Bot) handleModSubscribers(c tele.Context) error {
 		expiredCount,
 		deletedCount,
 	)
+	b.userStates.Set(telegramID, StateModSubscribers)
 
 	return c.Send(msg.String(), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
@@ -327,6 +330,23 @@ func (b *Bot) processModChangePriceID(c tele.Context, text string) error {
 		b.userStates.Delete(moderatorID)
 		return c.Send(
 			"❌ Нельзя изменить цену — клиент уже оплатил подписку. Обратитесь к администратору.",
+			&tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()},
+		)
+	}
+
+	remUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
+	if err != nil {
+		slog.Error("Failed to load subscriber from Remnawave", "error", err, "target_id", targetID)
+		return c.Send("Ошибка проверки подписчика", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+	}
+
+	switch b.describeSubscriberStatus(targetID, *remUser, time.Now().UTC()) {
+	case "trial":
+		// Только trial может менять цену.
+	default:
+		b.userStates.Delete(moderatorID)
+		return c.Send(
+			"❌ Нельзя изменить цену — клиент уже не на пробном периоде. Обратитесь к администратору.",
 			&tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()},
 		)
 	}

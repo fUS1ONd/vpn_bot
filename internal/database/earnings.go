@@ -23,8 +23,9 @@ type ModeratorEarning struct {
 func (db *DB) CreateEarning(e *ModeratorEarning) (int64, error) {
 	res, err := db.conn.Exec(
 		`INSERT INTO moderator_earnings (payment_id, moderator_id, gross_amount, platega_fee, withdrawal_fee, net_amount, share_percent, share_amount)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.PaymentID, e.ModeratorID, e.GrossAmount, e.PlategaFee, e.WithdrawalFee, e.NetAmount, e.SharePercent, e.ShareAmount,
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?
+		 WHERE NOT EXISTS (SELECT 1 FROM moderator_earnings WHERE payment_id = ?)`,
+		e.PaymentID, e.ModeratorID, e.GrossAmount, e.PlategaFee, e.WithdrawalFee, e.NetAmount, e.SharePercent, e.ShareAmount, e.PaymentID,
 	)
 	if err != nil {
 		return 0, err
@@ -50,9 +51,11 @@ func (db *DB) GetModeratorEarningsByMonth(moderatorID int64, year int, month int
 
 	me := &MonthlyEarnings{}
 	err := db.conn.QueryRow(
-		`SELECT COUNT(*), COALESCE(SUM(gross_amount), 0), COALESCE(SUM(platega_fee), 0),
-		        COALESCE(SUM(withdrawal_fee), 0), COALESCE(SUM(net_amount), 0), COALESCE(SUM(share_amount), 0)
-		 FROM moderator_earnings WHERE moderator_id = ? AND created_at >= ? AND created_at < ?`,
+		`SELECT COUNT(*), COALESCE(SUM(me.gross_amount), 0), COALESCE(SUM(me.platega_fee), 0),
+		        COALESCE(SUM(me.withdrawal_fee), 0), COALESCE(SUM(me.net_amount), 0), COALESCE(SUM(me.share_amount), 0)
+		 FROM moderator_earnings me
+		 JOIN payments p ON p.id = me.payment_id
+		 WHERE me.moderator_id = ? AND p.confirmed_at >= ? AND p.confirmed_at < ?`,
 		moderatorID, start, end,
 	).Scan(&me.TotalPayments, &me.GrossAmount, &me.TotalPlategaFee, &me.TotalWithdrawal, &me.TotalNetAmount, &me.TotalShareAmount)
 	if err != nil {
@@ -62,7 +65,12 @@ func (db *DB) GetModeratorEarningsByMonth(moderatorID int64, year int, month int
 	// Получаем актуальный процент (из последнего начисления модератора)
 	var pct sql.NullInt64
 	db.conn.QueryRow(
-		`SELECT share_percent FROM moderator_earnings WHERE moderator_id = ? ORDER BY created_at DESC LIMIT 1`,
+		`SELECT me.share_percent
+		 FROM moderator_earnings me
+		 JOIN payments p ON p.id = me.payment_id
+		 WHERE me.moderator_id = ? AND p.confirmed_at IS NOT NULL
+		 ORDER BY p.confirmed_at DESC, me.id DESC
+		 LIMIT 1`,
 		moderatorID,
 	).Scan(&pct)
 	if pct.Valid {
@@ -85,16 +93,18 @@ func (db *DB) GetModeratorTotalEarnings(moderatorID int64) (int, error) {
 	return 0, err
 }
 
-// GetAllEarningsByMonth возвращает общую статистику за месяц (для админа)
+// GetAllEarningsByMonth возвращает общую статистику начислений за месяц по дате подтверждения платежа
 func (db *DB) GetAllEarningsByMonth(year int, month int) (*MonthlyEarnings, error) {
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 
 	me := &MonthlyEarnings{}
 	err := db.conn.QueryRow(
-		`SELECT COUNT(*), COALESCE(SUM(gross_amount), 0), COALESCE(SUM(platega_fee), 0),
-		        COALESCE(SUM(withdrawal_fee), 0), COALESCE(SUM(net_amount), 0), COALESCE(SUM(share_amount), 0)
-		 FROM moderator_earnings WHERE created_at >= ? AND created_at < ?`,
+		`SELECT COUNT(*), COALESCE(SUM(me.gross_amount), 0), COALESCE(SUM(me.platega_fee), 0),
+		        COALESCE(SUM(me.withdrawal_fee), 0), COALESCE(SUM(me.net_amount), 0), COALESCE(SUM(me.share_amount), 0)
+		 FROM moderator_earnings me
+		 JOIN payments p ON p.id = me.payment_id
+		 WHERE p.confirmed_at >= ? AND p.confirmed_at < ?`,
 		start, end,
 	).Scan(&me.TotalPayments, &me.GrossAmount, &me.TotalPlategaFee, &me.TotalWithdrawal, &me.TotalNetAmount, &me.TotalShareAmount)
 	return me, err

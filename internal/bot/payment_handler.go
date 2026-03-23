@@ -120,7 +120,7 @@ func (b *Bot) handleCheckPayment(c tele.Context) error {
 	switch status {
 	case "confirmed":
 		b.userStates.Delete(telegramID)
-		return c.Send("✅ Оплата подтверждена! Подписка активирована.", &tele.SendOptions{
+		return c.Send(b.paymentActivatedMessage(telegramID), &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
 			ReplyMarkup: b.userKeyboard(telegramID),
 		})

@@ -272,3 +272,179 @@ func TestCheckPaymentStatusTreatsManualConfirmedAsConfirmed(t *testing.T) {
 	assert.Equal(t, "confirmed", stored.Status)
 	require.NotNil(t, stored.ConfirmedAt)
 }
+
+func TestHandleCheckPaymentReturnsDetailedSuccessMessage(t *testing.T) {
+	b, db := setupTestBot(t)
+
+	userID := int64(815)
+	price := 500
+	_, err := db.CreateUser(userID, "payer", "Payer", "uuid-815", &price, nil)
+	require.NoError(t, err)
+
+	txID := "tx-815"
+	redirect := "https://pay.example/tx-815"
+	expiresAt := time.Now().UTC().Add(15 * time.Minute)
+	payment := &database.Payment{
+		TelegramID:           userID,
+		Amount:               price,
+		PaymentMethod:        "sbp",
+		Status:               "pending",
+		PlategaTransactionID: &txID,
+		RedirectURL:          &redirect,
+		ExpiresAt:            &expiresAt,
+	}
+	paymentID, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+
+	b.platega = platega.NewClientWithBaseURL("merchant", "secret", "https://platega.test")
+	b.platega.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			require.Equal(t, http.MethodGet, r.Method)
+			require.Equal(t, "/transaction/"+txID, r.URL.Path)
+
+			respBody, err := json.Marshal(map[string]any{
+				"id": txID,
+				"paymentDetails": map[string]any{
+					"amount":   price,
+					"currency": "RUB",
+				},
+				"status":        platega.StatusConfirmed,
+				"paymentMethod": "SBPQR",
+				"expiresIn":     "00:15:00",
+				"payload":       "815",
+			})
+			require.NoError(t, err)
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(string(respBody))),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	})
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-815":
+				payload := `{"response":{"uuid":"uuid-815","username":"payer","status":"EXPIRED","expireAt":"2026-03-01T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/815":
+				payload := `{"response":{"uuid":"uuid-815","username":"payer","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/users":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: userID},
+		message: &tele.Message{},
+	}
+
+	err = b.handleCheckPayment(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "Ваша подписка активна до")
+	assert.Contains(t, msg, "20.04.2026")
+	assert.Contains(t, msg, "Лимит трафика снят")
+	assert.NotContains(t, msg, "Подписка активирована.")
+	assert.Len(t, ctx.sentMsgs, 1)
+
+	stored, err := db.GetPaymentByID(paymentID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "confirmed", stored.Status)
+}
+
+func TestHandlePaymentCallbackKeepsModeratorSnapshotAfterModeratorRemoval(t *testing.T) {
+	b, db := setupTestBot(t)
+
+	adminID := int64(999999)
+	oldModeratorID := int64(813)
+	userID := int64(814)
+
+	_, err := db.CreateUser(oldModeratorID, "oldmod", "Old Mod", "uuid-oldmod", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AddModerator(oldModeratorID, adminID))
+
+	_, err = db.CreateUser(userID, "payer", "Payer", "uuid-payer", nil, &oldModeratorID)
+	require.NoError(t, err)
+
+	txID := "tx-814"
+	payment := &database.Payment{
+		TelegramID:           userID,
+		ModeratorID:          &oldModeratorID,
+		Amount:               500,
+		PaymentMethod:        "card",
+		Status:               "pending",
+		PlategaTransactionID: &txID,
+	}
+	paymentID, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+
+	require.NoError(t, db.RemoveModerator(oldModeratorID))
+
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-payer":
+				payload := `{"response":{"uuid":"uuid-payer","username":"payer","status":"EXPIRED","expireAt":"2026-03-01T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/users":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/814":
+				payload := `{"response":{"uuid":"uuid-payer","username":"payer","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	err = b.PaymentCallbackHandler().HandlePaymentCallback(platega.CallbackPayload{
+		ID:            txID,
+		Amount:        500,
+		Currency:      "RUB",
+		Status:        platega.StatusConfirmed,
+		PaymentMethod: platega.PaymentMethodCard,
+		Payload:       "814",
+	})
+	require.NoError(t, err)
+
+	var storedModeratorID int64
+	err = db.Conn().QueryRow(
+		`SELECT moderator_id FROM moderator_earnings WHERE payment_id = ?`,
+		paymentID,
+	).Scan(&storedModeratorID)
+	require.NoError(t, err)
+	assert.Equal(t, oldModeratorID, storedModeratorID)
+}

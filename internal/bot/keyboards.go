@@ -168,7 +168,7 @@ func ModeratorMenuKeyboard() *tele.ReplyMarkup {
 func ModeratorSubscribersKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
-		menu.Row(menu.Text(BtnModChangePrice), menu.Text(BtnModBack)),
+		menu.Row(menu.Text(BtnModChangePrice), menu.Text(BtnBack)),
 	)
 	return menu
 }

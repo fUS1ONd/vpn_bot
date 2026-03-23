@@ -275,6 +275,7 @@ func (b *Bot) processAdminUserInfo(c tele.Context, text string) error {
 	}
 
 	typeLabel, statusLabel := b.describeAdminUserSubscription(targetID, remUser)
+	statusEmoji := adminStatusEmoji(statusLabel)
 
 	var msg strings.Builder
 	msg.WriteString("<b>🔍 Информация о пользователе</b>\n\n")
@@ -292,7 +293,7 @@ func (b *Bot) processAdminUserInfo(c tele.Context, text string) error {
 	fmt.Fprintf(&msg, "📊 Трафик за месяц: %s\n", trafficLabel)
 	fmt.Fprintf(&msg, "📡 Устройства: %s\n", devicesLabel)
 	fmt.Fprintf(&msg, "🏷 Тип: %s\n", typeLabel)
-	fmt.Fprintf(&msg, "✅ Статус: %s", statusLabel)
+	fmt.Fprintf(&msg, "%s Статус: %s", statusEmoji, statusLabel)
 
 	return c.Send(msg.String(), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
@@ -1363,6 +1364,21 @@ func humanizeAdminStatus(status string) string {
 		return "Лимит трафика"
 	default:
 		return status
+	}
+}
+
+func adminStatusEmoji(status string) string {
+	switch status {
+	case "Активен":
+		return "✅"
+	case "Grace period", "Отключён":
+		return "⛔"
+	case "Истёк":
+		return "⏰"
+	case "Лимит трафика":
+		return "⚠️"
+	default:
+		return "❌"
 	}
 }
 

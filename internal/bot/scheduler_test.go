@@ -81,6 +81,46 @@ func TestHandleAutoKick_404IsNotFatalError(t *testing.T) {
 	assert.NotNil(t, invite.KickedAt, "kicked_at должен быть проставлен после автокика")
 }
 
+func TestHandleAutoKick_DoesNotCleanupOnRemnawaveDeleteError(t *testing.T) {
+	b, db := setupSchedulerTestBot(t)
+
+	_, err := db.CreateUser(701, "victim", "Victim", "uuid-701", nil, nil)
+	require.NoError(t, err)
+	modID := int64(51)
+	_, err = db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	require.NoError(t, err)
+	expireDays := 30
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, 701))
+
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodDelete {
+				return &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Body:       io.NopCloser(strings.NewReader(`{"error":"boom"}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, fmt.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}),
+	})
+	b.remnawave = client
+
+	b.handleAutoKick(701, "uuid-701")
+
+	dbUser, err := db.GetUserByTelegramID(701)
+	require.NoError(t, err)
+	assert.NotNil(t, dbUser, "локальный cleanup нельзя делать, если DeleteUser в Remnawave завершился ошибкой")
+
+	invite, err := db.GetInviteByCode(inv.Code)
+	require.NoError(t, err)
+	require.NotNil(t, invite)
+	assert.Nil(t, invite.KickedAt, "kicked_at нельзя ставить при неуспешном удалении в панели")
+}
+
 func TestHandleAutoKick_SkipsAlreadyDeletedInRemnawave(t *testing.T) {
 	err := fmt.Errorf("API error 404: not found")
 	assert.True(t, isAutoKickNotFoundError(err))
@@ -682,6 +722,70 @@ func TestSchedulerGraceKickSkippedIfPaymentConfirmedNotActivated(t *testing.T) {
 	b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-322"}, expireAt, time.Now().UTC())
 
 	assert.False(t, deleteCalled, "confirmed_not_activated не должен приводить к grace kick как будто оплаты не было")
+}
+
+func TestSchedulerGraceKickSkippedWhenFreshStatusCheckFails(t *testing.T) {
+	b, db := setupSchedulerTestBot(t)
+
+	modID := int64(133)
+	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	require.NoError(t, err)
+	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
+
+	userID := int64(323)
+	price := 400
+	_, err = db.CreateUser(userID, "paid_grace_error", "Paid", "uuid-323", &price, &modID)
+	require.NoError(t, err)
+
+	expireDays := 30
+	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv.Code, userID))
+
+	payment := &database.Payment{
+		TelegramID:    userID,
+		Amount:        400,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	id, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(id))
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = datetime('now', '-60 days') WHERE id = ?`, id)
+	require.NoError(t, err)
+
+	var deleteCalled bool
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/api/users/uuid-323") {
+				return &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Body:       io.NopCloser(strings.NewReader(`{"error":"panel unavailable"}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			if r.Method == http.MethodDelete {
+				deleteCalled = true
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, fmt.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}),
+	})
+	b.remnawave = client
+
+	expireAt := time.Now().UTC().Add(-96 * time.Hour)
+	b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-323"}, expireAt, time.Now().UTC())
+
+	assert.False(t, deleteCalled, "при ошибке свежей проверки статуса scheduler не должен идти в auto-kick")
+
+	dbUser, err := db.GetUserByTelegramID(userID)
+	require.NoError(t, err)
+	assert.NotNil(t, dbUser, "пользователь должен остаться в БД при ошибке проверки панели")
 }
 
 // TestSchedulerMaintenanceMode проверяет, что в maintenance mode кики и disable не выполняются

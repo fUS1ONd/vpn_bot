@@ -460,6 +460,10 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleModeratorEarnings(c)
 		case BtnModChangePrice:
 			return b.handleModChangePriceRequest(c)
+		case BtnBack:
+			if b.userStates.Get(c.Sender().ID) == StateModSubscribers {
+				return b.handleModeratorMenu(c)
+			}
 		case BtnModBack:
 			return b.handleModeratorBack(c)
 		}

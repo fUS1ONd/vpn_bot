@@ -908,6 +908,64 @@ func TestAdminChangePriceFlow_UpdatesPaidUser(t *testing.T) {
 	assert.Empty(t, b.userStates.Get(adminID))
 }
 
+func TestProcessAdminUserInfo_ShowsNonSuccessStatusForGraceUser(t *testing.T) {
+	dbFile := "test_admin_user_info_grace.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999999)
+	targetID := int64(22334)
+	price := 500
+
+	_, err = db.CreateUser(targetID, "grace", "Grace", "uuid-grace-user", &price, nil)
+	require.NoError(t, err)
+
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-grace-user":
+				payload := `{"response":{"uuid":"uuid-grace-user","username":"grace","status":"DISABLED","expireAt":"2026-03-01T00:00:00Z","hwidDeviceLimit":2,"userTraffic":{"usedTrafficBytes":1073741824,"lifetimeUsedTrafficBytes":1073741824}}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodGet && r.URL.Path == "/api/hwid/devices/uuid-grace-user":
+				payload := `{"response":{"total":1,"devices":[{"hwid":"a"}]}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	b := &Bot{
+		db:         db,
+		remnawave:  client,
+		config:     &config.Config{AdminID: adminID},
+		userStates: newStateMap(),
+	}
+
+	ctx := &MockContext{sender: &tele.User{ID: adminID}}
+	err = b.processAdminUserInfo(ctx, strconv.FormatInt(targetID, 10))
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "Статус: Grace period")
+	assert.NotContains(t, msg, "✅ Статус: Grace period")
+	assert.Contains(t, msg, "⛔")
+}
+
 func intPtrAdmin(v int) *int {
 	return &v
 }

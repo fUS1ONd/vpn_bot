@@ -45,6 +45,7 @@ func TestFormatUserStatusGraceShowsPaymentWindow(t *testing.T) {
 	assert.Contains(t, msg, "VPN деактивирован")
 	assert.Contains(t, msg, "Цена подписки")
 	assert.Contains(t, msg, "Осталось для оплаты")
+	assert.Contains(t, msg, "аккаунт будет удалён")
 }
 
 func TestMsgAccountCreatedHasNoTrafficLimitDetails(t *testing.T) {
