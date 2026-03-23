@@ -1,6 +1,7 @@
 # Чеклист развёртывания платёжной системы Platega
 
 **Дата:** 2026-03-22
+**Актуализировано под состояние ветки:** 2026-03-23
 **Связан с:** [План реализации](./2026-03-22-payment-implementation-plan.md)
 
 ---
@@ -63,6 +64,10 @@ PLATEGA_CALLBACK_URL=https://vpn.fus1ond.ru/platega/callback
 CALLBACK_PORT=8080
 MIN_SUBSCRIPTION_PRICE=400
 TRIAL_TRAFFIC_LIMIT_GB=1
+PLATEGA_FEE_SBP=11
+PLATEGA_FEE_CARD=12
+PLATEGA_FEE_CRYPTO=5
+PLATEGA_FEE_WITHDRAWAL=2
 ```
 
 ---
@@ -256,7 +261,15 @@ dig +short vpn.fus1ond.ru
 # 3. Бэкап nginx-конфига
 cp /root/MyCVWEBsite/nginx.prod.conf /root/MyCVWEBsite/nginx.prod.conf.backup
 
-# 4. Обновить .env файл vpn-bot (добавить PLATEGA_* переменные)
+# 4. Обновить .env файл vpn-bot
+#    Добавить/проверить:
+#    - PLATEGA_MERCHANT_ID
+#    - PLATEGA_SECRET
+#    - PLATEGA_CALLBACK_URL
+#    - CALLBACK_PORT
+#    - MIN_SUBSCRIPTION_PRICE
+#    - TRIAL_TRAFFIC_LIMIT_GB
+#    - PLATEGA_FEE_SBP / CARD / CRYPTO / WITHDRAWAL
 nano /root/vpn_bot/.env
 
 # 5. Обновить docker-compose.yml vpn-bot (добавить сеть и порт, см. раздел 2.2)
@@ -303,7 +316,10 @@ curl -s -o /dev/null -w "%{http_code}" -X POST https://vpn.fus1ond.ru/platega/ca
 
 # 13. Проверить логи на ошибки
 docker compose logs vpn-bot | grep -i "callback\|platega"
-# Ожидаем: "Callback server starting", "Platega client initialized"
+# Ожидаем как минимум:
+# - "Platega client initialized"
+# - "Callback server starting"
+# - "Platega callback server started"
 ```
 
 ---
@@ -314,7 +330,8 @@ docker compose logs vpn-bot | grep -i "callback\|platega"
 
 При первом запуске нового кода:
 - Таблицы `payments` и `moderator_earnings` создаются автоматически
-- Поля `subscription_price` и `moderator_id` добавляются в `users` (NULL для всех)
+- Поля `subscription_price` и `moderator_id` добавляются в `users` (NULL для существующих)
+- Поле `legacy_paid_migrated` добавляется в `users` со значением `0` для существующих записей
 - Поле `subscription_price` добавляется в `invites` (NULL для существующих)
 
 ### Ручная настройка (админ через бот)
@@ -322,12 +339,17 @@ docker compose logs vpn-bot | grep -i "callback\|platega"
 Существующие пользователи с `subscription_price = NULL`:
 - Кнопка "Оплатить" **не показывается** (бот продолжает работать как раньше)
 - Подписки работают по старой модели (модератор продлевает вручную)
+- Legacy-пользователи без инвайта и без `subscription_price` пропускаются payment-scheduler и продолжают жить по старой модели
 
 **Для перевода на новую модель:**
 1. Админ заходит в бот → "Управление" → "Сменить тариф" → "Изменить цену"
 2. Вводит telegram_id пользователя
 3. Устанавливает цену подписки
-4. После установки цены кнопка "Оплатить" появляется у пользователя
+4. Если это обычный legacy-case, цена просто сохраняется и у пользователя появляется кнопка "Оплатить"
+5. Если это legacy-пользователь модератора с уже активным ручным периодом, бот задаст дополнительный вопрос:
+   - `✅ Да, считать оплаченной` → сохраняется цена, выставляется `legacy_paid_migrated = true`, у пользователя сразу будет paid-ветка с кнопкой "Продлить подписку", напоминаниями за 3/1 день и grace period
+   - `❌ Нет, оставить trial` → сохраняется цена, пользователь остаётся в trial до первой оплаты через Platega
+6. До ответа на migration-вопрос цена для такого legacy-case не применяется
 
 **Важно:** переводить пользователей можно постепенно, в своём темпе. Старая модель продолжает работать параллельно.
 
@@ -373,12 +395,23 @@ curl -s -o /dev/null -w "%{http_code}" -X POST \
 3. Нажать "Оплатить подписку" → выбрать СБП → получить ссылку
 4. Оплатить → подписка активирована на месяц
 
-### Тест 5: Scheduler
+### Тест 5: Legacy migration для старого платящего пользователя модератора
+
+1. Взять существующего legacy-пользователя модератора без `subscription_price`, но с ещё активным ручным периодом
+2. Админ → "Управление" → "Сменить тариф" → ввести `telegram_id` → указать новую цену
+3. Убедиться, что бот показывает migration-вопрос
+4. Проверить оба сценария на тестовых данных:
+   - `✅ Да, считать оплаченной` → у пользователя появляется `Продлить подписку`, а не `Оплатить подписку`
+   - `❌ Нет, оставить trial` → у пользователя остаётся `Оплатить подписку`
+
+### Тест 6: Scheduler
 
 ```bash
 # Проверить в логах что scheduler запустился
 docker compose logs vpn-bot | grep -i scheduler
-# Ожидаем: "Scheduler: running initial pass on startup"
+# Ожидаем:
+# - "Scheduler: running initial pass on startup"
+# - "Subscription scheduler started"
 ```
 
 ---
@@ -438,5 +471,6 @@ docker compose -f docker-compose.prod.yml exec nginx nginx -s reload
 1. **БД не откатывается автоматически.** Новые таблицы и колонки останутся после отката кода — это безопасно, SQLite игнорирует неиспользуемые колонки
 2. **PENDING платежи протухают сами** — Platega отменяет их через ~15 минут
 3. **Callback может прийти после отката** — nginx вернёт 502 (бот не слушает порт), Platega сделает retry до 3 раз. Если платёж прошёл, но callback не дошёл — пользователь может нажать "Проверить оплату" после восстановления
-4. **Логи** — все платёжные события логируются (callback received, confirmed, errors). Для диагностики: `docker compose logs vpn-bot | grep -i "callback\|payment\|platega"`
-5. **Порт 8080** — должен быть открыт только для localhost (127.0.0.1). Внешний доступ только через nginx (HTTPS)
+4. **`confirmed_not_activated` — это защитный статус.** Деньги уже подтверждены, но активация в панели могла не завершиться; scheduler повторит активацию и не должен кикать/disable-ить такого пользователя как неоплатившего
+5. **Логи** — все платёжные события логируются (callback, payment, scheduler, retry, errors). Для диагностики: `docker compose logs vpn-bot | grep -i "callback\|payment\|platega\|scheduler"`
+6. **Порт 8080** — должен быть открыт только для localhost (127.0.0.1). Внешний доступ только через nginx (HTTPS)
