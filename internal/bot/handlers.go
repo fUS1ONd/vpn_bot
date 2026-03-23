@@ -25,23 +25,25 @@ const (
 
 // Bot представляет Telegram бота
 type Bot struct {
-	bot                *tele.Bot
-	db                 *database.DB
-	remnawave          *remnawave.Client
-	config             *config.Config
-	userStates         *stateMap
-	metricsClient      *monitoring.MetricsClient // клиент метрик VM
-	dashboardMgr       *dashboardManager         // менеджер сессий дашборда
-	sdConfigsPath      string                    // путь к sd_configs (для чтения targets)
-	render             *render.Client            // клиент render-сервиса (nil если не настроен)
-	platega            *platega.Client           // Platega API клиент (nil если не настроен)
-	maintenanceMode    bool                      // Режим обслуживания (сбрасывается при перезапуске)
-	modChangePriceMu   sync.RWMutex
-	modChangePriceData map[int64]modChangePriceSession // pending-данные изменения цены для модератора
-	adminSwitchMu      sync.RWMutex
-	adminSwitchData    map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
-	adminPriceMu       sync.RWMutex
-	adminPriceData     map[int64]adminChangePriceSession // pending-данные изменения цены для админа
+	bot                  *tele.Bot
+	db                   *database.DB
+	remnawave            *remnawave.Client
+	config               *config.Config
+	userStates           *stateMap
+	metricsClient        *monitoring.MetricsClient // клиент метрик VM
+	dashboardMgr         *dashboardManager         // менеджер сессий дашборда
+	sdConfigsPath        string                    // путь к sd_configs (для чтения targets)
+	render               *render.Client            // клиент render-сервиса (nil если не настроен)
+	platega              *platega.Client           // Platega API клиент (nil если не настроен)
+	maintenanceMode      bool                      // Режим обслуживания (сбрасывается при перезапуске)
+	paymentRetryDelays   []time.Duration           // Тестовые override-задержки для короткого background retry активации
+	paymentRetryInFlight sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
+	modChangePriceMu     sync.RWMutex
+	modChangePriceData   map[int64]modChangePriceSession // pending-данные изменения цены для модератора
+	adminSwitchMu        sync.RWMutex
+	adminSwitchData      map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
+	adminPriceMu         sync.RWMutex
+	adminPriceData       map[int64]adminChangePriceSession // pending-данные изменения цены для админа
 }
 
 // New создаёт нового Telegram бота

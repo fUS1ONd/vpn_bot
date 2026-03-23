@@ -17,6 +17,12 @@ import (
 // Не критично (мьютекс маленький), но при необходимости можно добавить периодическую чистку.
 var paymentMu sync.Map // map[int64]*sync.Mutex
 
+var defaultPaymentRetryDelays = []time.Duration{
+	30 * time.Second,
+	1 * time.Minute,
+	5 * time.Minute,
+}
+
 func getPaymentMutex(telegramID int64) *sync.Mutex {
 	mu, _ := paymentMu.LoadOrStore(telegramID, &sync.Mutex{})
 	return mu.(*sync.Mutex)
@@ -85,6 +91,7 @@ func (h *paymentCallbackHandler) handleConfirmed(payment *database.Payment) erro
 		if updateErr := h.bot.db.UpdatePaymentStatus(payment.ID, "confirmed_not_activated"); updateErr != nil {
 			return fmt.Errorf("update status to confirmed_not_activated: %w", updateErr)
 		}
+		h.bot.schedulePaymentActivationRetry(payment.ID)
 
 		// Уведомляем админа
 		if !alreadyMarkedForRetry {
@@ -119,6 +126,102 @@ func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Paym
 
 	// Очищаем уведомления (пользователь мог быть в grace period)
 	h.bot.db.ClearNotifications(payment.TelegramID)
+}
+
+func (b *Bot) paymentActivationRetryDelays() []time.Duration {
+	if len(b.paymentRetryDelays) > 0 {
+		delays := make([]time.Duration, len(b.paymentRetryDelays))
+		copy(delays, b.paymentRetryDelays)
+		return delays
+	}
+
+	delays := make([]time.Duration, len(defaultPaymentRetryDelays))
+	copy(delays, defaultPaymentRetryDelays)
+	return delays
+}
+
+func (b *Bot) schedulePaymentActivationRetry(paymentID int64) {
+	if _, loaded := b.paymentRetryInFlight.LoadOrStore(paymentID, struct{}{}); loaded {
+		return
+	}
+
+	delays := b.paymentActivationRetryDelays()
+	go func() {
+		defer b.paymentRetryInFlight.Delete(paymentID)
+
+		for attempt, delay := range delays {
+			time.Sleep(delay)
+
+			if b.retryConfirmedPaymentActivation(paymentID, "background_retry") {
+				return
+			}
+
+			slog.Warn("Background retry активации не удался",
+				"payment_id", paymentID,
+				"attempt", attempt+1,
+				"next_retry_in", nextRetryDelay(delays, attempt),
+			)
+		}
+	}()
+}
+
+func nextRetryDelay(delays []time.Duration, attempt int) string {
+	if attempt+1 >= len(delays) {
+		return "scheduler"
+	}
+	return delays[attempt+1].String()
+}
+
+func (b *Bot) retryConfirmedPaymentActivation(paymentID int64, source string) bool {
+	payment, err := b.db.GetPaymentByID(paymentID)
+	if err != nil {
+		slog.Error("Не удалось загрузить платёж для retry активации",
+			"error", err, "payment_id", paymentID, "source", source)
+		return false
+	}
+	if payment == nil || payment.Status != "confirmed_not_activated" {
+		return true
+	}
+
+	mu := getPaymentMutex(payment.TelegramID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	payment, err = b.db.GetPaymentByID(paymentID)
+	if err != nil {
+		slog.Error("Не удалось перечитать платёж под mutex для retry активации",
+			"error", err, "payment_id", paymentID, "source", source)
+		return false
+	}
+	if payment == nil || payment.Status != "confirmed_not_activated" {
+		return true
+	}
+
+	handler := &paymentCallbackHandler{bot: b}
+	if err := handler.activateSubscription(payment); err != nil {
+		slog.Warn("Не удалось активировать подписку при retry",
+			"error", err,
+			"payment_id", paymentID,
+			"telegram_id", payment.TelegramID,
+			"source", source,
+		)
+		return false
+	}
+
+	if err := b.db.ConfirmPayment(payment.ID); err != nil {
+		slog.Error("Не удалось обновить статус после retry активации",
+			"error", err, "payment_id", paymentID, "source", source)
+		return false
+	}
+
+	handler.finalizeActivatedPayment(payment)
+	slog.Info("Retry активации успешен",
+		"payment_id", paymentID,
+		"telegram_id", payment.TelegramID,
+		"source", source,
+	)
+
+	return true
 }
 
 // activateSubscription продлевает подписку в Remnawave

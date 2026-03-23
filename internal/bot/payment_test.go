@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,4 +155,97 @@ func TestHandleConfirmedReturnsQuicklyWhenActivationFails(t *testing.T) {
 	require.NotNil(t, stored)
 	assert.Equal(t, "confirmed_not_activated", stored.Status)
 	require.NotNil(t, stored.ConfirmedAt)
+}
+
+func TestHandleConfirmedRetriesActivationInBackground(t *testing.T) {
+	dbFile := "test_payment_background_retry.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.Close()
+		os.Remove(dbFile)
+	})
+
+	_, err = db.CreateUser(502, "payer", "Payer", "uuid-502", nil, nil)
+	require.NoError(t, err)
+
+	txID := "tx-background-retry"
+	payment := &database.Payment{
+		TelegramID:           502,
+		Amount:               400,
+		PaymentMethod:        "sbp",
+		Status:               "pending",
+		PlategaTransactionID: &txID,
+	}
+	id, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+	payment.ID = id
+
+	var getUserAttempts atomic.Int32
+	enabledCh := make(chan struct{}, 1)
+
+	cfg := &config.Config{AdminID: 999}
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-502":
+				attempt := getUserAttempts.Add(1)
+				if attempt == 1 {
+					return &http.Response{
+						StatusCode: http.StatusInternalServerError,
+						Body:       io.NopCloser(strings.NewReader(`{"error":"boom"}`)),
+						Header:     make(http.Header),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{"uuid":"uuid-502","status":"EXPIRED","expireAt":"2026-03-01T00:00:00Z"}}`)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/users":
+				select {
+				case enabledCh <- struct{}{}:
+				default:
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/502":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{"uuid":"uuid-502","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	b := &Bot{
+		db:                 db,
+		config:             cfg,
+		userStates:         newStateMap(),
+		remnawave:          client,
+		paymentRetryDelays: []time.Duration{10 * time.Millisecond},
+	}
+	handler := &paymentCallbackHandler{bot: b}
+
+	err = handler.handleConfirmed(payment)
+	require.NoError(t, err)
+
+	select {
+	case <-enabledCh:
+	case <-time.After(time.Second):
+		t.Fatal("ожидали background retry активации")
+	}
+
+	require.Eventually(t, func() bool {
+		stored, getErr := db.GetPaymentByID(id)
+		require.NoError(t, getErr)
+		return stored != nil && stored.Status == "confirmed"
+	}, time.Second, 20*time.Millisecond)
 }

@@ -249,39 +249,11 @@ func (b *Bot) retryConfirmedNotActivated() {
 	}
 
 	slog.Info("Scheduler: retry confirmed_not_activated", "count", len(payments))
-	handler := &paymentCallbackHandler{bot: b}
 
 	for _, p := range payments {
-		payment := p // копируем для замыкания
-		if err := handler.activateSubscription(&payment); err != nil {
-			slog.Warn("Scheduler: retry активации не удался",
-				"error", err, "payment_id", payment.ID, "telegram_id", payment.TelegramID)
+		if !b.retryConfirmedPaymentActivation(p.ID, "scheduler") {
 			continue
 		}
-
-		// Успешно активирован — обновляем статус
-		if err := b.db.ConfirmPayment(payment.ID); err != nil {
-			slog.Error("Scheduler: ошибка обновления статуса после retry",
-				"error", err, "payment_id", payment.ID)
-			continue
-		}
-
-		// Создаём earnings
-		handler.createEarningRecord(&payment)
-
-		// Уведомляем пользователя
-		remUser, _ := b.remnawave.GetUserByTelegramID(payment.TelegramID)
-		var msg string
-		if remUser != nil {
-			expireDate := remUser.ExpireAt.Format("02.01.2006")
-			msg = fmt.Sprintf("✅ Оплата прошла! Ваша подписка активна до <b>%s</b>.\n\nЛимит трафика снят — пользуйтесь без ограничений.", expireDate)
-		} else {
-			msg = "✅ Оплата прошла! Подписка активирована."
-		}
-		_ = b.sendSchedulerMessage(payment.TelegramID, msg)
-		b.db.ClearNotifications(payment.TelegramID)
-
-		slog.Info("Scheduler: retry активации успешен", "payment_id", payment.ID, "telegram_id", payment.TelegramID)
 	}
 }
 
