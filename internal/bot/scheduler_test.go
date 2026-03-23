@@ -42,10 +42,10 @@ func TestHandleAutoKick_404IsNotFatalError(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	// Создаём пользователя в БД бота
-	_, err := db.CreateUser(700, "victim", "Victim", "uuid-700")
+	_, err := db.CreateUser(700, "victim", "Victim", "uuid-700", nil, nil)
 	require.NoError(t, err)
 	modID := int64(50)
-	_, err = db.CreateUser(modID, "mod", "Mod", "uuid-mod")
+	_, err = db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
 	require.NoError(t, err)
 	expireDays := 30
 	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)

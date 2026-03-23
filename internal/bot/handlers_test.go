@@ -88,7 +88,7 @@ func TestHandleStart(t *testing.T) {
 
 	t.Run("ExistingUser", func(t *testing.T) {
 		userID := int64(222)
-		_, err := db.CreateUser(userID, "olduser", "OldFirstName", "uuid-123")
+		_, err := db.CreateUser(userID, "olduser", "OldFirstName", "uuid-123", nil, nil)
 		assert.NoError(t, err)
 
 		user := &tele.User{ID: userID, Username: "olduser"}
@@ -114,7 +114,7 @@ func TestHandleStart(t *testing.T) {
 	t.Run("ExistingUserWithPayload_IgnoresCode", func(t *testing.T) {
 		// Существующий пользователь с payload — код игнорируется, не расходуется
 		userID := int64(333)
-		_, err := db.CreateUser(userID, "existing", "Existing", "uuid-333")
+		_, err := db.CreateUser(userID, "existing", "Existing", "uuid-333", nil, nil)
 		require.NoError(t, err)
 
 		// Создаём инвайт

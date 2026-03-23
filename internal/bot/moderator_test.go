@@ -40,7 +40,7 @@ func setupModeratorTestBot(t *testing.T) (*Bot, *database.DB, int64, int64) {
 	}
 
 	// Создаём пользователя-модератора
-	_, err = db.CreateUser(modID, "moderator", "Модератор", "uuid-mod")
+	_, err = db.CreateUser(modID, "moderator", "Модератор", "uuid-mod", nil, nil)
 	require.NoError(t, err)
 	err = db.AddModerator(modID, adminID)
 	require.NoError(t, err)
@@ -222,14 +222,14 @@ func TestHandleModSubscribers(t *testing.T) {
 	b, db, _, modID := setupModeratorTestBot(t)
 
 	// Активный подписчик
-	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300")
+	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300", nil, nil)
 	require.NoError(t, err)
 	inv1, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv1.Code, 300))
 
 	// Удалённый подписчик
-	_, err = db.CreateUser(301, "gone", "Gone", "uuid-301")
+	_, err = db.CreateUser(301, "gone", "Gone", "uuid-301", nil, nil)
 	require.NoError(t, err)
 	inv2, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 	require.NoError(t, err)
@@ -284,7 +284,7 @@ func TestHandleModSubscribers(t *testing.T) {
 
 func TestHandleModExtend_StartsDialog(t *testing.T) {
 	b, db, _, modID := setupModeratorTestBot(t)
-	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300")
+	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300", nil, nil)
 	require.NoError(t, err)
 	inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 	require.NoError(t, err)
@@ -339,7 +339,7 @@ func TestHandleTextMessage_ModeratorButtons(t *testing.T) {
 	})
 
 	t.Run("Кнопка_Продлить_ставит_состояние", func(t *testing.T) {
-		_, err := db.CreateUser(8080, "sub8080", "Sub", "uuid-8080")
+		_, err := db.CreateUser(8080, "sub8080", "Sub", "uuid-8080", nil, nil)
 		require.NoError(t, err)
 		inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 		require.NoError(t, err)
@@ -361,7 +361,7 @@ func TestAdminAddModerator(t *testing.T) {
 	b, db, adminID, _ := setupModeratorTestBot(t)
 
 	// Создаём нового пользователя для назначения
-	_, err := db.CreateUser(200, "newmod", "Новый", "uuid-200")
+	_, err := db.CreateUser(200, "newmod", "Новый", "uuid-200", nil, nil)
 	require.NoError(t, err)
 
 	admin := &tele.User{ID: adminID, Username: "admin"}
@@ -410,7 +410,7 @@ func TestAdminAddModerator_NotRegistered(t *testing.T) {
 func TestAdminAddModerator_RejectsMonthlyInviteUser(t *testing.T) {
 	b, db, adminID, modID := setupModeratorTestBot(t)
 
-	_, err := db.CreateUser(201, "monthly_user", "Месячный", "uuid-201")
+	_, err := db.CreateUser(201, "monthly_user", "Месячный", "uuid-201", nil, nil)
 	require.NoError(t, err)
 	inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 	require.NoError(t, err)
@@ -532,7 +532,7 @@ func TestProcessModExtendID_ClearsStateOnTerminalErrors(t *testing.T) {
 	})
 
 	t.Run("подписка слишком далеко в будущем очищает состояние", func(t *testing.T) {
-		_, err := db.CreateUser(9002, "future", "Future", "uuid-9002")
+		_, err := db.CreateUser(9002, "future", "Future", "uuid-9002", nil, nil)
 		require.NoError(t, err)
 		inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 		require.NoError(t, err)
@@ -580,13 +580,13 @@ func TestHandleModSubscribers_UsesBatchAPI(t *testing.T) {
 	b, db, _, modID := setupModeratorTestBot(t)
 
 	// Создаём двух подписчиков
-	_, err := db.CreateUser(310, "alice", "Alice", "uuid-310")
+	_, err := db.CreateUser(310, "alice", "Alice", "uuid-310", nil, nil)
 	require.NoError(t, err)
 	inv1, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv1.Code, 310))
 
-	_, err = db.CreateUser(311, "bob", "Bob", "uuid-311")
+	_, err = db.CreateUser(311, "bob", "Bob", "uuid-311", nil, nil)
 	require.NoError(t, err)
 	inv2, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 	require.NoError(t, err)
@@ -654,7 +654,7 @@ func TestProcessModExtendConfirm_ClearsStateOnExtendError(t *testing.T) {
 	b, db, _, modID := setupModeratorTestBot(t)
 
 	// Создаём подписчика
-	_, err := db.CreateUser(400, "sub400", "Sub", "uuid-400")
+	_, err := db.CreateUser(400, "sub400", "Sub", "uuid-400", nil, nil)
 	require.NoError(t, err)
 	inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 	require.NoError(t, err)

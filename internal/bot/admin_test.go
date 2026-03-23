@@ -108,7 +108,7 @@ func TestProcessBanUser_PersistsBanAndKeepsInviteHistory(t *testing.T) {
 	adminID := int64(999999)
 	targetID := int64(12345)
 
-	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target")
+	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target", nil, nil)
 	require.NoError(t, err)
 	inv, err := db.CreateInviteWithExpiry(adminID, nil)
 	require.NoError(t, err)
@@ -175,11 +175,11 @@ func TestHandleAdminModStats(t *testing.T) {
 	modID := int64(100)
 	subID := int64(200)
 
-	_, err = db.CreateUser(modID, "moderator", "Модератор", "uuid-mod")
+	_, err = db.CreateUser(modID, "moderator", "Модератор", "uuid-mod", nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
 
-	_, err = db.CreateUser(subID, "sub", "Subscriber", "uuid-sub")
+	_, err = db.CreateUser(subID, "sub", "Subscriber", "uuid-sub", nil, nil)
 	require.NoError(t, err)
 	inv, err := db.CreateInviteWithExpiry(modID, intPtrAdmin(30))
 	require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestProcessSwitchSubscriptionID_ValidationErrors(t *testing.T) {
 	adminID := int64(999999)
 	targetID := int64(12345)
 
-	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target")
+	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target", nil, nil)
 	require.NoError(t, err)
 
 	b := &Bot{
@@ -297,7 +297,7 @@ func TestProcessSwitchSubscriptionID_ValidationErrors(t *testing.T) {
 
 	t.Run("забанен", func(t *testing.T) {
 		otherID := int64(22334)
-		_, err := db.CreateUser(otherID, "banned", "Banned", "uuid-banned")
+		_, err := db.CreateUser(otherID, "banned", "Banned", "uuid-banned", nil, nil)
 		require.NoError(t, err)
 		days := 30
 		invite, err := db.CreateInviteWithExpiry(777, &days)
@@ -329,9 +329,9 @@ func TestProcessSwitchSubscription_ConfirmFlow(t *testing.T) {
 	modID := int64(100)
 	targetID := int64(12345)
 
-	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod")
+	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod", nil, nil)
 	require.NoError(t, err)
-	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target")
+	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target", nil, nil)
 	require.NoError(t, err)
 
 	days := 30

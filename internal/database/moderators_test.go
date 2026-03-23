@@ -37,7 +37,7 @@ func TestAddModerator(t *testing.T) {
 	db := setupTestDB(t)
 
 	// Создаём пользователя (модератор должен быть зарегистрированным пользователем)
-	_, err := db.CreateUser(100, "testmod", "Тест", "uuid-mod-1")
+	_, err := db.CreateUser(100, "testmod", "Тест", "uuid-mod-1", nil, nil)
 	require.NoError(t, err)
 
 	t.Run("Успешное назначение", func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestAddModerator(t *testing.T) {
 func TestIsModerator(t *testing.T) {
 	db := setupTestDB(t)
 
-	_, err := db.CreateUser(200, "user200", "Юзер", "uuid-200")
+	_, err := db.CreateUser(200, "user200", "Юзер", "uuid-200", nil, nil)
 	require.NoError(t, err)
 
 	t.Run("Не модератор", func(t *testing.T) {
@@ -87,7 +87,7 @@ func TestIsModerator(t *testing.T) {
 func TestGetModerator(t *testing.T) {
 	db := setupTestDB(t)
 
-	_, err := db.CreateUser(300, "mod300", "Мод", "uuid-300")
+	_, err := db.CreateUser(300, "mod300", "Мод", "uuid-300", nil, nil)
 	require.NoError(t, err)
 
 	t.Run("Не найден", func(t *testing.T) {
@@ -118,9 +118,9 @@ func TestGetAllModerators(t *testing.T) {
 	})
 
 	t.Run("Несколько модераторов", func(t *testing.T) {
-		_, err := db.CreateUser(400, "mod1", "Первый", "uuid-400")
+		_, err := db.CreateUser(400, "mod1", "Первый", "uuid-400", nil, nil)
 		require.NoError(t, err)
-		_, err = db.CreateUser(401, "mod2", "Второй", "uuid-401")
+		_, err = db.CreateUser(401, "mod2", "Второй", "uuid-401", nil, nil)
 		require.NoError(t, err)
 
 		err = db.AddModerator(400, 999)
@@ -137,7 +137,7 @@ func TestGetAllModerators(t *testing.T) {
 func TestRemoveModerator(t *testing.T) {
 	db := setupTestDB(t)
 
-	_, err := db.CreateUser(500, "mod500", "Мод", "uuid-500")
+	_, err := db.CreateUser(500, "mod500", "Мод", "uuid-500", nil, nil)
 	require.NoError(t, err)
 	err = db.AddModerator(500, 999)
 	require.NoError(t, err)
