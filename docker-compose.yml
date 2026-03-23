@@ -18,6 +18,8 @@ services:
       - VICTORIA_METRICS_URL=${VICTORIA_METRICS_URL:-http://victoriametrics:8428}
     env_file:
       - .env
+    ports:
+      - "127.0.0.1:8080:8080"
     networks:
       - vpn-network
     depends_on:

@@ -44,6 +44,7 @@ type Config struct {
 	PlategaFeeCard       int    // Комиссия Platega карты (%), по умолчанию 12
 	PlategaFeeCrypto     int    // Комиссия Platega крипта (%), по умолчанию 5
 	PlategaFeeWithdrawal int    // Комиссия вывода (%), по умолчанию 2
+	CallbackPort         int    // Порт для callback-сервера (по умолчанию 8080)
 }
 
 // Load читает конфигурацию из переменных окружения
@@ -71,6 +72,7 @@ func Load() (*Config, error) {
 		PlategaFeeCard:       getEnvOrDefaultInt("PLATEGA_FEE_CARD", 12),
 		PlategaFeeCrypto:     getEnvOrDefaultInt("PLATEGA_FEE_CRYPTO", 5),
 		PlategaFeeWithdrawal: getEnvOrDefaultInt("PLATEGA_FEE_WITHDRAWAL", 2),
+		CallbackPort:         getEnvOrDefaultInt("CALLBACK_PORT", 8080),
 	}
 
 	// Парсинг AdminID
