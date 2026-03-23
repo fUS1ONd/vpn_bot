@@ -11,6 +11,7 @@ import (
 
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/platega"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,10 +21,11 @@ import (
 // MockContext реализует интерфейс tele.Context для тестов
 type MockContext struct {
 	tele.Context
-	sender  *tele.User
-	message *tele.Message
-	sentMsg any
-	opts    []any
+	sender   *tele.User
+	message  *tele.Message
+	sentMsg  any
+	sentMsgs []any
+	opts     []any
 }
 
 func (c *MockContext) Sender() *tele.User {
@@ -36,6 +38,7 @@ func (c *MockContext) Message() *tele.Message {
 
 func (c *MockContext) Send(what any, opts ...any) error {
 	c.sentMsg = what
+	c.sentMsgs = append(c.sentMsgs, what)
 	c.opts = opts
 	return nil
 }
@@ -50,19 +53,24 @@ func (c *MockContext) Text() string {
 // setupTestBot создаёт бота с временной БД для тестов
 func setupTestBot(t *testing.T) (*Bot, *database.DB) {
 	t.Helper()
-	dbFile := "test_handlers.db"
+	testName := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
+	dbFile := t.TempDir() + "/test_handlers_" + testName + ".db"
 	db, err := database.New(dbFile)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.Close()
-		os.Remove(dbFile)
+		_ = os.Remove(dbFile)
 	})
 
-	cfg := &config.Config{AdminID: 999999}
+	cfg := &config.Config{
+		AdminID:             999999,
+		TrialTrafficLimitGB: 1,
+	}
 	b := &Bot{
 		db:         db,
 		config:     cfg,
 		userStates: newStateMap(),
+		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
 	}
 	return b, db
 }
@@ -88,7 +96,7 @@ func TestHandleStart(t *testing.T) {
 
 	t.Run("ExistingUser", func(t *testing.T) {
 		userID := int64(222)
-		_, err := db.CreateUser(userID, "olduser", "OldFirstName", "uuid-123")
+		_, err := db.CreateUser(userID, "olduser", "OldFirstName", "uuid-123", nil, nil)
 		assert.NoError(t, err)
 
 		user := &tele.User{ID: userID, Username: "olduser"}
@@ -114,7 +122,7 @@ func TestHandleStart(t *testing.T) {
 	t.Run("ExistingUserWithPayload_IgnoresCode", func(t *testing.T) {
 		// Существующий пользователь с payload — код игнорируется, не расходуется
 		userID := int64(333)
-		_, err := db.CreateUser(userID, "existing", "Existing", "uuid-333")
+		_, err := db.CreateUser(userID, "existing", "Existing", "uuid-333", nil, nil)
 		require.NoError(t, err)
 
 		// Создаём инвайт
@@ -195,13 +203,170 @@ func TestHandleStart(t *testing.T) {
 	})
 }
 
+func TestUserKeyboardHidesPaymentButtonInMaintenanceMode(t *testing.T) {
+	b, db := setupTestBot(t)
+
+	userID := int64(777)
+	price := 500
+	_, err := db.CreateUser(userID, "paid", "Paid", "uuid-paid", &price, nil)
+	require.NoError(t, err)
+
+	b.platega = platega.NewClient("merchant", "secret")
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/777" {
+				payload := `{"response":{"uuid":"uuid-paid","username":"paid","status":"ACTIVE","expireAt":"2026-04-15T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
+	})
+
+	kb := b.userKeyboard(userID)
+	var normalButtons []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			normalButtons = append(normalButtons, btn.Text)
+		}
+	}
+	assert.Contains(t, normalButtons, BtnRenew)
+
+	b.setMaintenanceMode(true)
+
+	kb = b.userKeyboard(userID)
+	var maintenanceButtons []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			maintenanceButtons = append(maintenanceButtons, btn.Text)
+		}
+	}
+	assert.NotContains(t, maintenanceButtons, BtnPay)
+	assert.NotContains(t, maintenanceButtons, BtnRenew)
+}
+
+func TestUserKeyboardHidesPaymentButtonWithoutPlatega(t *testing.T) {
+	b, db := setupTestBot(t)
+
+	userID := int64(778)
+	price := 500
+	_, err := db.CreateUser(userID, "paid", "Paid", "uuid-paid", &price, nil)
+	require.NoError(t, err)
+
+	kb := b.userKeyboard(userID)
+	var buttons []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+
+	assert.NotContains(t, buttons, BtnPay)
+	assert.NotContains(t, buttons, BtnRenew)
+}
+
+func TestUserKeyboardShowsRenewForLegacyPaidMigratedUser(t *testing.T) {
+	b, db := setupTestBot(t)
+
+	modID := int64(781)
+	userID := int64(780)
+	price := 500
+	_, err := db.CreateUser(modID, "moderator", "Moderator", "uuid-mod-781", nil, nil)
+	require.NoError(t, err)
+
+	_, err = db.CreateUser(userID, "legacy_paid", "Legacy Paid", "uuid-legacy-paid", &price, &modID)
+	require.NoError(t, err)
+
+	expireDays := 30
+	invite, err := db.CreateInviteWithExpiry(modID, &expireDays)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(invite.Code, userID))
+
+	require.NoError(t, db.SetLegacyPaidMigrated(userID, true))
+
+	b.platega = platega.NewClient("merchant", "secret")
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/780":
+				payload := `{"response":{"uuid":"uuid-legacy-paid","username":"legacy_paid","status":"ACTIVE","expireAt":"2026-04-15T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	kb := b.userKeyboard(userID)
+	var buttons []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+
+	assert.Contains(t, buttons, BtnRenew)
+	assert.NotContains(t, buttons, BtnPay)
+}
+
+func TestHandleStatusShowsDevices(t *testing.T) {
+	b, db := setupTestBot(t)
+
+	userID := int64(779)
+	price := 500
+	_, err := db.CreateUser(userID, "paid", "Paid", "uuid-devices", &price, nil)
+	require.NoError(t, err)
+
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-devices":
+				payload := `{"response":{"uuid":"uuid-devices","username":"paid","status":"ACTIVE","expireAt":"2026-04-15T00:00:00Z","subscriptionUrl":"vless://example","hwidDeviceLimit":3,"userTraffic":{"usedTrafficBytes":2147483648}}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodGet && r.URL.Path == "/api/hwid/devices/uuid-devices":
+				payload := `{"response":{"total":2,"devices":[{"hwid":"a"},{"hwid":"b"}]}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: userID},
+		message: &tele.Message{},
+	}
+
+	err = b.handleStatus(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "<b>Устройства:</b> 2 / 3")
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
-func TestProcessInviteCode_UsesInviteExpireDays(t *testing.T) {
+func TestProcessInviteCode_UsesExpectedTrialPeriod(t *testing.T) {
 	t.Run("Бессрочный инвайт", func(t *testing.T) {
 		b, db := setupTestBot(t)
 
@@ -247,10 +412,11 @@ func TestProcessInviteCode_UsesInviteExpireDays(t *testing.T) {
 		err = b.processInviteCode(ctx, invite.Code)
 		require.NoError(t, err)
 		assert.Equal(t, "2099-01-01T00:00:00Z", captured.ExpireAt)
+		assert.Equal(t, int64(0), captured.TrafficLimitBytes) // Бессрочный инвайт — безлимит
 		assert.Equal(t, []string{"uuid-1", "uuid-2"}, captured.ActiveInternalSquads)
 	})
 
-	t.Run("Месячный инвайт", func(t *testing.T) {
+	t.Run("Триальный инвайт всегда создаёт доступ на 72 часа", func(t *testing.T) {
 		b, db := setupTestBot(t)
 
 		days := 30
@@ -300,8 +466,114 @@ func TestProcessInviteCode_UsesInviteExpireDays(t *testing.T) {
 
 		gotExpireAt, err := time.Parse(time.RFC3339, captured.ExpireAt)
 		require.NoError(t, err)
-		assert.False(t, gotExpireAt.Before(before.AddDate(0, 0, 30).Add(-2*time.Second)))
-		assert.False(t, gotExpireAt.After(after.AddDate(0, 0, 30).Add(2*time.Second)))
+		assert.False(t, gotExpireAt.Before(before.Add(72*time.Hour).Add(-2*time.Second)))
+		assert.False(t, gotExpireAt.After(after.Add(72*time.Hour).Add(2*time.Second)))
+		// Триальный инвайт получает лимит трафика.
+		assert.Equal(t, int64(1*1024*1024*1024), captured.TrafficLimitBytes)
+	})
+}
+
+func TestProcessInviteCode_SetsModeratorIDOnlyForModeratorInvites(t *testing.T) {
+	t.Run("модераторский инвайт копирует moderator_id и цену", func(t *testing.T) {
+		b, db := setupTestBot(t)
+
+		modID := int64(1234)
+		_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+		require.NoError(t, err)
+		require.NoError(t, db.AddModerator(modID, b.config.AdminID))
+
+		price := 450
+		inviteCode, err := db.CreateInviteWithPrice(modID, 30, price)
+		require.NoError(t, err)
+
+		client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+		client.SetHTTPClient(&http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				payload, err := json.Marshal(map[string]any{
+					"response": map[string]any{
+						"uuid":            "uuid-moderator-user",
+						"shortUuid":       "short-moderator-user",
+						"username":        "trial_user",
+						"status":          remnawave.StatusActive,
+						"subscriptionUrl": "vless://example",
+						"createdAt":       time.Now().UTC().Format(time.RFC3339),
+						"expireAt":        time.Now().UTC().Add(72 * time.Hour).Format(time.RFC3339),
+					},
+				})
+				require.NoError(t, err)
+
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(payload))),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		})
+		b.remnawave = client
+
+		ctx := &MockContext{
+			sender:  &tele.User{ID: 7101, Username: "trial_user", FirstName: "Trial"},
+			message: &tele.Message{},
+		}
+
+		err = b.processInviteCode(ctx, inviteCode)
+		require.NoError(t, err)
+
+		user, err := db.GetUserByTelegramID(7101)
+		require.NoError(t, err)
+		require.NotNil(t, user)
+		require.NotNil(t, user.SubscriptionPrice)
+		require.NotNil(t, user.ModeratorID)
+		assert.Equal(t, price, *user.SubscriptionPrice)
+		assert.Equal(t, modID, *user.ModeratorID)
+	})
+
+	t.Run("админский срочный инвайт не заполняет moderator_id", func(t *testing.T) {
+		b, db := setupTestBot(t)
+
+		price := 500
+		inviteCode, err := db.CreateInviteWithPrice(b.config.AdminID, 30, price)
+		require.NoError(t, err)
+
+		client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+		client.SetHTTPClient(&http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				payload, err := json.Marshal(map[string]any{
+					"response": map[string]any{
+						"uuid":            "uuid-admin-user",
+						"shortUuid":       "short-admin-user",
+						"username":        "admin_trial_user",
+						"status":          remnawave.StatusActive,
+						"subscriptionUrl": "vless://example",
+						"createdAt":       time.Now().UTC().Format(time.RFC3339),
+						"expireAt":        time.Now().UTC().Add(72 * time.Hour).Format(time.RFC3339),
+					},
+				})
+				require.NoError(t, err)
+
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(payload))),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		})
+		b.remnawave = client
+
+		ctx := &MockContext{
+			sender:  &tele.User{ID: 7102, Username: "admin_trial_user", FirstName: "Admin Trial"},
+			message: &tele.Message{},
+		}
+
+		err = b.processInviteCode(ctx, inviteCode)
+		require.NoError(t, err)
+
+		user, err := db.GetUserByTelegramID(7102)
+		require.NoError(t, err)
+		require.NotNil(t, user)
+		require.NotNil(t, user.SubscriptionPrice)
+		assert.Equal(t, price, *user.SubscriptionPrice)
+		assert.Nil(t, user.ModeratorID)
 	})
 }
 
@@ -352,4 +624,23 @@ func TestHandleTextMessage_InfoButtonRoutesToHelpMessage(t *testing.T) {
 	msg, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
 	assert.Equal(t, MsgInfo, msg)
+}
+
+func TestHandleTextMessage_PaymentFlowResetsOnMainMenuButtons(t *testing.T) {
+	b, _ := setupTestBot(t)
+	userID := int64(12345)
+	b.userStates.Set(userID, StateWaitPaymentMethod)
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: userID, Username: "payer"},
+		message: &tele.Message{Text: BtnInfo},
+	}
+
+	err := b.handleTextMessage(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Equal(t, MsgInfo, msg)
+	assert.Equal(t, StateNone, b.userStates.Get(userID), "при выходе в главное меню state оплаты должен сбрасываться")
 }

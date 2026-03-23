@@ -32,15 +32,19 @@ func setupModeratorTestBot(t *testing.T) (*Bot, *database.DB, int64, int64) {
 	adminID := int64(999999)
 	modID := int64(100)
 
-	cfg := &config.Config{AdminID: adminID}
+	cfg := &config.Config{
+		AdminID:              adminID,
+		MinSubscriptionPrice: 400,
+	}
 	b := &Bot{
 		db:         db,
 		config:     cfg,
 		userStates: newStateMap(),
+		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
 	}
 
 	// Создаём пользователя-модератора
-	_, err = db.CreateUser(modID, "moderator", "Модератор", "uuid-mod")
+	_, err = db.CreateUser(modID, "moderator", "Модератор", "uuid-mod", nil, nil)
 	require.NoError(t, err)
 	err = db.AddModerator(modID, adminID)
 	require.NoError(t, err)
@@ -58,7 +62,7 @@ func TestModeratorMenuKeyboard(t *testing.T) {
 
 func TestUserMenuKeyboardForModerator(t *testing.T) {
 	// Для модератора должна быть кнопка "Приглашения"
-	kb := UserMenuKeyboardModerator()
+	kb := UserMenuKeyboardDynamic(BtnRenew, true, true)
 	assert.NotNil(t, kb)
 }
 
@@ -87,8 +91,8 @@ func TestAdminModeratorKeyboard(t *testing.T) {
 
 // --- Тесты обработчиков модератора ---
 
-func TestModeratorCreateInvite(t *testing.T) {
-	b, db, _, modID := setupModeratorTestBot(t)
+func TestModeratorCreateInvite_StartsPriceFlow(t *testing.T) {
+	b, _, _, modID := setupModeratorTestBot(t)
 
 	user := &tele.User{ID: modID, Username: "moderator"}
 	ctx := &MockContext{
@@ -98,22 +102,63 @@ func TestModeratorCreateInvite(t *testing.T) {
 
 	err := b.handleModeratorCreateInvite(ctx)
 	assert.NoError(t, err)
+	assert.Equal(t, StateWaitModInvitePrice, b.userStates.Get(modID))
 
-	// Проверяем что инвайт создан
+	sentStr, ok := ctx.sentMsg.(string)
+	assert.True(t, ok)
+	assert.Contains(t, sentStr, "Введите цену подписки")
+	assert.Contains(t, sentStr, "400")
+}
+
+func TestProcessModeratorInvitePrice_CreatesInviteWithPrice(t *testing.T) {
+	b, db, _, modID := setupModeratorTestBot(t)
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: modID, Username: "moderator"},
+		message: &tele.Message{Text: "500"},
+	}
+
+	err := b.processModeratorInvitePrice(ctx, "500")
+	require.NoError(t, err)
+
 	invites, err := db.GetInvitesWithUsersByCreator(modID)
-	assert.NoError(t, err)
-	assert.Len(t, invites, 1)
+	require.NoError(t, err)
+	require.Len(t, invites, 1)
+
 	invite, err := db.GetInviteByCode(invites[0].Code)
 	require.NoError(t, err)
 	require.NotNil(t, invite)
 	require.NotNil(t, invite.ExpireDays)
+	require.NotNil(t, invite.SubscriptionPrice)
 	assert.Equal(t, 30, *invite.ExpireDays)
+	assert.Equal(t, 500, *invite.SubscriptionPrice)
+	assert.Empty(t, b.userStates.Get(modID))
 
-	// Проверяем что сообщение содержит deep link
 	sentStr, ok := ctx.sentMsg.(string)
-	assert.True(t, ok)
-	assert.Contains(t, sentStr, "Приглашение в VPN")
-	assert.Contains(t, sentStr, "t.me/")
+	require.True(t, ok)
+	assert.Contains(t, sentStr, "Цена подписки: 500 руб/мес")
+}
+
+func TestProcessModeratorInvitePrice_RejectsTooLowPrice(t *testing.T) {
+	b, db, _, modID := setupModeratorTestBot(t)
+	b.userStates.Set(modID, StateWaitModInvitePrice)
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: modID, Username: "moderator"},
+		message: &tele.Message{Text: "399"},
+	}
+
+	err := b.processModeratorInvitePrice(ctx, "399")
+	require.NoError(t, err)
+
+	invites, err := db.GetInvitesWithUsersByCreator(modID)
+	require.NoError(t, err)
+	assert.Empty(t, invites)
+	assert.Equal(t, StateWaitModInvitePrice, b.userStates.Get(modID))
+
+	sentStr, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, sentStr, "Минимальная цена: 400 руб")
 }
 
 func TestModeratorViewInvites(t *testing.T) {
@@ -221,20 +266,60 @@ func TestModeratorDeleteInvite_NotOwned(t *testing.T) {
 func TestHandleModSubscribers(t *testing.T) {
 	b, db, _, modID := setupModeratorTestBot(t)
 
-	// Активный подписчик
-	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300")
+	priceTrial := 400
+	pricePaid := 500
+	priceGrace := 450
+
+	// Триальный подписчик
+	_, err := db.CreateUser(300, "trial", "Trial", "uuid-300", &priceTrial, &modID)
 	require.NoError(t, err)
-	inv1, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+	code1, err := db.CreateInviteWithPrice(modID, 30, priceTrial)
 	require.NoError(t, err)
-	require.NoError(t, db.ClaimInvite(inv1.Code, 300))
+	require.NoError(t, db.ClaimInvite(code1, 300))
+
+	// Оплаченный подписчик
+	_, err = db.CreateUser(301, "paid", "Paid", "uuid-301", &pricePaid, &modID)
+	require.NoError(t, err)
+	code2, err := db.CreateInviteWithPrice(modID, 30, pricePaid)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(code2, 301))
+
+	paymentPaid := &database.Payment{
+		TelegramID:    301,
+		ModeratorID:   &modID,
+		Amount:        pricePaid,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	paymentPaidID, err := db.CreatePayment(paymentPaid)
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(paymentPaidID))
+
+	// Grace period
+	_, err = db.CreateUser(302, "grace", "Grace", "uuid-302", &priceGrace, &modID)
+	require.NoError(t, err)
+	code3, err := db.CreateInviteWithPrice(modID, 30, priceGrace)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(code3, 302))
+
+	paymentGrace := &database.Payment{
+		TelegramID:    302,
+		ModeratorID:   &modID,
+		Amount:        priceGrace,
+		PaymentMethod: "card",
+		Status:        "pending",
+	}
+	paymentGraceID, err := db.CreatePayment(paymentGrace)
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(paymentGraceID))
 
 	// Удалённый подписчик
-	_, err = db.CreateUser(301, "gone", "Gone", "uuid-301")
+	_, err = db.CreateUser(303, "gone", "Gone", "uuid-303", &priceTrial, &modID)
 	require.NoError(t, err)
-	inv2, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+	code4, err := db.CreateInviteWithPrice(modID, 30, priceTrial)
 	require.NoError(t, err)
-	require.NoError(t, db.ClaimInvite(inv2.Code, 301))
-	require.NoError(t, db.DeleteUser(301))
+	require.NoError(t, db.ClaimInvite(code4, 303))
+	require.NoError(t, db.DeleteUser(303))
 
 	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
@@ -246,13 +331,27 @@ func TestHandleModSubscribers(t *testing.T) {
 						"users": []map[string]any{
 							{
 								"uuid":      "uuid-300",
-								"username":  "alive",
+								"username":  "trial",
 								"status":    remnawave.StatusActive,
 								"expireAt":  time.Now().UTC().AddDate(0, 0, 10).Format(time.RFC3339),
 								"createdAt": time.Now().UTC().Format(time.RFC3339),
 							},
+							{
+								"uuid":      "uuid-301",
+								"username":  "paid",
+								"status":    remnawave.StatusActive,
+								"expireAt":  time.Now().UTC().AddDate(0, 0, 25).Format(time.RFC3339),
+								"createdAt": time.Now().UTC().Format(time.RFC3339),
+							},
+							{
+								"uuid":      "uuid-302",
+								"username":  "grace",
+								"status":    remnawave.StatusDisabled,
+								"expireAt":  time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339),
+								"createdAt": time.Now().UTC().Format(time.RFC3339),
+							},
 						},
-						"total": 1,
+						"total": 3,
 					},
 				})
 				require.NoError(t, err)
@@ -278,30 +377,80 @@ func TestHandleModSubscribers(t *testing.T) {
 	sentStr, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
 	assert.Contains(t, sentStr, "Мои подписчики")
-	assert.Contains(t, sentStr, `<code>300</code>`)
+	assert.Contains(t, sentStr, "триал")
+	assert.Contains(t, sentStr, "оплачено")
+	assert.Contains(t, sentStr, "grace")
+	assert.Contains(t, sentStr, "цена: 400 руб/мес")
+	assert.Contains(t, sentStr, "цена: 500 руб/мес")
+	assert.Contains(t, sentStr, "цена: 450 руб/мес")
 	assert.Contains(t, sentStr, "удалён")
 }
 
-func TestHandleModExtend_StartsDialog(t *testing.T) {
+func TestHandleModeratorEarnings(t *testing.T) {
 	b, db, _, modID := setupModeratorTestBot(t)
-	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300")
+	price := 500
+
+	_, err := db.CreateUser(300, "paid", "Paid", "uuid-300", &price, &modID)
 	require.NoError(t, err)
-	inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+	code, err := db.CreateInviteWithPrice(modID, 30, price)
 	require.NoError(t, err)
-	require.NoError(t, db.ClaimInvite(inv.Code, 300))
+	require.NoError(t, db.ClaimInvite(code, 300))
+
+	payment := &database.Payment{
+		TelegramID:    300,
+		ModeratorID:   &modID,
+		Amount:        price,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	paymentID, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(paymentID))
+
+	_, err = db.CreateEarning(&database.ModeratorEarning{
+		PaymentID:     paymentID,
+		ModeratorID:   modID,
+		GrossAmount:   500,
+		PlategaFee:    55,
+		WithdrawalFee: 8,
+		NetAmount:     437,
+		SharePercent:  15,
+		ShareAmount:   65,
+	})
+	require.NoError(t, err)
+
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.RawQuery == "size=1000" {
+				payload := `{"response":{"users":[{"uuid":"uuid-300","telegramId":300,"username":"paid","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}],"total":1}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
+	})
 
 	ctx := &MockContext{
 		sender:  &tele.User{ID: modID, Username: "moderator"},
 		message: &tele.Message{},
 	}
 
-	err = b.handleModExtend(ctx)
+	err = b.handleModeratorEarnings(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, StateWaitModExtendID, b.userStates.Get(modID))
 
 	sentStr, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
-	assert.Contains(t, sentStr, "telegram_id")
+	assert.Contains(t, sentStr, "Мой заработок")
+	assert.Contains(t, sentStr, "Финансы за")
+	assert.Contains(t, sentStr, "За всё время")
+	assert.Contains(t, sentStr, "Текущее состояние подписчиков")
+	assert.Contains(t, sentStr, "💳 Платящих: 1")
+	assert.NotContains(t, sentStr, "Платящих клиентов")
+	assert.Contains(t, sentStr, "500 руб")
+	assert.Contains(t, sentStr, "65 руб")
 }
 
 func intPtrBot(v int) *int {
@@ -311,7 +460,7 @@ func intPtrBot(v int) *int {
 // --- Тесты роутинга модератора ---
 
 func TestHandleTextMessage_ModeratorButtons(t *testing.T) {
-	b, db, _, modID := setupModeratorTestBot(t)
+	b, _, _, modID := setupModeratorTestBot(t)
 
 	user := &tele.User{ID: modID, Username: "moderator"}
 
@@ -338,20 +487,56 @@ func TestHandleTextMessage_ModeratorButtons(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("Кнопка_Продлить_ставит_состояние", func(t *testing.T) {
-		_, err := db.CreateUser(8080, "sub8080", "Sub", "uuid-8080")
-		require.NoError(t, err)
-		inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
-		require.NoError(t, err)
-		require.NoError(t, db.ClaimInvite(inv.Code, 8080))
+	t.Run("Кнопка_Назад_из_экрана_подписчиков", func(t *testing.T) {
+		b.userStates.Set(modID, StateModSubscribers)
+		ctx := &MockContext{
+			sender:  user,
+			message: &tele.Message{Text: BtnBack},
+		}
+		err := b.handleTextMessage(ctx)
+		assert.NoError(t, err)
+
+		sentStr, ok := ctx.sentMsg.(string)
+		assert.True(t, ok)
+		assert.Contains(t, sentStr, "Приглашения")
+		assert.Empty(t, b.userStates.Get(modID))
+	})
+
+	t.Run("Кнопка_Создать_запрашивает_цену", func(t *testing.T) {
+		ctx := &MockContext{
+			sender:  user,
+			message: &tele.Message{Text: BtnModCreate},
+		}
+		err := b.handleTextMessage(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, StateWaitModInvitePrice, b.userStates.Get(modID))
+		b.userStates.Delete(modID)
+	})
+
+	t.Run("Кнопка_Заработок_открывает_сводку", func(t *testing.T) {
+		b.remnawave.SetHTTPClient(&http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.RawQuery == "size=1000" {
+					payload := `{"response":{"users":[],"total":0}}`
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(payload)),
+						Header:     make(http.Header),
+					}, nil
+				}
+				return nil, assert.AnError
+			}),
+		})
 
 		ctx := &MockContext{
 			sender:  user,
-			message: &tele.Message{Text: BtnModExtend},
+			message: &tele.Message{Text: BtnModEarnings},
 		}
-		err = b.handleTextMessage(ctx)
+		err := b.handleTextMessage(ctx)
 		assert.NoError(t, err)
-		assert.Equal(t, StateWaitModExtendID, b.userStates.Get(modID))
+		sentStr, ok := ctx.sentMsg.(string)
+		assert.True(t, ok)
+		assert.Contains(t, sentStr, "Мой заработок")
 	})
 }
 
@@ -361,7 +546,7 @@ func TestAdminAddModerator(t *testing.T) {
 	b, db, adminID, _ := setupModeratorTestBot(t)
 
 	// Создаём нового пользователя для назначения
-	_, err := db.CreateUser(200, "newmod", "Новый", "uuid-200")
+	_, err := db.CreateUser(200, "newmod", "Новый", "uuid-200", nil, nil)
 	require.NoError(t, err)
 
 	admin := &tele.User{ID: adminID, Username: "admin"}
@@ -410,7 +595,7 @@ func TestAdminAddModerator_NotRegistered(t *testing.T) {
 func TestAdminAddModerator_RejectsMonthlyInviteUser(t *testing.T) {
 	b, db, adminID, modID := setupModeratorTestBot(t)
 
-	_, err := db.CreateUser(201, "monthly_user", "Месячный", "uuid-201")
+	_, err := db.CreateUser(201, "monthly_user", "Месячный", "uuid-201", nil, nil)
 	require.NoError(t, err)
 	inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 	require.NoError(t, err)
@@ -508,68 +693,46 @@ func TestBanModerator_CascadeDelete(t *testing.T) {
 	assert.Empty(t, invites)
 }
 
-// --- Тест очистки состояния в терминальных ветках processModExtendID ---
-
-// TestProcessModExtendID_ClearsStateOnTerminalErrors проверяет что при ошибках,
-// которые возвращают пользователя в главное меню, состояние диалога сбрасывается.
-// Без этого следующее сообщение модератора снова парсится как telegram_id.
-func TestProcessModExtendID_ClearsStateOnTerminalErrors(t *testing.T) {
+func TestProcessModChangePrice_UpdatesTrialSubscriber(t *testing.T) {
 	b, db, _, modID := setupModeratorTestBot(t)
+	price := 400
+	_, err := db.CreateUser(9001, "trial", "Trial", "uuid-9001", &price, &modID)
+	require.NoError(t, err)
+	code, err := db.CreateInviteWithPrice(modID, 30, price)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(code, 9001))
 
-	t.Run("dbUser==nil очищает состояние", func(t *testing.T) {
-		// Создаём инвайт с used_by=9001, но без записи в users
-		inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
-		require.NoError(t, err)
-		require.NoError(t, db.ClaimInvite(inv.Code, 9001))
-		// Намеренно НЕ создаём пользователя 9001 в users — GetUserByTelegramID вернёт nil
-
-		b.userStates.Set(modID, StateWaitModExtendID)
-
-		ctx := &MockContext{sender: &tele.User{ID: modID}, message: &tele.Message{Text: "9001"}}
-		require.NoError(t, b.processModExtendID(ctx, "9001"))
-
-		assert.Empty(t, b.userStates.Get(modID), "состояние должно быть очищено когда пользователь удалён")
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-9001" {
+				payload := `{"response":{"uuid":"uuid-9001","username":"trial","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
 	})
 
-	t.Run("подписка слишком далеко в будущем очищает состояние", func(t *testing.T) {
-		_, err := db.CreateUser(9002, "future", "Future", "uuid-9002")
-		require.NoError(t, err)
-		inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
-		require.NoError(t, err)
-		require.NoError(t, db.ClaimInvite(inv.Code, 9002))
+	ctxID := &MockContext{sender: &tele.User{ID: modID}, message: &tele.Message{Text: "9001"}}
+	require.NoError(t, b.processModChangePriceID(ctxID, "9001"))
+	require.Equal(t, StateWaitModChangePriceValue, b.userStates.Get(modID))
 
-		// Remnawave: подписка истекает через 60 дней (>30) — слишком рано продлевать
-		client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
-		client.SetHTTPClient(&http.Client{
-			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				if strings.Contains(r.URL.Path, "uuid-9002") {
-					payload, _ := json.Marshal(map[string]any{
-						"response": map[string]any{
-							"uuid":      "uuid-9002",
-							"username":  "future",
-							"status":    remnawave.StatusActive,
-							"expireAt":  time.Now().UTC().AddDate(0, 0, 60).Format(time.RFC3339),
-							"createdAt": time.Now().UTC().Format(time.RFC3339),
-						},
-					})
-					return &http.Response{
-						StatusCode: http.StatusOK,
-						Body:       io.NopCloser(strings.NewReader(string(payload))),
-						Header:     make(http.Header),
-					}, nil
-				}
-				return nil, fmt.Errorf("unexpected: %s", r.URL.Path)
-			}),
-		})
-		b.remnawave = client
+	ctxValue := &MockContext{sender: &tele.User{ID: modID}, message: &tele.Message{Text: "550"}}
+	require.NoError(t, b.processModChangePriceValue(ctxValue, "550"))
 
-		b.userStates.Set(modID, StateWaitModExtendID)
+	user, err := db.GetUserByTelegramID(9001)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.NotNil(t, user.SubscriptionPrice)
+	assert.Equal(t, 550, *user.SubscriptionPrice)
+	assert.Empty(t, b.userStates.Get(modID))
 
-		ctx := &MockContext{sender: &tele.User{ID: modID}, message: &tele.Message{Text: "9002"}}
-		require.NoError(t, b.processModExtendID(ctx, "9002"))
-
-		assert.Empty(t, b.userStates.Get(modID), "состояние должно быть очищено когда подписка ещё не может быть продлена")
-	})
+	msg, ok := ctxValue.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "400 → 550")
 }
 
 // --- Тест batch API для handleModSubscribers ---
@@ -580,13 +743,13 @@ func TestHandleModSubscribers_UsesBatchAPI(t *testing.T) {
 	b, db, _, modID := setupModeratorTestBot(t)
 
 	// Создаём двух подписчиков
-	_, err := db.CreateUser(310, "alice", "Alice", "uuid-310")
+	_, err := db.CreateUser(310, "alice", "Alice", "uuid-310", nil, nil)
 	require.NoError(t, err)
 	inv1, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv1.Code, 310))
 
-	_, err = db.CreateUser(311, "bob", "Bob", "uuid-311")
+	_, err = db.CreateUser(311, "bob", "Bob", "uuid-311", nil, nil)
 	require.NoError(t, err)
 	inv2, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
 	require.NoError(t, err)
@@ -645,77 +808,71 @@ func TestHandleModSubscribers_UsesBatchAPI(t *testing.T) {
 	assert.Contains(t, sentStr, "bob")
 }
 
-// --- Тест утечки состояния при ошибке продления ---
-
-// TestProcessModExtendConfirm_ClearsStateOnExtendError проверяет, что при ошибке
-// продления подписки состояние и сессия очищаются, иначе следующее сообщение
-// модератора снова попадёт в обработчик подтверждения.
-func TestProcessModExtendConfirm_ClearsStateOnExtendError(t *testing.T) {
+func TestProcessModChangePriceID_RejectsPaidSubscriber(t *testing.T) {
 	b, db, _, modID := setupModeratorTestBot(t)
-
-	// Создаём подписчика
-	_, err := db.CreateUser(400, "sub400", "Sub", "uuid-400")
+	price := 500
+	_, err := db.CreateUser(400, "paid", "Paid", "uuid-400", &price, &modID)
 	require.NoError(t, err)
-	inv, err := db.CreateInviteWithExpiry(modID, intPtrBot(30))
+	code, err := db.CreateInviteWithPrice(modID, 30, price)
 	require.NoError(t, err)
-	require.NoError(t, db.ClaimInvite(inv.Code, 400))
+	require.NoError(t, db.ClaimInvite(code, 400))
 
-	// Настраиваем Remnawave — первый вызов (preview) успешен, второй (extend) — ошибка
-	callCount := 0
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
-	client.SetHTTPClient(&http.Client{
-		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			callCount++
-			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "uuid-400") {
-				payload, _ := json.Marshal(map[string]any{
-					"response": map[string]any{
-						"uuid":      "uuid-400",
-						"username":  "sub400",
-						"status":    remnawave.StatusActive,
-						"expireAt":  time.Now().UTC().AddDate(0, 0, 10).Format(time.RFC3339),
-						"createdAt": time.Now().UTC().Format(time.RFC3339),
-					},
-				})
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader(string(payload))),
-					Header:     make(http.Header),
-				}, nil
-			}
-			// PATCH — симулируем ошибку API при продлении
-			if r.Method == http.MethodPatch {
-				return &http.Response{
-					StatusCode: http.StatusInternalServerError,
-					Body:       io.NopCloser(strings.NewReader(`{"error":"internal"}`)),
-					Header:     make(http.Header),
-				}, nil
-			}
-			return nil, fmt.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
-		}),
-	})
-	b.remnawave = client
+	payment := &database.Payment{
+		TelegramID:    400,
+		ModeratorID:   &modID,
+		Amount:        price,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	paymentID, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(paymentID))
 
-	// Шаг 1: ввод ID подписчика
-	ctxID := &MockContext{
+	ctx := &MockContext{
 		sender:  &tele.User{ID: modID},
 		message: &tele.Message{Text: "400"},
 	}
-	err = b.processModExtendID(ctxID, "400")
-	require.NoError(t, err)
-	require.Equal(t, StateWaitModExtendConfirm, b.userStates.Get(modID))
+	require.NoError(t, b.processModChangePriceID(ctx, "400"))
 
-	// Шаг 2: подтверждение — получаем ошибку API
-	ctxConfirm := &MockContext{
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "уже оплатил")
+	assert.Empty(t, b.userStates.Get(modID))
+}
+
+func TestProcessModChangePriceID_RejectsGraceSubscriber(t *testing.T) {
+	b, db, _, modID := setupModeratorTestBot(t)
+	price := 500
+	_, err := db.CreateUser(401, "grace", "Grace", "uuid-401", &price, &modID)
+	require.NoError(t, err)
+	code, err := db.CreateInviteWithPrice(modID, 30, price)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(code, 401))
+
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-401" {
+				payload := `{"response":{"uuid":"uuid-401","username":"grace","status":"DISABLED","expireAt":"2026-03-01T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
+	})
+
+	ctx := &MockContext{
 		sender:  &tele.User{ID: modID},
-		message: &tele.Message{Text: "да"},
+		message: &tele.Message{Text: "401"},
 	}
-	err = b.processModExtendConfirm(ctxConfirm, "да")
-	require.NoError(t, err)
+	require.NoError(t, b.processModChangePriceID(ctx, "401"))
 
-	// После ошибки продления: состояние и сессия должны быть очищены
-	assert.Empty(t, b.userStates.Get(modID), "состояние должно быть очищено после ошибки")
-	_, sessionExists := b.getModExtendSession(modID)
-	assert.False(t, sessionExists, "сессия должна быть очищена после ошибки")
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "уже не на пробном периоде")
+	assert.Empty(t, b.userStates.Get(modID))
 }
 
 // --- Тесты handleStart с меню модератора ---
@@ -732,7 +889,7 @@ func TestHandleStart_ModeratorGetsModeratorMenu(t *testing.T) {
 	err := b.handleStart(ctx)
 	assert.NoError(t, err)
 
-	// Модератор должен получить UserMenuKeyboardModerator (с кнопкой приглашений)
+	// Модератор должен получить пользовательское меню с кнопкой приглашений.
 	assert.Equal(t, MsgWelcomeBack, ctx.sentMsg)
 
 	// Проверяем что в opts есть клавиатура с кнопкой приглашений

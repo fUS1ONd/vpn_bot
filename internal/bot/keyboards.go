@@ -8,12 +8,18 @@ import (
 const (
 	// Кнопки пользователя
 	BtnStatus       = "👤 Мой статус"
-	BtnConnect      = "🌐 Подключить"
-	BtnDonate       = "💸 Поддержать"
-	BtnInfo         = "Информация"
+	BtnInfo         = "ℹ️ Информация"
 	BtnInstructions = "📚 Инструкции"
 	BtnBack         = "🔙 Назад"
 	BtnCancel       = "🚫 Отмена"
+
+	// Кнопки оплаты
+	BtnPay          = "💳 Оплатить подписку"
+	BtnRenew        = "💳 Продлить подписку"
+	BtnPaySBP       = "🏦 СБП"
+	BtnPayCard      = "💳 Карта"
+	BtnPayCrypto    = "🪙 Крипта"
+	BtnCheckPayment = "🔄 Проверить оплату"
 
 	// Кнопки инструкций
 	BtnInstIOS     = "🍎 iOS"
@@ -26,13 +32,21 @@ const (
 	// Админ-кнопки
 	BtnAdminManage             = "📋 Управление"
 	BtnAdminBroadcast          = "📢 Рассылка"
+	BtnAdminStats              = "📊 Общая статистика"
+	BtnAdminMaintenance        = "🔧 Режим обслуживания"
+	BtnAdminMaintenanceOff     = "▶️ Штатный режим"
 	BtnAdminUserMode           = "👤 Режим пользователя"
 	BtnAdminBack               = "🔙 В меню админа"
 	BtnAdminCreateInvite       = "🎟 Создать инвайт"
 	BtnAdminViewInvites        = "📋 Коды"
 	BtnAdminDeleteInvite       = "🗑 Удалить код"
 	BtnAdminBanUser            = "🚫 Забанить"
+	BtnAdminUserInfo           = "🔍 Инфо о пользователе"
 	BtnAdminSwitchSubscription = "♾️ Сменить тариф"
+	BtnAdminSwitchInfinite     = "♾️ Перевести на бессрочную"
+	BtnAdminChangePrice        = "✏️ Изменить цену"
+	BtnAdminMigrationPaidYes   = "✅ Да, считать оплаченной"
+	BtnAdminMigrationPaidNo    = "❌ Нет, оставить trial"
 
 	// Кнопки подтверждения
 	BtnConfirmYes = "Да"
@@ -45,7 +59,8 @@ const (
 	BtnModCreate      = "📨 Создать приглашение"
 	BtnModView        = "📋 Мои приглашения"
 	BtnModSubscribers = "👥 Мои подписчики"
-	BtnModExtend      = "⏳ Продлить подписку"
+	BtnModEarnings    = "💰 Мой заработок"
+	BtnModChangePrice = "✏️ Изменить цену"
 	BtnModDelete      = "🗑 Удалить приглашение"
 	BtnModBack        = "🔙 В меню"
 
@@ -57,14 +72,24 @@ const (
 	BtnAdminRemoveMod    = "➖ Снять модератора"
 )
 
-// UserMenuKeyboard возвращает главное меню пользователя
-func UserMenuKeyboard() *tele.ReplyMarkup {
+// UserMenuKeyboardDynamic строит главное меню с динамической кнопкой оплаты.
+// payButtonText — текст кнопки ("Оплатить" / "Продлить"), showPayButton — показывать ли,
+// isModerator — добавляет кнопку "Приглашения".
+func UserMenuKeyboardDynamic(payButtonText string, showPayButton bool, isModerator bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
-		menu.Row(menu.Text(BtnStatus), menu.Text(BtnConnect)),
-		menu.Row(menu.Text(BtnServers), menu.Text(BtnInstructions)),
-		menu.Row(menu.Text(BtnDonate), menu.Text(BtnInfo)),
-	)
+	rows := []tele.Row{
+		menu.Row(menu.Text(BtnStatus)),
+	}
+	if showPayButton && payButtonText != "" {
+		rows = append(rows, menu.Row(menu.Text(payButtonText), menu.Text(BtnServers)))
+	} else {
+		rows = append(rows, menu.Row(menu.Text(BtnServers)))
+	}
+	rows = append(rows, menu.Row(menu.Text(BtnInstructions), menu.Text(BtnInfo)))
+	if isModerator {
+		rows = append(rows, menu.Row(menu.Text(BtnModInvites)))
+	}
+	menu.Reply(rows...)
 	return menu
 }
 
@@ -80,11 +105,17 @@ func InstructionsKeyboard() *tele.ReplyMarkup {
 }
 
 // AdminKeyboard возвращает главное меню админа
-func AdminKeyboard() *tele.ReplyMarkup {
+func AdminKeyboard(maintenanceMode bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	maintenanceBtn := BtnAdminMaintenance
+	if maintenanceMode {
+		maintenanceBtn = BtnAdminMaintenanceOff
+	}
 	menu.Reply(
 		menu.Row(menu.Text(BtnAdminManage), menu.Text(BtnAdminModerators)),
-		menu.Row(menu.Text(BtnAdminBroadcast), menu.Text(BtnAdminUserMode)),
+		menu.Row(menu.Text(BtnAdminBroadcast), menu.Text(BtnAdminStats)),
+		menu.Row(menu.Text(maintenanceBtn)),
+		menu.Row(menu.Text(BtnAdminUserMode)),
 	)
 	return menu
 }
@@ -96,6 +127,18 @@ func AdminManageKeyboard() *tele.ReplyMarkup {
 		menu.Row(menu.Text(BtnAdminCreateInvite), menu.Text(BtnAdminViewInvites)),
 		menu.Row(menu.Text(BtnAdminBanUser), menu.Text(BtnAdminDeleteInvite)),
 		menu.Row(menu.Text(BtnAdminSwitchSubscription)),
+		menu.Row(menu.Text(BtnAdminUserInfo)),
+		menu.Row(menu.Text(BtnAdminBack)),
+	)
+	return menu
+}
+
+// AdminSwitchSubmenu возвращает подменю смены тарифа.
+func AdminSwitchSubmenu() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnAdminSwitchInfinite)),
+		menu.Row(menu.Text(BtnAdminChangePrice)),
 		menu.Row(menu.Text(BtnAdminBack)),
 	)
 	return menu
@@ -111,27 +154,23 @@ func AdminBroadcastKeyboard() *tele.ReplyMarkup {
 	return menu
 }
 
-// UserMenuKeyboardModerator возвращает меню пользователя с кнопкой приглашений (для модераторов)
-func UserMenuKeyboardModerator() *tele.ReplyMarkup {
-	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
-		menu.Row(menu.Text(BtnStatus), menu.Text(BtnConnect)),
-		menu.Row(menu.Text(BtnServers), menu.Text(BtnInstructions)),
-		menu.Row(menu.Text(BtnModInvites)),
-		menu.Row(menu.Text(BtnDonate), menu.Text(BtnInfo)),
-	)
-	return menu
-}
-
 // ModeratorMenuKeyboard возвращает подменю модератора
 func ModeratorMenuKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnModCreate)),
 		menu.Row(menu.Text(BtnModView), menu.Text(BtnModSubscribers)),
-		menu.Row(menu.Text(BtnModExtend)),
-		menu.Row(menu.Text(BtnModDelete)),
+		menu.Row(menu.Text(BtnModEarnings), menu.Text(BtnModDelete)),
 		menu.Row(menu.Text(BtnModBack)),
+	)
+	return menu
+}
+
+// ModeratorSubscribersKeyboard возвращает клавиатуру для списка подписчиков модератора.
+func ModeratorSubscribersKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnModChangePrice), menu.Text(BtnBack)),
 	)
 	return menu
 }
@@ -144,6 +183,16 @@ func AdminModeratorKeyboard() *tele.ReplyMarkup {
 		menu.Row(menu.Text(BtnAdminListMods), menu.Text(BtnAdminModStats)),
 		menu.Row(menu.Text(BtnAdminRemoveMod)),
 		menu.Row(menu.Text(BtnAdminBack)),
+	)
+	return menu
+}
+
+// AdminChangePriceMigrationKeyboard возвращает меню подтверждения migration-case.
+func AdminChangePriceMigrationKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnAdminMigrationPaidYes), menu.Text(BtnAdminMigrationPaidNo)),
+		menu.Row(menu.Text(BtnCancel)),
 	)
 	return menu
 }
@@ -162,6 +211,25 @@ func ConfirmKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnConfirmYes), menu.Text(BtnCancel)),
+	)
+	return menu
+}
+
+// PaymentMethodKeyboard возвращает меню выбора способа оплаты
+func PaymentMethodKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnPaySBP), menu.Text(BtnPayCard)),
+		menu.Row(menu.Text(BtnPayCrypto), menu.Text(BtnCancel)),
+	)
+	return menu
+}
+
+// PaymentWaitKeyboard возвращает меню ожидания оплаты
+func PaymentWaitKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnCheckPayment), menu.Text(BtnCancel)),
 	)
 	return menu
 }

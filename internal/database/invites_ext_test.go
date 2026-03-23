@@ -88,14 +88,14 @@ func TestGetSubscribersByModerator(t *testing.T) {
 	db := setupTestDBInvites(t)
 
 	// Подписчик, который остался в users
-	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300")
+	_, err := db.CreateUser(300, "alive", "Alive", "uuid-300", nil, nil)
 	require.NoError(t, err)
 	inv1, err := db.CreateInviteWithExpiry(100, intPtr(30))
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv1.Code, 300))
 
 	// Подписчик, удалённый из users
-	_, err = db.CreateUser(301, "gone", "Gone", "uuid-301")
+	_, err = db.CreateUser(301, "gone", "Gone", "uuid-301", nil, nil)
 	require.NoError(t, err)
 	inv2, err := db.CreateInviteWithExpiry(100, intPtr(30))
 	require.NoError(t, err)
@@ -179,9 +179,9 @@ func TestGetInvitesWithUsersByCreator(t *testing.T) {
 	db := setupTestDBInvites(t)
 
 	// Создаём двух модераторов
-	_, err := db.CreateUser(100, "mod1", "Модератор1", "uuid-100")
+	_, err := db.CreateUser(100, "mod1", "Модератор1", "uuid-100", nil, nil)
 	require.NoError(t, err)
-	_, err = db.CreateUser(200, "mod2", "Модератор2", "uuid-200")
+	_, err = db.CreateUser(200, "mod2", "Модератор2", "uuid-200", nil, nil)
 	require.NoError(t, err)
 
 	// Создаём инвайты от разных авторов
@@ -193,7 +193,7 @@ func TestGetInvitesWithUsersByCreator(t *testing.T) {
 	require.NoError(t, err)
 
 	// Активируем один инвайт от mod1
-	_, err = db.CreateUser(300, "user300", "Юзер", "uuid-300")
+	_, err = db.CreateUser(300, "user300", "Юзер", "uuid-300", nil, nil)
 	require.NoError(t, err)
 	err = db.UseInvite(inv1.Code, 300)
 	require.NoError(t, err)
@@ -232,9 +232,9 @@ func TestGetInvitesWithUsersByCreator(t *testing.T) {
 func TestDeleteUnusedInviteByOwner(t *testing.T) {
 	db := setupTestDBInvites(t)
 
-	_, err := db.CreateUser(100, "mod1", "Мод1", "uuid-100")
+	_, err := db.CreateUser(100, "mod1", "Мод1", "uuid-100", nil, nil)
 	require.NoError(t, err)
-	_, err = db.CreateUser(200, "mod2", "Мод2", "uuid-200")
+	_, err = db.CreateUser(200, "mod2", "Мод2", "uuid-200", nil, nil)
 	require.NoError(t, err)
 
 	inv1, err := db.CreateInvite(100)
@@ -260,7 +260,7 @@ func TestDeleteUnusedInviteByOwner(t *testing.T) {
 	t.Run("Удаление использованного кода — ошибка", func(t *testing.T) {
 		usedInv, err := db.CreateInvite(100)
 		require.NoError(t, err)
-		_, err = db.CreateUser(300, "user300", "Юзер", "uuid-300")
+		_, err = db.CreateUser(300, "user300", "Юзер", "uuid-300", nil, nil)
 		require.NoError(t, err)
 		err = db.UseInvite(usedInv.Code, 300)
 		require.NoError(t, err)
@@ -278,9 +278,9 @@ func TestDeleteUnusedInviteByOwner(t *testing.T) {
 func TestDeleteUnusedInvitesByCreator(t *testing.T) {
 	db := setupTestDBInvites(t)
 
-	_, err := db.CreateUser(100, "mod1", "Мод1", "uuid-100")
+	_, err := db.CreateUser(100, "mod1", "Мод1", "uuid-100", nil, nil)
 	require.NoError(t, err)
-	_, err = db.CreateUser(200, "mod2", "Мод2", "uuid-200")
+	_, err = db.CreateUser(200, "mod2", "Мод2", "uuid-200", nil, nil)
 	require.NoError(t, err)
 
 	// Создаём несколько инвайтов от mod1
@@ -292,7 +292,7 @@ func TestDeleteUnusedInvitesByCreator(t *testing.T) {
 	require.NoError(t, err)
 
 	// Активируем один инвайт от mod1
-	_, err = db.CreateUser(300, "user300", "Юзер", "uuid-300")
+	_, err = db.CreateUser(300, "user300", "Юзер", "uuid-300", nil, nil)
 	require.NoError(t, err)
 	err = db.UseInvite(inv1.Code, 300)
 	require.NoError(t, err)

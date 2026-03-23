@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/bot"
+	"github.com/fus1ond/vpn_bot/internal/callback"
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/monitoring"
@@ -38,19 +41,22 @@ func main() {
 	}
 	defer db.Close()
 
-	// Откат инвайтов, зависших после краша (claimed но пользователь не создан)
-	if count, err := db.ReconcileOrphanedInvites(); err != nil {
-		slog.Error("Failed to reconcile orphaned invites", "error", err)
-	} else if count > 0 {
-		slog.Warn("Reconciled orphaned invites on startup", "count", count)
-	}
-
 	// Создание клиента Remnawave API
 	remnawaveClient := remnawave.NewClient(
 		cfg.RemnawaveURL,
 		cfg.RemnawaveAPIToken,
 		cfg.RemnawaveSquadUUIDs,
 	)
+
+	// Восстановление регистраций, застрявших после краша между Remnawave и локальной БД.
+	if stats, err := bot.ReconcileOrphanedRegistrations(db, remnawaveClient); err != nil {
+		slog.Error("Failed to reconcile orphaned registrations", "error", err)
+	} else if stats.RestoredUsers > 0 || stats.ReleasedInvites > 0 {
+		slog.Warn("Reconciled orphaned registrations on startup",
+			"restored_users", stats.RestoredUsers,
+			"released_invites", stats.ReleasedInvites,
+		)
+	}
 
 	// Создание и запуск Telegram бота
 	telegramBot, err := bot.New(cfg, db, remnawaveClient)
@@ -70,6 +76,28 @@ func main() {
 		slog.Info("Shutdown signal received, stopping bot...")
 		cancel()
 	}()
+
+	// Запуск callback-сервера (если Platega настроена)
+	if cfg.PlategaMerchantID != "" && cfg.PlategaSecret != "" {
+		callbackServer := callback.NewServer(cfg.CallbackPort, cfg.PlategaMerchantID, cfg.PlategaSecret, telegramBot.PaymentCallbackHandler())
+
+		go func() {
+			if err := callbackServer.Start(); err != nil && err != http.ErrServerClosed {
+				slog.Error("Callback server error", "error", err)
+			}
+		}()
+
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := callbackServer.Shutdown(shutdownCtx); err != nil {
+				slog.Error("Callback server shutdown error", "error", err)
+			}
+		}()
+
+		slog.Info("Platega callback server started", "port", cfg.CallbackPort)
+	}
 
 	// Запуск фоновой синхронизации targets.json для мониторинга нод
 	go monitoring.StartSyncLoop(ctx, remnawaveClient, cfg.SDConfigsPath)

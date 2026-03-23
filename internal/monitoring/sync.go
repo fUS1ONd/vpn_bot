@@ -93,7 +93,7 @@ func SyncNodes(client *remnawave.Client, sdConfigsPath string) (int, error) {
 	}
 
 	targetFile := filepath.Join(sdConfigsPath, "targets.json")
-	if err := os.WriteFile(targetFile, data, 0644); err != nil {
+	if err := writeFileAtomically(targetFile, data, 0644); err != nil {
 		return 0, fmt.Errorf("не удалось записать %s: %w", targetFile, err)
 	}
 
@@ -115,4 +115,48 @@ func ReadTargets(sdConfigsPath string) ([]Target, error) {
 	}
 
 	return targets, nil
+}
+
+// writeFileAtomically сначала пишет данные во временный файл рядом с целевым,
+// а затем атомарно подменяет основной файл через rename.
+func writeFileAtomically(path string, data []byte, perm os.FileMode) (err error) {
+	dir := filepath.Dir(path)
+	pattern := filepath.Base(path) + ".tmp-*"
+
+	tmpFile, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return fmt.Errorf("создание временного файла: %w", err)
+	}
+
+	tmpPath := tmpFile.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("запись временного файла: %w", err)
+	}
+
+	if err := tmpFile.Chmod(perm); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("chmod временного файла: %w", err)
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("sync временного файла: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close временного файла: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename временного файла: %w", err)
+	}
+
+	return nil
 }

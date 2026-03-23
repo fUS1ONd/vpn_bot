@@ -50,7 +50,7 @@ func TestCreateUserSetsUnlimitedTraffic(t *testing.T) {
 		}),
 	}
 
-	user, err := client.CreateUser(12345, "alice", expectedExpireAt)
+	user, err := client.CreateUser(12345, "alice", expectedExpireAt, 0)
 	require.NoError(t, err)
 	require.NotNil(t, user)
 
@@ -94,7 +94,7 @@ func TestCreateUserSetsMultipleInternalSquads(t *testing.T) {
 		}),
 	}
 
-	user, err := client.CreateUser(54321, "bob", expectedExpireAt)
+	user, err := client.CreateUser(54321, "bob", expectedExpireAt, 0)
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	require.Equal(t, []string{"uuid-1", "uuid-2"}, capturedRequest.ActiveInternalSquads)
@@ -133,7 +133,7 @@ func TestCreateUserOmitsEmptyInternalSquads(t *testing.T) {
 		}),
 	}
 
-	user, err := client.CreateUser(98765, "carol", expectedExpireAt)
+	user, err := client.CreateUser(98765, "carol", expectedExpireAt, 0)
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	_, exists := capturedBody["activeInternalSquads"]
@@ -175,7 +175,6 @@ func TestExtendUserSubscription_EnableAndPatch(t *testing.T) {
 	client := NewClient("https://panel.example.com", "test-token", nil)
 
 	var patchReq UpdateUserRequest
-	var gotEnable bool
 	var gotPatch bool
 
 	client.http = &http.Client{
@@ -183,14 +182,6 @@ func TestExtendUserSubscription_EnableAndPatch(t *testing.T) {
 			switch {
 			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-1":
 				payload := `{"response":{"uuid":"uuid-1","username":"alice","status":"EXPIRED","expireAt":"2026-03-01T00:00:00Z"}}`
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader(payload)),
-					Header:     make(http.Header),
-				}, nil
-			case r.Method == http.MethodPost && r.URL.Path == "/api/users/uuid-1/actions/enable":
-				gotEnable = true
-				payload := `{"response":{"success":true}}`
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(payload)),
@@ -214,9 +205,13 @@ func TestExtendUserSubscription_EnableAndPatch(t *testing.T) {
 
 	err := client.ExtendUserSubscription("uuid-1", 30)
 	require.NoError(t, err)
-	require.True(t, gotEnable)
 	require.True(t, gotPatch)
+	// EnableUser теперь делает PATCH с Status=ACTIVE, ExpireAt и TrafficLimitBytes=0
+	require.NotNil(t, patchReq.Status)
+	require.Equal(t, StatusActive, *patchReq.Status)
 	require.NotNil(t, patchReq.ExpireAt)
+	require.NotNil(t, patchReq.TrafficLimitBytes)
+	require.Equal(t, int64(0), *patchReq.TrafficLimitBytes)
 }
 
 func TestExtendUserSubscription_RejectTooEarly(t *testing.T) {
@@ -255,4 +250,25 @@ func TestExtendUserSubscription_RejectTooEarly(t *testing.T) {
 	err := client.ExtendUserSubscription("uuid-2", 30)
 	require.Error(t, err)
 	require.False(t, gotPatch)
+}
+
+func TestGetUserHwidDevicesCount(t *testing.T) {
+	client := NewClient("https://panel.example.com", "test-token", nil)
+	client.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			require.Equal(t, http.MethodGet, r.Method)
+			require.Equal(t, "/api/hwid/devices/uuid-1", r.URL.Path)
+
+			payload := `{"response":{"total":2,"devices":[{"hwid":"a"},{"hwid":"b"}]}}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(payload)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	count, err := client.GetUserHwidDevicesCount("uuid-1")
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
 }

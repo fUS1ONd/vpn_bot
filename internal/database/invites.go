@@ -24,10 +24,11 @@ type InviteWithUser struct {
 // Subscriber содержит подписчика модератора.
 // Поля профиля могут быть nil, если пользователь удалён из users.
 type Subscriber struct {
-	TelegramID    int64
-	Username      *string
-	FirstName     *string
-	RemnawaveUUID *string
+	TelegramID        int64
+	Username          *string
+	FirstName         *string
+	RemnawaveUUID     *string
+	SubscriptionPrice *int
 }
 
 // CreateInvite создаёт новый инвайт
@@ -44,8 +45,8 @@ func (db *DB) CreateInviteWithExpiry(createdBy int64, expireDays *int) (*Invite,
 	}
 
 	_, err = db.conn.Exec(
-		`INSERT INTO invites (code, created_by, expire_days) VALUES (?, ?, ?)`,
-		code, createdBy, expireDays,
+		`INSERT INTO invites (code, created_by, expire_days, is_trial) VALUES (?, ?, ?, ?)`,
+		code, createdBy, expireDays, boolToSQLiteInt(expireDays != nil),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create invite: %w", err)
@@ -60,12 +61,13 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	var usedBy sql.NullInt64
 	var usedAt sql.NullTime
 	var expireDays sql.NullInt64
+	var subscriptionPrice sql.NullInt64
 	var kickedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT code, created_by, used_by, used_at, expire_days, kicked_at, created_at FROM invites WHERE code = ?`,
+		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, kicked_at, created_at FROM invites WHERE code = ?`,
 		code,
-	).Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &kickedAt, &invite.CreatedAt)
+	).Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &subscriptionPrice, &kickedAt, &invite.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -83,6 +85,10 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	if expireDays.Valid {
 		v := int(expireDays.Int64)
 		invite.ExpireDays = &v
+	}
+	if subscriptionPrice.Valid {
+		v := int(subscriptionPrice.Int64)
+		invite.SubscriptionPrice = &v
 	}
 	if kickedAt.Valid {
 		invite.KickedAt = &kickedAt.Time
@@ -139,6 +145,62 @@ func (db *DB) ReconcileOrphanedInvites() (int, error) {
 	return int(rows), nil
 }
 
+// GetRecentOrphanedInvites возвращает свежие claimed-инвайты без локального пользователя.
+// Используется startup-reconcile, который дополнительно сверяет состояние с Remnawave.
+func (db *DB) GetRecentOrphanedInvites() ([]Invite, error) {
+	rows, err := db.conn.Query(`
+		SELECT code, created_by, used_by, used_at, expire_days, subscription_price, kicked_at, created_at
+		FROM invites
+		WHERE used_by IS NOT NULL
+		  AND used_by NOT IN (SELECT telegram_id FROM users)
+		  AND used_at >= datetime('now', '-1 hour')
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query orphaned invites: %w", err)
+	}
+	defer rows.Close()
+
+	var invites []Invite
+	for rows.Next() {
+		var invite Invite
+		var usedBy sql.NullInt64
+		var usedAt sql.NullTime
+		var expireDays sql.NullInt64
+		var subscriptionPrice sql.NullInt64
+		var kickedAt sql.NullTime
+
+		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &subscriptionPrice, &kickedAt, &invite.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan orphaned invite: %w", err)
+		}
+
+		if usedBy.Valid {
+			invite.UsedBy = &usedBy.Int64
+		}
+		if usedAt.Valid {
+			invite.UsedAt = &usedAt.Time
+		}
+		if expireDays.Valid {
+			v := int(expireDays.Int64)
+			invite.ExpireDays = &v
+		}
+		if subscriptionPrice.Valid {
+			v := int(subscriptionPrice.Int64)
+			invite.SubscriptionPrice = &v
+		}
+		if kickedAt.Valid {
+			invite.KickedAt = &kickedAt.Time
+		}
+
+		invites = append(invites, invite)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("orphaned invites rows error: %w", err)
+	}
+
+	return invites, nil
+}
+
 // UnclaimInvite откатывает claim инвайта (если создание пользователя не удалось)
 func (db *DB) UnclaimInvite(code string) error {
 	_, err := db.conn.Exec(
@@ -162,6 +224,29 @@ func (db *DB) UpdateInviteExpireDays(usedBy int64, expireDays *int) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update invite expire_days: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get affected rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("invite not found")
+	}
+
+	return nil
+}
+
+// UpdateInviteSubscriptionPrice обновляет цену подписки в инвайте пользователя.
+func (db *DB) UpdateInviteSubscriptionPrice(usedBy int64, price int) error {
+	result, err := db.conn.Exec(
+		`UPDATE invites
+		 SET subscription_price = ?
+		 WHERE used_by = ? AND kicked_at IS NULL`,
+		price, usedBy,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update invite subscription price: %w", err)
 	}
 
 	rows, err := result.RowsAffected()
@@ -213,7 +298,7 @@ func (db *DB) IsInviteValid(code string) (bool, error) {
 // GetAllInvites получает все инвайты
 func (db *DB) GetAllInvites() ([]Invite, error) {
 	rows, err := db.conn.Query(
-		`SELECT code, created_by, used_by, used_at, expire_days, created_at FROM invites ORDER BY created_at DESC`,
+		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, created_at FROM invites ORDER BY created_at DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query invites: %w", err)
@@ -226,8 +311,9 @@ func (db *DB) GetAllInvites() ([]Invite, error) {
 		var usedBy sql.NullInt64
 		var usedAt sql.NullTime
 		var expireDays sql.NullInt64
+		var subscriptionPrice sql.NullInt64
 
-		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &invite.CreatedAt); err != nil {
+		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &subscriptionPrice, &invite.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan invite: %w", err)
 		}
 
@@ -240,6 +326,10 @@ func (db *DB) GetAllInvites() ([]Invite, error) {
 		if expireDays.Valid {
 			v := int(expireDays.Int64)
 			invite.ExpireDays = &v
+		}
+		if subscriptionPrice.Valid {
+			v := int(subscriptionPrice.Int64)
+			invite.SubscriptionPrice = &v
 		}
 
 		invites = append(invites, invite)
@@ -255,7 +345,7 @@ func (db *DB) GetAllInvites() ([]Invite, error) {
 // GetUnusedInvites получает неиспользованные инвайты
 func (db *DB) GetUnusedInvites() ([]Invite, error) {
 	rows, err := db.conn.Query(
-		`SELECT code, created_by, used_by, used_at, expire_days, created_at FROM invites WHERE used_by IS NULL ORDER BY created_at DESC`,
+		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, created_at FROM invites WHERE used_by IS NULL ORDER BY created_at DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query invites: %w", err)
@@ -268,8 +358,9 @@ func (db *DB) GetUnusedInvites() ([]Invite, error) {
 		var usedBy sql.NullInt64
 		var usedAt sql.NullTime
 		var expireDays sql.NullInt64
+		var subscriptionPrice sql.NullInt64
 
-		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &invite.CreatedAt); err != nil {
+		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &subscriptionPrice, &invite.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan invite: %w", err)
 		}
 		if usedAt.Valid {
@@ -278,6 +369,10 @@ func (db *DB) GetUnusedInvites() ([]Invite, error) {
 		if expireDays.Valid {
 			v := int(expireDays.Int64)
 			invite.ExpireDays = &v
+		}
+		if subscriptionPrice.Valid {
+			v := int(subscriptionPrice.Int64)
+			invite.SubscriptionPrice = &v
 		}
 
 		invites = append(invites, invite)
@@ -457,16 +552,17 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 	var usedByNullable sql.NullInt64
 	var usedAt sql.NullTime
 	var expireDays sql.NullInt64
+	var subscriptionPrice sql.NullInt64
 	var kickedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT code, created_by, used_by, used_at, expire_days, kicked_at, created_at
+		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, kicked_at, created_at
 		 FROM invites
 		 WHERE used_by = ? AND kicked_at IS NULL
 		 ORDER BY used_at DESC
 		 LIMIT 1`,
 		usedBy,
-	).Scan(&invite.Code, &invite.CreatedBy, &usedByNullable, &usedAt, &expireDays, &kickedAt, &invite.CreatedAt)
+	).Scan(&invite.Code, &invite.CreatedBy, &usedByNullable, &usedAt, &expireDays, &subscriptionPrice, &kickedAt, &invite.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -484,6 +580,10 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 		v := int(expireDays.Int64)
 		invite.ExpireDays = &v
 	}
+	if subscriptionPrice.Valid {
+		v := int(subscriptionPrice.Int64)
+		invite.SubscriptionPrice = &v
+	}
 	if kickedAt.Valid {
 		invite.KickedAt = &kickedAt.Time
 	}
@@ -495,7 +595,8 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 // Пользователи без записи в users также возвращаются (LEFT JOIN).
 func (db *DB) GetSubscribersByModerator(moderatorID int64) ([]Subscriber, error) {
 	rows, err := db.conn.Query(
-		`SELECT i.used_by, u.username, u.first_name, u.remnawave_uuid
+		`SELECT i.used_by, u.username, u.first_name, u.remnawave_uuid,
+		        COALESCE(u.subscription_price, i.subscription_price)
 		 FROM invites i
 		 LEFT JOIN users u ON i.used_by = u.telegram_id
 		 WHERE i.created_by = ? AND i.used_by IS NOT NULL
@@ -514,8 +615,9 @@ func (db *DB) GetSubscribersByModerator(moderatorID int64) ([]Subscriber, error)
 		var username sql.NullString
 		var firstName sql.NullString
 		var remnawaveUUID sql.NullString
+		var subscriptionPrice sql.NullInt64
 
-		if err := rows.Scan(&usedBy, &username, &firstName, &remnawaveUUID); err != nil {
+		if err := rows.Scan(&usedBy, &username, &firstName, &remnawaveUUID, &subscriptionPrice); err != nil {
 			return nil, fmt.Errorf("failed to scan subscriber: %w", err)
 		}
 
@@ -534,6 +636,10 @@ func (db *DB) GetSubscribersByModerator(moderatorID int64) ([]Subscriber, error)
 		if remnawaveUUID.Valid {
 			v := remnawaveUUID.String
 			sub.RemnawaveUUID = &v
+		}
+		if subscriptionPrice.Valid {
+			v := int(subscriptionPrice.Int64)
+			sub.SubscriptionPrice = &v
 		}
 		subscribers = append(subscribers, sub)
 	}
@@ -628,6 +734,23 @@ func (db *DB) DeleteUnusedInvitesByCreator(createdBy int64) (int64, error) {
 	return rows, nil
 }
 
+// CreateInviteWithPrice создаёт модераторский инвайт с ценой подписки.
+// expireDays = срок действия инвайта в днях, price = цена подписки в руб/мес.
+func (db *DB) CreateInviteWithPrice(createdBy int64, expireDays int, price int) (string, error) {
+	code, err := generateInviteCode()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate invite code: %w", err)
+	}
+	_, err = db.conn.Exec(
+		`INSERT INTO invites (code, created_by, expire_days, subscription_price, is_trial) VALUES (?, ?, ?, ?, 1)`,
+		code, createdBy, expireDays, price,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to create invite with price: %w", err)
+	}
+	return code, nil
+}
+
 // generateInviteCode генерирует случайный 8-символьный код
 func generateInviteCode() (string, error) {
 	bytes := make([]byte, 4)
@@ -635,4 +758,11 @@ func generateInviteCode() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+func boolToSQLiteInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }

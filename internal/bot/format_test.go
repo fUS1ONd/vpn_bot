@@ -62,7 +62,7 @@ func TestFormatSubscriberLabel_ContainsIDOnce(t *testing.T) {
 
 // TestAdminKeyboardContainsModeratorsOnTopLevel проверяет что Модераторы на верхнем уровне
 func TestAdminKeyboardContainsModeratorsOnTopLevel(t *testing.T) {
-	keyboard := AdminKeyboard()
+	keyboard := AdminKeyboard(false)
 
 	var buttons []string
 	for _, row := range keyboard.ReplyKeyboard {
@@ -74,6 +74,8 @@ func TestAdminKeyboardContainsModeratorsOnTopLevel(t *testing.T) {
 	assert.Contains(t, buttons, BtnAdminModerators)
 	assert.Contains(t, buttons, BtnAdminManage)
 	assert.Contains(t, buttons, BtnAdminBroadcast)
+	assert.Contains(t, buttons, BtnAdminStats)
+	assert.Contains(t, buttons, BtnAdminMaintenance)
 	assert.Contains(t, buttons, BtnAdminUserMode)
 }
 
@@ -170,4 +172,5 @@ func TestAdminManageKeyboardDoesNotContainModerators(t *testing.T) {
 	assert.Contains(t, buttons, BtnAdminDeleteInvite)
 	assert.Contains(t, buttons, BtnAdminBanUser)
 	assert.Contains(t, buttons, BtnAdminSwitchSubscription)
+	assert.Contains(t, buttons, BtnAdminUserInfo)
 }

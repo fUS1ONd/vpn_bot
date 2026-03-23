@@ -60,6 +60,7 @@ type User struct {
 	Status            string    `json:"status"`
 	TelegramID        *int64    `json:"telegramId"`
 	TrafficLimitBytes int64     `json:"trafficLimitBytes"`
+	HwidDeviceLimit   int       `json:"hwidDeviceLimit"`
 	SubscriptionURL   string    `json:"subscriptionUrl"`
 	CreatedAt         time.Time `json:"createdAt"`
 	ExpireAt          time.Time `json:"expireAt"`
@@ -106,10 +107,11 @@ type CreateUserRequest struct {
 
 // UpdateUserRequest — запрос на обновление пользователя
 type UpdateUserRequest struct {
-	UUID     string  `json:"uuid"`
-	Username *string `json:"username,omitempty"`
-	Status   string  `json:"status,omitempty"`
-	ExpireAt *string `json:"expireAt,omitempty"`
+	UUID              string  `json:"uuid"`
+	Username          *string `json:"username,omitempty"`
+	Status            *string `json:"status,omitempty"`
+	ExpireAt          *string `json:"expireAt,omitempty"`
+	TrafficLimitBytes *int64  `json:"trafficLimitBytes,omitempty"`
 }
 
 // apiResponse — обёртка ответа API
@@ -118,11 +120,12 @@ type apiResponse struct {
 }
 
 // CreateUser создаёт нового пользователя в Remnawave.
-func (c *Client) CreateUser(telegramID int64, username string, expireAt time.Time) (*User, error) {
+// trafficLimitBytes=0 означает безлимит.
+func (c *Client) CreateUser(telegramID int64, username string, expireAt time.Time, trafficLimitBytes int64) (*User, error) {
 	req := CreateUserRequest{
 		Username:             username,
 		TelegramID:           telegramID,
-		TrafficLimitBytes:    0,
+		TrafficLimitBytes:    trafficLimitBytes,
 		TrafficLimitStrategy: TrafficStrategyMonth,
 		ExpireAt:             expireAt.UTC().Format(time.RFC3339),
 	}
@@ -223,6 +226,25 @@ func (c *Client) GetAllUsers() ([]User, error) {
 	return result.Response.Users, nil
 }
 
+// GetUserHwidDevicesCount возвращает количество HWID-устройств пользователя.
+func (c *Client) GetUserHwidDevicesCount(uuid string) (int, error) {
+	resp, err := c.doRequest("GET", "/api/hwid/devices/"+uuid, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	var result struct {
+		Response struct {
+			Total int `json:"total"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return 0, fmt.Errorf("failed to unmarshal hwid devices response: %w", err)
+	}
+
+	return result.Response.Total, nil
+}
+
 // UpdateUsername обновляет username пользователя в панели Remnawave
 func (c *Client) UpdateUsername(uuid string, username string) error {
 	req := UpdateUserRequest{
@@ -260,11 +282,28 @@ func (c *Client) DeleteUser(uuid string) error {
 	return err
 }
 
-// EnableUser включает ранее выключенного пользователя.
-func (c *Client) EnableUser(uuid string) error {
-	_, err := c.doRequest("POST", "/api/users/"+uuid+"/actions/enable", nil)
-	return err
+// EnableUser реактивирует пользователя: ставит ACTIVE, обновляет ExpireAt, снимает лимит трафика.
+func (c *Client) EnableUser(uuid string, newExpireAt time.Time) error {
+	expireStr := newExpireAt.UTC().Format(time.RFC3339)
+	return c.UpdateUser(uuid, UpdateUserRequest{
+		Status:            strPtr(StatusActive),
+		ExpireAt:          &expireStr,
+		TrafficLimitBytes: int64Ptr(0), // Безлимит после оплаты
+	})
 }
+
+// DisableUser деактивирует пользователя (grace period).
+func (c *Client) DisableUser(uuid string) error {
+	return c.UpdateUser(uuid, UpdateUserRequest{
+		Status: strPtr(StatusDisabled),
+	})
+}
+
+// strPtr возвращает указатель на строку
+func strPtr(s string) *string { return &s }
+
+// int64Ptr возвращает указатель на int64
+func int64Ptr(n int64) *int64 { return &n }
 
 // CalculateExtendedExpireAt рассчитывает новую дату окончания подписки.
 func CalculateExtendedExpireAt(currentExpireAt, now time.Time, days int) (time.Time, error) {
@@ -298,10 +337,9 @@ func (c *Client) ExtendUserSubscription(uuid string, days int) error {
 		return err
 	}
 
+	// EnableUser одним вызовом ставит ACTIVE + обновляет ExpireAt + снимает лимит трафика
 	if user.Status == StatusExpired || user.Status == StatusDisabled {
-		if err := c.EnableUser(uuid); err != nil {
-			return fmt.Errorf("failed to enable user: %w", err)
-		}
+		return c.EnableUser(uuid, newExpireAt)
 	}
 
 	expireAt := newExpireAt.UTC().Format(time.RFC3339)

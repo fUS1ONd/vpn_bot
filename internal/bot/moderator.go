@@ -13,21 +13,30 @@ import (
 	tele "gopkg.in/telebot.v3"
 )
 
-// Состояния модератора
+// Состояния модератора.
 const (
-	StateWaitModDeleteInvite  = "wait_mod_delete_invite"  // Модератор ждёт код для удаления
-	StateWaitModExtendID      = "wait_mod_extend_id"      // Ожидание telegram_id подписчика для продления
-	StateWaitModExtendConfirm = "wait_mod_extend_confirm" // Ожидание подтверждения продления
+	StateWaitModDeleteInvite     = "wait_mod_delete_invite"      // Модератор ждёт код для удаления
+	StateWaitModInvitePrice      = "wait_mod_invite_price"       // Ожидание цены нового инвайта
+	StateWaitModChangePriceID    = "wait_mod_change_price_id"    // Ожидание telegram_id подписчика
+	StateWaitModChangePriceValue = "wait_mod_change_price_value" // Ожидание новой цены подписки
+	StateModSubscribers          = "mod_subscribers"             // Открыт экран списка подписчиков
 )
 
-type modExtendSession struct {
+type modChangePriceSession struct {
 	SubscriberTelegramID int64
 	SubscriberLabel      string
-	UserUUID             string
-	NewExpireAt          time.Time
+	CurrentPrice         int
 }
 
-// isModerator проверяет, является ли пользователь модератором
+type moderatorSubscriberStateSummary struct {
+	Paying  int
+	Trial   int
+	Grace   int
+	Expired int
+	Deleted int
+}
+
+// isModerator проверяет, является ли пользователь модератором.
 func (b *Bot) isModerator(telegramID int64) bool {
 	ok, err := b.db.IsModerator(telegramID)
 	if err != nil {
@@ -37,33 +46,55 @@ func (b *Bot) isModerator(telegramID int64) bool {
 	return ok
 }
 
-// handleModeratorMenu показывает подменю модератора
+// handleModeratorMenu показывает подменю модератора.
 func (b *Bot) handleModeratorMenu(c tele.Context) error {
+	b.userStates.Delete(c.Sender().ID)
 	return c.Send("<b>🎟 Приглашения</b>\n\nВыберите действие:", &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: ModeratorMenuKeyboard(),
 	})
 }
 
-// handleModeratorCreateInvite создаёт инвайт от имени модератора
+// handleModeratorCreateInvite запускает создание инвайта от имени модератора.
 func (b *Bot) handleModeratorCreateInvite(c tele.Context) error {
-	telegramID := c.Sender().ID
+	b.userStates.Set(c.Sender().ID, StateWaitModInvitePrice)
+	return c.Send(
+		fmt.Sprintf("Введите цену подписки (руб/мес).\nМинимум: %d руб.", b.minSubscriptionPrice()),
+		&tele.SendOptions{ReplyMarkup: CancelKeyboard()},
+	)
+}
 
-	expireDays := 30
-	invite, err := b.db.CreateInviteWithExpiry(telegramID, &expireDays)
+// processModeratorInvitePrice создаёт инвайт с ценой после ввода модератора.
+func (b *Bot) processModeratorInvitePrice(c tele.Context, text string) error {
+	moderatorID := c.Sender().ID
+	price, err := strconv.Atoi(strings.TrimSpace(text))
 	if err != nil {
-		slog.Error("Failed to create invite by moderator", "error", err, "moderator_id", telegramID)
+		return c.Send("❌ Введите число.", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+	}
+	if price < b.minSubscriptionPrice() {
+		return c.Send(
+			fmt.Sprintf("❌ Минимальная цена: %d руб.", b.minSubscriptionPrice()),
+			&tele.SendOptions{ReplyMarkup: CancelKeyboard()},
+		)
+	}
+
+	inviteCode, err := b.db.CreateInviteWithPrice(moderatorID, 30, price)
+	if err != nil {
+		slog.Error("Failed to create invite with price", "error", err, "moderator_id", moderatorID)
 		return c.Send("Ошибка создания приглашения", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 	}
 
-	msg := fmt.Sprintf(MsgInviteCreated, b.getBotUsername(), invite.Code)
-	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: ModeratorMenuKeyboard(),
-	})
+	b.userStates.Delete(moderatorID)
+	msg := fmt.Sprintf(
+		"✅ Приглашение создано!\nЦена подписки: %d руб/мес\n\nСсылка: https://t.me/%s?start=%s",
+		price,
+		b.getBotUsername(),
+		inviteCode,
+	)
+	return c.Send(msg, &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 }
 
-// handleModeratorViewInvites показывает список инвайтов модератора
+// handleModeratorViewInvites показывает список инвайтов модератора.
 func (b *Bot) handleModeratorViewInvites(c tele.Context) error {
 	telegramID := c.Sender().ID
 
@@ -87,10 +118,7 @@ func (b *Bot) handleModeratorViewInvites(c tele.Context) error {
 		if inv.UsedBy != nil {
 			msg.WriteString("✅ Использован\n")
 			fmt.Fprintf(&msg, "🔹 Код: <code>%s</code>\n", inv.Code)
-
-			// Информация о пользователе
 			fmt.Fprintf(&msg, "👤 %s\n", formatUserLabel(inv.UserFirstName, inv.UserUsername, *inv.UsedBy))
-
 			if inv.UsedAt != nil {
 				fmt.Fprintf(&msg, "📅 %s\n", inv.UsedAt.Format("02.01.06 15:04"))
 			}
@@ -109,7 +137,6 @@ func (b *Bot) handleModeratorViewInvites(c tele.Context) error {
 }
 
 // handleModSubscribers показывает подписчиков модератора и их статусы.
-// Использует batch-запрос к Remnawave для получения всех пользователей сразу.
 func (b *Bot) handleModSubscribers(c tele.Context) error {
 	telegramID := c.Sender().ID
 
@@ -126,23 +153,23 @@ func (b *Bot) handleModSubscribers(c tele.Context) error {
 		})
 	}
 
-	// Загружаем всех пользователей из Remnawave одним batch-запросом
 	remUsers, err := b.remnawave.GetAllUsers()
 	if err != nil {
 		slog.Error("Failed to get all users from Remnawave for subscribers list", "error", err, "moderator_id", telegramID)
 		return c.Send("Ошибка получения данных из системы", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 	}
 
-	// Строим lookup-таблицу uuid -> User
 	remByUUID := make(map[string]remnawave.User, len(remUsers))
-	for _, u := range remUsers {
-		remByUUID[u.UUID] = u
+	for _, user := range remUsers {
+		remByUUID[user.UUID] = user
 	}
 
 	sort.Slice(subscribers, func(i, j int) bool { return subscribers[i].TelegramID < subscribers[j].TelegramID })
 
 	now := time.Now().UTC()
-	activeCount := 0
+	trialCount := 0
+	paidCount := 0
+	graceCount := 0
 	expiredCount := 0
 	deletedCount := 0
 
@@ -158,92 +185,163 @@ func (b *Bot) handleModSubscribers(c tele.Context) error {
 
 		remUser, exists := remByUUID[*sub.RemnawaveUUID]
 		if !exists {
-			// Пользователь есть в БД бота, но уже нет в Remnawave
 			deletedCount++
 			fmt.Fprintf(&msg, "❌ ID: <code>%d</code> — удалён\n\n", sub.TelegramID)
 			continue
 		}
 
 		label := formatSubscriberLabel(sub)
-		if remUser.Status == remnawave.StatusExpired || remUser.ExpireAt.Before(now) {
-			expiredCount++
-			daysToKick := int(remUser.ExpireAt.AddDate(0, 0, 3).Sub(now).Hours()/24) + 1
-			if daysToKick < 0 {
-				daysToKick = 0
-			}
-			fmt.Fprintf(&msg, "⏰ %s\n", label)
-			fmt.Fprintf(&msg, "   истёк %s (кик через %d дн.)\n\n", remUser.ExpireAt.Format("02.01.06"), daysToKick)
-			continue
-		}
+		priceLabel := formatPriceLabel(sub.SubscriptionPrice)
 
-		activeCount++
-		daysLeft := int(remUser.ExpireAt.Sub(now).Hours()/24) + 1
-		if daysLeft < 0 {
-			daysLeft = 0
+		switch b.describeSubscriberStatus(sub.TelegramID, remUser, now) {
+		case "trial":
+			trialCount++
+			fmt.Fprintf(&msg, "⏳ %s — триал\n", label)
+			fmt.Fprintf(&msg, "   до %s (осталось %d дн.)\n", remUser.ExpireAt.Format("02.01.06"), daysUntil(remUser.ExpireAt, now))
+			fmt.Fprintf(&msg, "   цена: %s\n\n", priceLabel)
+		case "grace":
+			graceCount++
+			fmt.Fprintf(&msg, "⚠️ %s — grace period\n", label)
+			fmt.Fprintf(&msg, "   VPN деактивирован (кик через %d дн.)\n", daysUntil(remUser.ExpireAt.Add(72*time.Hour), now))
+			fmt.Fprintf(&msg, "   цена: %s\n\n", priceLabel)
+		case "expired":
+			expiredCount++
+			fmt.Fprintf(&msg, "⏰ %s — истёк\n", label)
+			fmt.Fprintf(&msg, "   истёк %s (кик через %d дн.)\n", remUser.ExpireAt.Format("02.01.06"), daysUntil(remUser.ExpireAt.Add(72*time.Hour), now))
+			fmt.Fprintf(&msg, "   цена: %s\n\n", priceLabel)
+		default:
+			paidCount++
+			fmt.Fprintf(&msg, "💳 %s — оплачено\n", label)
+			fmt.Fprintf(&msg, "   до %s (осталось %d дн.)\n", remUser.ExpireAt.Format("02.01.06"), daysUntil(remUser.ExpireAt, now))
+			fmt.Fprintf(&msg, "   цена: %s\n\n", priceLabel)
 		}
-		fmt.Fprintf(&msg, "✅ %s\n", label)
-		fmt.Fprintf(&msg, "   до %s (осталось %d дн.)\n\n", remUser.ExpireAt.Format("02.01.06"), daysLeft)
 	}
 
 	msg.WriteString("───\n")
-	fmt.Fprintf(&msg, "✅ Активных: %d │ ⏰ Истекших: %d │ ❌ Удалённых: %d", activeCount, expiredCount, deletedCount)
+	fmt.Fprintf(
+		&msg,
+		"💳 Платящих: %d │ ⏳ Триал: %d │ ⚠️ Grace: %d │ ⏰ Истекших: %d │ ❌ Удалённых: %d",
+		paidCount,
+		trialCount,
+		graceCount,
+		expiredCount,
+		deletedCount,
+	)
+	b.userStates.Set(telegramID, StateModSubscribers)
 
 	return c.Send(msg.String(), &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: ModeratorSubscribersKeyboard(),
+	})
+}
+
+// handleModeratorEarnings показывает финансовую сводку модератора.
+func (b *Bot) handleModeratorEarnings(c tele.Context) error {
+	moderatorID := c.Sender().ID
+	now := time.Now().UTC()
+
+	monthStats, err := b.db.GetModeratorEarningsByMonth(moderatorID, now.Year(), int(now.Month()))
+	if err != nil {
+		slog.Error("Failed to load moderator earnings by month", "error", err, "moderator_id", moderatorID)
+		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+	}
+
+	totalEarnings, err := b.db.GetModeratorTotalEarnings(moderatorID)
+	if err != nil {
+		slog.Error("Failed to load moderator total earnings", "error", err, "moderator_id", moderatorID)
+		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+	}
+
+	subscribers, err := b.db.GetSubscribersByModerator(moderatorID)
+	if err != nil {
+		slog.Error("Failed to load subscribers for moderator earnings", "error", err, "moderator_id", moderatorID)
+		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+	}
+
+	remUsers, err := b.remnawave.GetAllUsers()
+	if err != nil {
+		slog.Error("Failed to load Remnawave users for moderator earnings", "error", err, "moderator_id", moderatorID)
+		return c.Send("Ошибка получения статистики из панели", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+	}
+
+	remByTelegramID := make(map[int64]remnawave.User, len(remUsers))
+	for _, user := range remUsers {
+		if user.TelegramID == nil || *user.TelegramID == 0 {
+			continue
+		}
+		remByTelegramID[*user.TelegramID] = user
+	}
+
+	currentState := b.summarizeModeratorSubscriberStates(subscribers, remByTelegramID, now)
+
+	sharePercent := monthStats.SharePercent
+	if sharePercent == 0 {
+		sharePercent = calculateSharePercent(currentState.Paying)
+	}
+
+	msg := fmt.Sprintf(
+		"<b>💰 Мой заработок</b>\n\n"+
+			"💰 <b>Финансы за %s %d</b>\n"+
+			"├ Платежей: %d\n"+
+			"├ Ваша доля: %d%%\n"+
+			"├ Сумма платежей: %d руб\n"+
+			"├ Комиссии Platega: -%d руб\n"+
+			"├ Комиссия вывода: -%d руб\n"+
+			"├ Чистый доход: %d руб\n"+
+			"└ Заработок за период: %d руб\n\n"+
+			"💰 <b>За всё время</b>\n"+
+			"└ Заработано: %d руб\n\n"+
+			"👥 <b>Текущее состояние подписчиков</b>\n"+
+			"└ 💳 Платящих: %d │ ⏳ Триал: %d │ ⚠️ Grace: %d │ ⏰ Истекших: %d │ ❌ Удалённых: %d",
+		monthNameRu(now.Month()),
+		now.Year(),
+		monthStats.TotalPayments,
+		sharePercent,
+		monthStats.GrossAmount,
+		monthStats.TotalPlategaFee,
+		monthStats.TotalWithdrawal,
+		monthStats.TotalNetAmount,
+		monthStats.TotalShareAmount,
+		totalEarnings,
+		currentState.Paying,
+		currentState.Trial,
+		currentState.Grace,
+		currentState.Expired,
+		currentState.Deleted,
+	)
+
+	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: ModeratorMenuKeyboard(),
 	})
 }
 
-// handleModExtend запускает диалог продления подписки.
-func (b *Bot) handleModExtend(c tele.Context) error {
+// handleModChangePriceRequest запускает диалог изменения цены.
+func (b *Bot) handleModChangePriceRequest(c tele.Context) error {
 	telegramID := c.Sender().ID
-	subscribers, err := b.db.GetSubscribersByModerator(telegramID)
-	if err != nil {
-		slog.Error("Failed to load moderator subscribers for extend", "error", err, "moderator_id", telegramID)
-		return c.Send("Ошибка получения подписчиков", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
-	}
-	if len(subscribers) == 0 {
-		return c.Send("👥 У вас пока нет подписчиков для продления.", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
-	}
-
-	sort.Slice(subscribers, func(i, j int) bool { return subscribers[i].TelegramID < subscribers[j].TelegramID })
-
-	var msg strings.Builder
-	msg.WriteString("<b>⏳ Продление подписки</b>\n\n")
-	msg.WriteString("Подписчики:\n")
-	for _, sub := range subscribers {
-		if sub.RemnawaveUUID == nil {
-			fmt.Fprintf(&msg, "❌ <code>%d</code> — удалён\n", sub.TelegramID)
-			continue
-		}
-		fmt.Fprintf(&msg, "• %s\n", formatSubscriberLabel(sub))
-	}
-	msg.WriteString("\nВведите telegram_id подписчика:")
-
-	b.userStates.Set(telegramID, StateWaitModExtendID)
-	b.clearModExtendSession(telegramID)
-
-	return c.Send(msg.String(), &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
+	b.userStates.Set(telegramID, StateWaitModChangePriceID)
+	b.clearModChangePriceSession(telegramID)
+	return c.Send("Введите telegram_id подписчика:", &tele.SendOptions{
 		ReplyMarkup: CancelKeyboard(),
 	})
 }
 
-func (b *Bot) processModExtendID(c tele.Context, text string) error {
+// processModChangePriceID выбирает подписчика для изменения цены.
+func (b *Bot) processModChangePriceID(c tele.Context, text string) error {
 	moderatorID := c.Sender().ID
 	targetID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
 	if err != nil {
-		return c.Send("❌ Неверный telegram_id. Введите число.", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+		return c.Send("❌ Введите корректный telegram_id.", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
 	}
 
 	owned, err := b.db.IsSubscriberOfModerator(moderatorID, targetID)
 	if err != nil {
 		slog.Error("Failed to verify subscriber ownership", "error", err, "moderator_id", moderatorID, "target_id", targetID)
 		b.userStates.Delete(moderatorID)
-		return c.Send("Ошибка проверки подписчика", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+		return c.Send("Ошибка проверки подписчика", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
 	}
 	if !owned {
-		return c.Send("❌ Можно продлевать только своих подписчиков.", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+		return c.Send("❌ Можно менять цену только своим подписчикам.", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
 	}
 
 	dbUser, err := b.db.GetUserByTelegramID(targetID)
@@ -253,87 +351,111 @@ func (b *Bot) processModExtendID(c tele.Context, text string) error {
 	}
 	if dbUser == nil {
 		b.userStates.Delete(moderatorID)
-		return c.Send("❌ Пользователь уже удалён из системы.", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+		return c.Send("❌ Пользователь удалён из системы.", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
+	}
+
+	hasPaid, err := b.db.HasConfirmedPayment(targetID)
+	if err != nil {
+		slog.Error("Failed to check confirmed payments", "error", err, "target_id", targetID)
+		return c.Send("Ошибка проверки подписчика", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+	}
+	if hasPaid {
+		b.userStates.Delete(moderatorID)
+		return c.Send(
+			"❌ Нельзя изменить цену — клиент уже оплатил подписку. Обратитесь к администратору.",
+			&tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()},
+		)
 	}
 
 	remUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
 	if err != nil {
-		if strings.Contains(err.Error(), "API error 404") {
-			b.userStates.Delete(moderatorID)
-			return c.Send("❌ Пользователь уже удалён из системы.", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
-		}
-		slog.Error("Failed to get user from Remnawave", "error", err, "target_id", targetID)
-		return c.Send("Ошибка получения статуса пользователя", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+		slog.Error("Failed to load subscriber from Remnawave", "error", err, "target_id", targetID)
+		return c.Send("Ошибка проверки подписчика", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
 	}
 
-	newExpireAt, err := remnawave.CalculateExtendedExpireAt(remUser.ExpireAt, time.Now().UTC(), 30)
-	if err != nil {
+	switch b.describeSubscriberStatus(targetID, *remUser, time.Now().UTC()) {
+	case "trial":
+		// Только trial может менять цену.
+	default:
 		b.userStates.Delete(moderatorID)
-		return c.Send(err.Error(), &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+		return c.Send(
+			"❌ Нельзя изменить цену — клиент уже не на пробном периоде. Обратитесь к администратору.",
+			&tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()},
+		)
 	}
 
-	label := dbUser.Username
-	if label == "" {
-		label = fmt.Sprintf("%d", targetID)
-	} else {
-		label = "@" + label
+	currentPrice := 0
+	if dbUser.SubscriptionPrice != nil {
+		currentPrice = *dbUser.SubscriptionPrice
 	}
 
-	b.setModExtendSession(moderatorID, modExtendSession{
+	label := formatAdminSwitchTargetLabel(dbUser)
+	b.setModChangePriceSession(moderatorID, modChangePriceSession{
 		SubscriberTelegramID: targetID,
 		SubscriberLabel:      label,
-		UserUUID:             dbUser.RemnawaveUUID,
-		NewExpireAt:          newExpireAt,
+		CurrentPrice:         currentPrice,
 	})
-	b.userStates.Set(moderatorID, StateWaitModExtendConfirm)
+	b.userStates.Set(moderatorID, StateWaitModChangePriceValue)
 
 	return c.Send(
 		fmt.Sprintf(
-			"Продлить подписку %s на 30 дней? (до %s).\nОтправьте 'да' для подтверждения или 'нет' для отмены.",
+			"Текущая цена для %s: %d руб/мес\nВведите новую цену (минимум %d руб):",
 			label,
-			newExpireAt.Format("02.01.06"),
+			currentPrice,
+			b.minSubscriptionPrice(),
 		),
-		&tele.SendOptions{ReplyMarkup: CancelKeyboard()},
+		&tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: CancelKeyboard(),
+		},
 	)
 }
 
-func (b *Bot) processModExtendConfirm(c tele.Context, text string) error {
+// processModChangePriceValue завершает изменение цены.
+func (b *Bot) processModChangePriceValue(c tele.Context, text string) error {
 	moderatorID := c.Sender().ID
-	answer := strings.ToLower(strings.TrimSpace(text))
-
-	switch answer {
-	case "нет":
-		b.userStates.Delete(moderatorID)
-		b.clearModExtendSession(moderatorID)
-		return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
-	case "да":
-		// Продолжаем.
-	default:
-		return c.Send("Ответьте 'да' или 'нет'.", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+	newPrice, err := strconv.Atoi(strings.TrimSpace(text))
+	if err != nil {
+		return c.Send("❌ Введите число.", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+	}
+	if newPrice < b.minSubscriptionPrice() {
+		return c.Send(
+			fmt.Sprintf("❌ Минимальная цена: %d руб.", b.minSubscriptionPrice()),
+			&tele.SendOptions{ReplyMarkup: CancelKeyboard()},
+		)
 	}
 
-	session, ok := b.getModExtendSession(moderatorID)
+	session, ok := b.getModChangePriceSession(moderatorID)
 	if !ok {
 		b.userStates.Delete(moderatorID)
-		return c.Send("Сессия продления потеряна. Начните заново.", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+		return c.Send("Сессия изменения цены потеряна. Начните заново.", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
 	}
 
-	if err := b.remnawave.ExtendUserSubscription(session.UserUUID, 30); err != nil {
+	if err := b.db.UpdateSubscriptionPrice(session.SubscriberTelegramID, newPrice); err != nil {
+		slog.Error("Failed to update subscription price", "error", err, "telegram_id", session.SubscriberTelegramID)
 		b.userStates.Delete(moderatorID)
-		b.clearModExtendSession(moderatorID)
-		return c.Send(err.Error(), &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+		b.clearModChangePriceSession(moderatorID)
+		return c.Send("Ошибка изменения цены", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
 	}
 
-	if err := b.db.ClearNotifications(session.SubscriberTelegramID); err != nil {
-		slog.Error("Failed to clear notification markers after extension", "error", err, "telegram_id", session.SubscriberTelegramID)
+	if err := b.db.UpdateInviteSubscriptionPrice(session.SubscriberTelegramID, newPrice); err != nil {
+		slog.Error("Failed to update invite subscription price", "error", err, "telegram_id", session.SubscriberTelegramID)
 	}
 
 	b.userStates.Delete(moderatorID)
-	b.clearModExtendSession(moderatorID)
+	b.clearModChangePriceSession(moderatorID)
 
 	return c.Send(
-		fmt.Sprintf("✅ Подписка %s продлена до %s.", session.SubscriberLabel, session.NewExpireAt.Format("02.01.06")),
-		&tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()},
+		fmt.Sprintf(
+			"✅ Цена подписки для %s изменена: %d → %d руб/мес",
+			session.SubscriberLabel,
+			session.CurrentPrice,
+			newPrice,
+		),
+		&tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: ModeratorSubscribersKeyboard(),
+		},
 	)
 }
 
@@ -349,29 +471,29 @@ func formatSubscriberLabel(sub database.Subscriber) string {
 	return formatUserLabel(firstName, username, sub.TelegramID)
 }
 
-func (b *Bot) setModExtendSession(moderatorID int64, session modExtendSession) {
-	b.modExtendMu.Lock()
-	defer b.modExtendMu.Unlock()
-	if b.modExtendData == nil {
-		b.modExtendData = make(map[int64]modExtendSession)
+func (b *Bot) setModChangePriceSession(moderatorID int64, session modChangePriceSession) {
+	b.modChangePriceMu.Lock()
+	defer b.modChangePriceMu.Unlock()
+	if b.modChangePriceData == nil {
+		b.modChangePriceData = make(map[int64]modChangePriceSession)
 	}
-	b.modExtendData[moderatorID] = session
+	b.modChangePriceData[moderatorID] = session
 }
 
-func (b *Bot) getModExtendSession(moderatorID int64) (modExtendSession, bool) {
-	b.modExtendMu.RLock()
-	defer b.modExtendMu.RUnlock()
-	session, ok := b.modExtendData[moderatorID]
+func (b *Bot) getModChangePriceSession(moderatorID int64) (modChangePriceSession, bool) {
+	b.modChangePriceMu.RLock()
+	defer b.modChangePriceMu.RUnlock()
+	session, ok := b.modChangePriceData[moderatorID]
 	return session, ok
 }
 
-func (b *Bot) clearModExtendSession(moderatorID int64) {
-	b.modExtendMu.Lock()
-	defer b.modExtendMu.Unlock()
-	delete(b.modExtendData, moderatorID)
+func (b *Bot) clearModChangePriceSession(moderatorID int64) {
+	b.modChangePriceMu.Lock()
+	defer b.modChangePriceMu.Unlock()
+	delete(b.modChangePriceData, moderatorID)
 }
 
-// handleModeratorDeleteInviteRequest запрашивает код для удаления
+// handleModeratorDeleteInviteRequest запрашивает код для удаления.
 func (b *Bot) handleModeratorDeleteInviteRequest(c tele.Context) error {
 	b.userStates.Set(c.Sender().ID, StateWaitModDeleteInvite)
 	return c.Send("<b>🗑 Удаление приглашения</b>\n\nВведите код для удаления:", &tele.SendOptions{
@@ -380,7 +502,7 @@ func (b *Bot) handleModeratorDeleteInviteRequest(c tele.Context) error {
 	})
 }
 
-// processModeratorDeleteInvite обрабатывает удаление инвайта модератором
+// processModeratorDeleteInvite обрабатывает удаление инвайта модератором.
 func (b *Bot) processModeratorDeleteInvite(c tele.Context, code string) error {
 	b.userStates.Delete(c.Sender().ID)
 	code = strings.TrimSpace(code)
@@ -402,18 +524,18 @@ func (b *Bot) processModeratorDeleteInvite(c tele.Context, code string) error {
 	})
 }
 
-// handleModeratorBack возвращает модератора в пользовательское меню
+// handleModeratorBack возвращает модератора в пользовательское меню.
 func (b *Bot) handleModeratorBack(c tele.Context) error {
 	b.userStates.Delete(c.Sender().ID)
+	b.clearModChangePriceSession(c.Sender().ID)
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboardModerator(),
+		ReplyMarkup: b.userKeyboard(c.Sender().ID),
 	})
 }
 
-// cascadeDeleteModerator удаляет все неиспользованные инвайты модератора и снимает роль
+// cascadeDeleteModerator удаляет все неиспользованные инвайты модератора и снимает роль.
 func (b *Bot) cascadeDeleteModerator(telegramID int64) {
-	// Удаляем неиспользованные инвайты
 	count, err := b.db.DeleteUnusedInvitesByCreator(telegramID)
 	if err != nil {
 		slog.Error("Failed to delete moderator invites", "error", err, "telegram_id", telegramID)
@@ -421,8 +543,107 @@ func (b *Bot) cascadeDeleteModerator(telegramID int64) {
 		slog.Info("Deleted unused invites of moderator", "count", count, "telegram_id", telegramID)
 	}
 
-	// Удаляем из таблицы модераторов
 	if err := b.db.RemoveModerator(telegramID); err != nil {
 		slog.Error("Failed to remove moderator", "error", err, "telegram_id", telegramID)
+	}
+}
+
+func (b *Bot) minSubscriptionPrice() int {
+	if b.config != nil && b.config.MinSubscriptionPrice > 0 {
+		return b.config.MinSubscriptionPrice
+	}
+	return 400
+}
+
+func (b *Bot) describeSubscriberStatus(telegramID int64, remUser remnawave.User, now time.Time) string {
+	if remUser.Status == remnawave.StatusDisabled && !remUser.ExpireAt.After(now) {
+		return "grace"
+	}
+	if b.isTrialUser(telegramID) {
+		return "trial"
+	}
+	if remUser.Status == remnawave.StatusExpired || !remUser.ExpireAt.After(now) {
+		return "expired"
+	}
+	return "paid"
+}
+
+func (b *Bot) summarizeModeratorSubscriberStates(
+	subscribers []database.Subscriber,
+	byTelegramID map[int64]remnawave.User,
+	now time.Time,
+) moderatorSubscriberStateSummary {
+	var summary moderatorSubscriberStateSummary
+
+	for _, sub := range subscribers {
+		if sub.RemnawaveUUID == nil {
+			summary.Deleted++
+			continue
+		}
+
+		remUser, ok := byTelegramID[sub.TelegramID]
+		if !ok {
+			summary.Deleted++
+			continue
+		}
+
+		switch b.describeSubscriberStatus(sub.TelegramID, remUser, now) {
+		case "trial":
+			summary.Trial++
+		case "grace":
+			summary.Grace++
+		case "expired":
+			summary.Expired++
+		default:
+			summary.Paying++
+		}
+	}
+
+	return summary
+}
+
+func formatPriceLabel(price *int) string {
+	if price == nil {
+		return "не установлена"
+	}
+	return fmt.Sprintf("%d руб/мес", *price)
+}
+
+func daysUntil(target, now time.Time) int {
+	days := int(target.Sub(now).Hours()/24) + 1
+	if days < 0 {
+		return 0
+	}
+	return days
+}
+
+func monthNameRu(month time.Month) string {
+	switch month {
+	case time.January:
+		return "январь"
+	case time.February:
+		return "февраль"
+	case time.March:
+		return "март"
+	case time.April:
+		return "апрель"
+	case time.May:
+		return "май"
+	case time.June:
+		return "июнь"
+	case time.July:
+		return "июль"
+	case time.August:
+		return "август"
+	case time.September:
+		return "сентябрь"
+	case time.October:
+		return "октябрь"
+	case time.November:
+		return "ноябрь"
+	case time.December:
+		return "декабрь"
+	default:
+		return ""
 	}
 }
