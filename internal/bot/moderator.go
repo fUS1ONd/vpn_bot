@@ -407,7 +407,7 @@ func (b *Bot) handleModeratorBack(c tele.Context) error {
 	b.userStates.Delete(c.Sender().ID)
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: UserMenuKeyboardModerator(),
+		ReplyMarkup: b.userKeyboard(c.Sender().ID),
 	})
 }
 

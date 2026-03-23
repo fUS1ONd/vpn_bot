@@ -190,6 +190,33 @@ func (b *Bot) handleStart(c tele.Context) error {
 	// Актуализируем username и first_name в БД и Remnawave
 	b.syncUserInfo(c)
 
+	// Проверяем grace period — показываем тревожный экран
+	remUser, err := b.remnawave.GetUserByTelegramID(telegramID)
+	if err == nil && remUser != nil {
+		subType := determineSubscriptionType(remUser, b.isTrialUser(telegramID))
+		if subType == subTypeGrace {
+			graceDeadline := remUser.ExpireAt.Add(72 * time.Hour)
+			remaining := time.Until(graceDeadline)
+			var remainStr string
+			days := int(remaining.Hours() / 24)
+			if days > 0 {
+				remainStr = fmt.Sprintf("%d дн.", days)
+			} else {
+				hours := int(remaining.Hours())
+				if hours > 0 {
+					remainStr = fmt.Sprintf("%d ч.", hours)
+				} else {
+					remainStr = "менее часа"
+				}
+			}
+			msg := fmt.Sprintf(MsgGraceWarning, remainStr, graceDeadline.Format("02.01.2006"))
+			return c.Send(msg, &tele.SendOptions{
+				ParseMode:   tele.ModeHTML,
+				ReplyMarkup: b.userKeyboard(telegramID),
+			})
+		}
+	}
+
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: b.userKeyboard(telegramID),
@@ -201,6 +228,11 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	telegramID := c.Sender().ID
 	state := b.userStates.Get(telegramID)
 	text := c.Text()
+
+	if isPaymentFlowState(state) && isMenuNavigationButton(text) {
+		b.userStates.Delete(telegramID)
+		state = StateNone
+	}
 
 	// Обработка состояний
 	switch state {
@@ -299,6 +331,29 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processRemoveModerator(c, text)
 		}
 
+	case StateWaitPaymentMethod:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			return c.Send("Отменено.", &tele.SendOptions{ReplyMarkup: b.userKeyboard(telegramID)})
+		}
+		if method, ok := paymentMethodFromButton(text); ok {
+			return b.handlePaymentMethodSelected(c, method)
+		}
+		return c.Send("Выберите способ оплаты из меню:", &tele.SendOptions{ReplyMarkup: PaymentMethodKeyboard()})
+
+	case StateWaitPaymentResult:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			return c.Send("Возврат в меню. Платёж не отменён — он протухнет автоматически.", &tele.SendOptions{
+				ReplyMarkup: b.userKeyboard(telegramID),
+			})
+		}
+		if text == BtnCheckPayment {
+			return b.handleCheckPayment(c)
+		}
+		return c.Send("Нажмите \"🔄 Проверить оплату\" или \"🚫 Отмена\".", &tele.SendOptions{
+			ReplyMarkup: PaymentWaitKeyboard(),
+		})
 	}
 
 	// Админ-кнопки
@@ -361,10 +416,10 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	switch text {
 	case BtnStatus:
 		return b.handleStatus(c)
-	case BtnConnect:
-		return b.handleConnect(c)
-	case BtnDonate:
-		return b.handleDonate(c)
+	case BtnPay, BtnRenew:
+		return b.handlePayButton(c)
+	case BtnCheckPayment:
+		return b.handleCheckPayment(c)
 	case BtnInfo:
 		return b.handleInfo(c)
 	case BtnServers:
@@ -412,7 +467,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 
 	expireAt := time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC)
 	if invite.ExpireDays != nil {
-		expireAt = time.Now().UTC().AddDate(0, 0, *invite.ExpireDays)
+		expireAt = time.Now().UTC().Add(72 * time.Hour)
 	}
 
 	// Определяем лимит трафика: триал получает ограничение, админский инвайт — безлимит
@@ -429,8 +484,19 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		return c.Send("Ошибка создания аккаунта. Попробуйте позже или обратитесь к администратору.")
 	}
 
+	// Определяем subscription_price и moderator_id из инвайта
+	var subscriptionPrice *int
+	var moderatorID *int64
+	if invite.SubscriptionPrice != nil {
+		subscriptionPrice = invite.SubscriptionPrice
+	}
+	if invite.ExpireDays != nil && b.isModerator(invite.CreatedBy) {
+		// Модераторский инвайт — ставим created_by как moderator_id
+		moderatorID = &invite.CreatedBy
+	}
+
 	// Сохраняем связку в БД
-	_, err = b.db.CreateUser(telegramID, username, c.Sender().FirstName, remnawaveUser.UUID, nil, nil)
+	_, err = b.db.CreateUser(telegramID, username, c.Sender().FirstName, remnawaveUser.UUID, subscriptionPrice, moderatorID)
 	if err != nil {
 		slog.Error("Failed to create user in DB", "error", err)
 		// Откатываем: удаляем из Remnawave и освобождаем инвайт
@@ -502,42 +568,10 @@ func (b *Bot) handleStatus(c tele.Context) error {
 		return c.Send("Ошибка получения статуса. Попробуйте позже.")
 	}
 
-	msg := FormatUserStatus(remnawaveUser)
+	msg := FormatUserStatus(remnawaveUser, user, b.isTrialUser(telegramID))
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: b.userKeyboard(telegramID),
-	})
-}
-
-// handleConnect показывает ссылку подключения
-func (b *Bot) handleConnect(c tele.Context) error {
-	telegramID := c.Sender().ID
-
-	user, err := b.db.GetUserByTelegramID(telegramID)
-	if err != nil || user == nil {
-		return c.Send(MsgNotRegistered, &tele.SendOptions{ParseMode: tele.ModeHTML})
-	}
-
-	// Получаем данные из Remnawave
-	remnawaveUser, err := b.remnawave.GetUser(user.RemnawaveUUID)
-	if err != nil {
-		slog.Error("Failed to get user from Remnawave", "error", err)
-		return c.Send("Ошибка получения ссылки. Попробуйте позже.")
-	}
-
-	msg := fmt.Sprintf(MsgSubscriptionLink, remnawaveUser.SubscriptionURL)
-	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: b.userKeyboard(telegramID),
-	})
-}
-
-// handleDonate показывает информацию о донате
-func (b *Bot) handleDonate(c tele.Context) error {
-	msg := fmt.Sprintf(MsgDonate, b.config.DonateText)
-	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: b.userKeyboard(c.Sender().ID),
 	})
 }
 
@@ -623,12 +657,44 @@ func (b *Bot) handleInstructionDesktop(c tele.Context) error {
 	})
 }
 
-// userKeyboard возвращает правильную клавиатуру для пользователя (с учётом роли модератора)
+// userKeyboard возвращает правильную клавиатуру для пользователя
+// с динамической кнопкой оплаты и учётом роли модератора
 func (b *Bot) userKeyboard(telegramID int64) *tele.ReplyMarkup {
-	if b.isModerator(telegramID) {
-		return UserMenuKeyboardModerator()
+	isMod := b.isModerator(telegramID)
+
+	// Определяем, показывать ли кнопку оплаты и какой текст
+	user, err := b.db.GetUserByTelegramID(telegramID)
+	if err != nil || user == nil {
+		return UserMenuKeyboardDynamic("", false, isMod)
 	}
-	return UserMenuKeyboard()
+
+	// Нет цены — кнопка оплаты скрыта
+	if user.SubscriptionPrice == nil {
+		return UserMenuKeyboardDynamic("", false, isMod)
+	}
+
+	// Нет Platega — кнопка оплаты скрыта
+	if b.platega == nil {
+		return UserMenuKeyboardDynamic("", false, isMod)
+	}
+
+	// Проверяем тип подписки для определения текста кнопки
+	remUser, err := b.remnawave.GetUserByTelegramID(telegramID)
+	if err != nil || remUser == nil {
+		return UserMenuKeyboardDynamic(BtnPay, true, isMod)
+	}
+
+	// Бесконечная подписка — кнопка скрыта (если не админ)
+	if remUser.ExpireAt.Year() >= 2099 && telegramID != b.config.AdminID {
+		return UserMenuKeyboardDynamic("", false, isMod)
+	}
+
+	// Триал или grace → "Оплатить", оплаченная → "Продлить"
+	if b.isTrialUser(telegramID) || remUser.Status == remnawave.StatusDisabled {
+		return UserMenuKeyboardDynamic(BtnPay, true, isMod)
+	}
+
+	return UserMenuKeyboardDynamic(BtnRenew, true, isMod)
 }
 
 // getBotUsername возвращает username бота для формирования deep link
@@ -675,5 +741,49 @@ func (b *Bot) syncUserInfo(c tele.Context) {
 		if err := b.remnawave.UpdateUsername(user.RemnawaveUUID, usernameForRemnawave); err != nil {
 			slog.Error("Failed to sync username to Remnawave", "error", err, "telegram_id", telegramID)
 		}
+	}
+}
+
+func isPaymentFlowState(state string) bool {
+	return state == StateWaitPaymentMethod || state == StateWaitPaymentResult
+}
+
+func isMenuNavigationButton(text string) bool {
+	switch text {
+	case BtnStatus,
+		BtnPay,
+		BtnRenew,
+		BtnInfo,
+		BtnServers,
+		BtnInstructions,
+		BtnBack,
+		BtnInstIOS,
+		BtnInstAndroid,
+		BtnInstDesktop,
+		BtnModInvites,
+		BtnModCreate,
+		BtnModView,
+		BtnModSubscribers,
+		BtnModExtend,
+		BtnModDelete,
+		BtnModBack,
+		BtnAdminManage,
+		BtnAdminBroadcast,
+		BtnAdminUserMode,
+		BtnAdminBack,
+		BtnAdminCreateInvite,
+		BtnAdminViewInvites,
+		BtnAdminDeleteInvite,
+		BtnAdminBanUser,
+		BtnAdminSwitchSubscription,
+		BtnBroadcastActive,
+		BtnAdminModerators,
+		BtnAdminAddModerator,
+		BtnAdminListMods,
+		BtnAdminModStats,
+		BtnAdminRemoveMod:
+		return true
+	default:
+		return false
 	}
 }

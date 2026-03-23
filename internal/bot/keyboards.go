@@ -8,12 +8,18 @@ import (
 const (
 	// Кнопки пользователя
 	BtnStatus       = "👤 Мой статус"
-	BtnConnect      = "🌐 Подключить"
-	BtnDonate       = "💸 Поддержать"
-	BtnInfo         = "Информация"
+	BtnInfo         = "ℹ️ Информация"
 	BtnInstructions = "📚 Инструкции"
 	BtnBack         = "🔙 Назад"
 	BtnCancel       = "🚫 Отмена"
+
+	// Кнопки оплаты
+	BtnPay          = "💳 Оплатить подписку"
+	BtnRenew        = "💳 Продлить подписку"
+	BtnPaySBP       = "🏦 СБП"
+	BtnPayCard      = "💳 Карта"
+	BtnPayCrypto    = "🪙 Крипта"
+	BtnCheckPayment = "🔄 Проверить оплату"
 
 	// Кнопки инструкций
 	BtnInstIOS     = "🍎 iOS"
@@ -57,14 +63,24 @@ const (
 	BtnAdminRemoveMod    = "➖ Снять модератора"
 )
 
-// UserMenuKeyboard возвращает главное меню пользователя
-func UserMenuKeyboard() *tele.ReplyMarkup {
+// UserMenuKeyboardDynamic строит главное меню с динамической кнопкой оплаты.
+// payButtonText — текст кнопки ("Оплатить" / "Продлить"), showPayButton — показывать ли,
+// isModerator — добавляет кнопку "Приглашения".
+func UserMenuKeyboardDynamic(payButtonText string, showPayButton bool, isModerator bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
-		menu.Row(menu.Text(BtnStatus), menu.Text(BtnConnect)),
-		menu.Row(menu.Text(BtnServers), menu.Text(BtnInstructions)),
-		menu.Row(menu.Text(BtnDonate), menu.Text(BtnInfo)),
-	)
+	rows := []tele.Row{
+		menu.Row(menu.Text(BtnStatus)),
+	}
+	if showPayButton && payButtonText != "" {
+		rows = append(rows, menu.Row(menu.Text(payButtonText), menu.Text(BtnServers)))
+	} else {
+		rows = append(rows, menu.Row(menu.Text(BtnServers)))
+	}
+	rows = append(rows, menu.Row(menu.Text(BtnInstructions), menu.Text(BtnInfo)))
+	if isModerator {
+		rows = append(rows, menu.Row(menu.Text(BtnModInvites)))
+	}
+	menu.Reply(rows...)
 	return menu
 }
 
@@ -111,18 +127,6 @@ func AdminBroadcastKeyboard() *tele.ReplyMarkup {
 	return menu
 }
 
-// UserMenuKeyboardModerator возвращает меню пользователя с кнопкой приглашений (для модераторов)
-func UserMenuKeyboardModerator() *tele.ReplyMarkup {
-	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
-		menu.Row(menu.Text(BtnStatus), menu.Text(BtnConnect)),
-		menu.Row(menu.Text(BtnServers), menu.Text(BtnInstructions)),
-		menu.Row(menu.Text(BtnModInvites)),
-		menu.Row(menu.Text(BtnDonate), menu.Text(BtnInfo)),
-	)
-	return menu
-}
-
 // ModeratorMenuKeyboard возвращает подменю модератора
 func ModeratorMenuKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
@@ -162,6 +166,25 @@ func ConfirmKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
 		menu.Row(menu.Text(BtnConfirmYes), menu.Text(BtnCancel)),
+	)
+	return menu
+}
+
+// PaymentMethodKeyboard возвращает меню выбора способа оплаты
+func PaymentMethodKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnPaySBP), menu.Text(BtnPayCard)),
+		menu.Row(menu.Text(BtnPayCrypto), menu.Text(BtnCancel)),
+	)
+	return menu
+}
+
+// PaymentWaitKeyboard возвращает меню ожидания оплаты
+func PaymentWaitKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnCheckPayment), menu.Text(BtnCancel)),
 	)
 	return menu
 }

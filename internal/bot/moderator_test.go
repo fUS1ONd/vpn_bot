@@ -37,6 +37,7 @@ func setupModeratorTestBot(t *testing.T) (*Bot, *database.DB, int64, int64) {
 		db:         db,
 		config:     cfg,
 		userStates: newStateMap(),
+		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
 	}
 
 	// Создаём пользователя-модератора
@@ -58,7 +59,7 @@ func TestModeratorMenuKeyboard(t *testing.T) {
 
 func TestUserMenuKeyboardForModerator(t *testing.T) {
 	// Для модератора должна быть кнопка "Приглашения"
-	kb := UserMenuKeyboardModerator()
+	kb := UserMenuKeyboardDynamic(BtnRenew, true, true)
 	assert.NotNil(t, kb)
 }
 
@@ -732,7 +733,7 @@ func TestHandleStart_ModeratorGetsModeratorMenu(t *testing.T) {
 	err := b.handleStart(ctx)
 	assert.NoError(t, err)
 
-	// Модератор должен получить UserMenuKeyboardModerator (с кнопкой приглашений)
+	// Модератор должен получить пользовательское меню с кнопкой приглашений.
 	assert.Equal(t, MsgWelcomeBack, ctx.sentMsg)
 
 	// Проверяем что в opts есть клавиатура с кнопкой приглашений

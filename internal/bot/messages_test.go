@@ -2,7 +2,9 @@ package bot
 
 import (
 	"testing"
+	"time"
 
+	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 )
@@ -12,12 +14,13 @@ func TestFormatUserStatusShowsUsedTrafficPerMonthWithoutLimit(t *testing.T) {
 		Status:            remnawave.StatusActive,
 		TrafficLimitBytes: 0,
 		SubscriptionURL:   "vless://example",
+		ExpireAt:          time.Now().UTC().AddDate(0, 0, 10),
 		UserTraffic: &remnawave.Traffic{
 			UsedTrafficBytes: 5 * 1024 * 1024 * 1024,
 		},
 	}
 
-	msg := FormatUserStatus(user)
+	msg := FormatUserStatus(user, nil, false)
 
 	assert.Contains(t, msg, "<b>Трафик за месяц:</b> 5.00 GB")
 	assert.NotContains(t, msg, "<b>Трафик:</b>")
@@ -25,6 +28,23 @@ func TestFormatUserStatusShowsUsedTrafficPerMonthWithoutLimit(t *testing.T) {
 	assert.NotContains(t, msg, "%)")
 	assert.NotContains(t, msg, "<b>Сброс трафика:</b>")
 	assert.Contains(t, msg, "<b>Ссылка подписки:</b>")
+}
+
+func TestFormatUserStatusGraceShowsPaymentWindow(t *testing.T) {
+	price := 400
+	msg := FormatUserStatus(&remnawave.User{
+		Status:            remnawave.StatusDisabled,
+		TrafficLimitBytes: 0,
+		SubscriptionURL:   "vless://example",
+		ExpireAt:          time.Now().UTC().Add(-12 * time.Hour),
+	}, &database.User{
+		SubscriptionPrice: &price,
+	}, false)
+
+	assert.Contains(t, msg, "⚠️ Подписка истекла")
+	assert.Contains(t, msg, "VPN деактивирован")
+	assert.Contains(t, msg, "Цена подписки")
+	assert.Contains(t, msg, "Осталось для оплаты")
 }
 
 func TestMsgAccountCreatedHasNoTrafficLimitDetails(t *testing.T) {
