@@ -145,6 +145,62 @@ func (db *DB) ReconcileOrphanedInvites() (int, error) {
 	return int(rows), nil
 }
 
+// GetRecentOrphanedInvites возвращает свежие claimed-инвайты без локального пользователя.
+// Используется startup-reconcile, который дополнительно сверяет состояние с Remnawave.
+func (db *DB) GetRecentOrphanedInvites() ([]Invite, error) {
+	rows, err := db.conn.Query(`
+		SELECT code, created_by, used_by, used_at, expire_days, subscription_price, kicked_at, created_at
+		FROM invites
+		WHERE used_by IS NOT NULL
+		  AND used_by NOT IN (SELECT telegram_id FROM users)
+		  AND used_at >= datetime('now', '-1 hour')
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query orphaned invites: %w", err)
+	}
+	defer rows.Close()
+
+	var invites []Invite
+	for rows.Next() {
+		var invite Invite
+		var usedBy sql.NullInt64
+		var usedAt sql.NullTime
+		var expireDays sql.NullInt64
+		var subscriptionPrice sql.NullInt64
+		var kickedAt sql.NullTime
+
+		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &subscriptionPrice, &kickedAt, &invite.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan orphaned invite: %w", err)
+		}
+
+		if usedBy.Valid {
+			invite.UsedBy = &usedBy.Int64
+		}
+		if usedAt.Valid {
+			invite.UsedAt = &usedAt.Time
+		}
+		if expireDays.Valid {
+			v := int(expireDays.Int64)
+			invite.ExpireDays = &v
+		}
+		if subscriptionPrice.Valid {
+			v := int(subscriptionPrice.Int64)
+			invite.SubscriptionPrice = &v
+		}
+		if kickedAt.Valid {
+			invite.KickedAt = &kickedAt.Time
+		}
+
+		invites = append(invites, invite)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("orphaned invites rows error: %w", err)
+	}
+
+	return invites, nil
+}
+
 // UnclaimInvite откатывает claim инвайта (если создание пользователя не удалось)
 func (db *DB) UnclaimInvite(code string) error {
 	_, err := db.conn.Exec(

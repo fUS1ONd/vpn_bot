@@ -41,19 +41,22 @@ func main() {
 	}
 	defer db.Close()
 
-	// Откат инвайтов, зависших после краша (claimed но пользователь не создан)
-	if count, err := db.ReconcileOrphanedInvites(); err != nil {
-		slog.Error("Failed to reconcile orphaned invites", "error", err)
-	} else if count > 0 {
-		slog.Warn("Reconciled orphaned invites on startup", "count", count)
-	}
-
 	// Создание клиента Remnawave API
 	remnawaveClient := remnawave.NewClient(
 		cfg.RemnawaveURL,
 		cfg.RemnawaveAPIToken,
 		cfg.RemnawaveSquadUUIDs,
 	)
+
+	// Восстановление регистраций, застрявших после краша между Remnawave и локальной БД.
+	if stats, err := bot.ReconcileOrphanedRegistrations(db, remnawaveClient); err != nil {
+		slog.Error("Failed to reconcile orphaned registrations", "error", err)
+	} else if stats.RestoredUsers > 0 || stats.ReleasedInvites > 0 {
+		slog.Warn("Reconciled orphaned registrations on startup",
+			"restored_users", stats.RestoredUsers,
+			"released_invites", stats.ReleasedInvites,
+		)
+	}
 
 	// Создание и запуск Telegram бота
 	telegramBot, err := bot.New(cfg, db, remnawaveClient)
