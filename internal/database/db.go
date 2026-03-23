@@ -82,13 +82,14 @@ func migrate(conn *sql.DB) error {
 
 		// Таблица инвайтов
 		`CREATE TABLE IF NOT EXISTS invites (
-			code TEXT PRIMARY KEY,
-			created_by INTEGER NOT NULL,
-			used_by INTEGER,
-			used_at TIMESTAMP,
-			expire_days INTEGER,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		)`,
+				code TEXT PRIMARY KEY,
+				created_by INTEGER NOT NULL,
+				used_by INTEGER,
+				used_at TIMESTAMP,
+				expire_days INTEGER,
+				is_trial INTEGER NOT NULL DEFAULT 0,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			)`,
 
 		// Таблица модераторов
 		`CREATE TABLE IF NOT EXISTS moderators (
@@ -174,11 +175,19 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE users ADD COLUMN moderator_id INTEGER`,
 		// Миграция: цена подписки при создании инвайта
 		`ALTER TABLE invites ADD COLUMN subscription_price INTEGER`,
+		// Миграция: неизменяемый исторический флаг trial-инвайта
+		`ALTER TABLE invites ADD COLUMN is_trial INTEGER NOT NULL DEFAULT 0`,
 	}
 
 	for _, m := range alterMigrations {
 		// Игнорируем ошибки ALTER TABLE - колонка может уже существовать
 		conn.Exec(m)
+	}
+
+	// Бэкофилл для старых записей: всё, что изначально было trial (expire_days IS NOT NULL),
+	// должно остаться trial в исторической статистике даже после последующих изменений expire_days.
+	if _, err := conn.Exec(`UPDATE invites SET is_trial = 1 WHERE is_trial = 0 AND expire_days IS NOT NULL`); err != nil {
+		return fmt.Errorf("failed to backfill invites.is_trial: %w", err)
 	}
 
 	return nil

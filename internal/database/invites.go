@@ -45,8 +45,8 @@ func (db *DB) CreateInviteWithExpiry(createdBy int64, expireDays *int) (*Invite,
 	}
 
 	_, err = db.conn.Exec(
-		`INSERT INTO invites (code, created_by, expire_days) VALUES (?, ?, ?)`,
-		code, createdBy, expireDays,
+		`INSERT INTO invites (code, created_by, expire_days, is_trial) VALUES (?, ?, ?, ?)`,
+		code, createdBy, expireDays, boolToSQLiteInt(expireDays != nil),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create invite: %w", err)
@@ -742,7 +742,7 @@ func (db *DB) CreateInviteWithPrice(createdBy int64, expireDays int, price int) 
 		return "", fmt.Errorf("failed to generate invite code: %w", err)
 	}
 	_, err = db.conn.Exec(
-		`INSERT INTO invites (code, created_by, expire_days, subscription_price) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO invites (code, created_by, expire_days, subscription_price, is_trial) VALUES (?, ?, ?, ?, 1)`,
 		code, createdBy, expireDays, price,
 	)
 	if err != nil {
@@ -758,4 +758,11 @@ func generateInviteCode() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+func boolToSQLiteInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }

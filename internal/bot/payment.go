@@ -502,7 +502,7 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 	// Вычисляем время жизни
 	var expiresAt *time.Time
 	if resp.ExpiresIn > 0 {
-		t := time.Now().Add(resp.ExpiresIn)
+		t := time.Now().UTC().Add(resp.ExpiresIn)
 		expiresAt = &t
 	}
 

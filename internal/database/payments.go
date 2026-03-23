@@ -90,7 +90,7 @@ func (db *DB) GetPendingPayment(telegramID int64) (*Payment, error) {
 
 	err := db.conn.QueryRow(
 		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, redirect_url, expires_at, created_at, confirmed_at
-		 FROM payments WHERE telegram_id = ? AND status = 'pending' AND (expires_at IS NULL OR expires_at > datetime('now'))
+		 FROM payments WHERE telegram_id = ? AND status = 'pending' AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
 		 ORDER BY created_at DESC LIMIT 1`, telegramID,
 	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
 
@@ -180,7 +180,7 @@ func (db *DB) ConfirmPayment(id int64) error {
 // ExpireOldPendingPayments помечает протухшие PENDING как expired
 func (db *DB) ExpireOldPendingPayments() (int64, error) {
 	res, err := db.conn.Exec(
-		`UPDATE payments SET status = 'expired' WHERE status = 'pending' AND expires_at <= datetime('now')`,
+		`UPDATE payments SET status = 'expired' WHERE status = 'pending' AND datetime(expires_at) <= datetime('now')`,
 	)
 	if err != nil {
 		return 0, err
@@ -347,7 +347,7 @@ func (db *DB) CountTrialsByMonth(year int, month int) (int, error) {
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	err := db.conn.QueryRow(
-		`SELECT COUNT(*) FROM invites WHERE used_at >= ? AND used_at < ? AND expire_days IS NOT NULL`,
+		`SELECT COUNT(*) FROM invites WHERE used_at >= ? AND used_at < ? AND is_trial = 1`,
 		start, end,
 	).Scan(&count)
 	return count, err

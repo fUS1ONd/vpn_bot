@@ -91,6 +91,43 @@ func TestGetPendingPayment(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+func TestPendingPaymentExpiryHandlesTimezoneAwareExpiresAt(t *testing.T) {
+	dbFile := "test_payments_pending_timezone.db"
+	db, err := New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	expiredAtLocal := time.Now().UTC().
+		Add(-5 * time.Minute).
+		In(time.FixedZone("MSK", 3*60*60)).
+		Format("2006-01-02 15:04:05.999999999-07:00")
+
+	res, err := db.Conn().Exec(
+		`INSERT INTO payments (telegram_id, amount, payment_method, status, expires_at) VALUES (?, ?, ?, 'pending', ?)`,
+		54321, 500, "sbp", expiredAtLocal,
+	)
+	require.NoError(t, err)
+
+	id, err := res.LastInsertId()
+	require.NoError(t, err)
+
+	got, err := db.GetPendingPayment(54321)
+	require.NoError(t, err)
+	assert.Nil(t, got, "просроченный платёж со смещением timezone не должен возвращаться как активный pending")
+
+	expired, err := db.ExpireOldPendingPayments()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), expired, "просроченный платёж со смещением timezone должен протухать")
+
+	stored, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "expired", stored.Status)
+}
+
 func TestGetPaymentByPlategaTxID(t *testing.T) {
 	dbFile := "test_payments_tx.db"
 	db, err := New(dbFile)
@@ -402,6 +439,34 @@ func TestCountFirstPaymentsByMonth_IncludesFinanciallyConfirmedStatuses(t *testi
 	count, err := db.CountFirstPaymentsByMonth(2026, 3)
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
+}
+
+func TestCountTrialsByMonthKeepsHistoricalTrialAfterSwitchToUnlimited(t *testing.T) {
+	dbFile := "test_payments_trials_history.db"
+	db, err := New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	code, err := db.CreateInviteWithPrice(100, 30, 500)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(code, 555))
+
+	usedAt := time.Date(2026, time.March, 5, 12, 0, 0, 0, time.UTC)
+	_, err = db.Conn().Exec(`UPDATE invites SET used_at = ? WHERE code = ?`, usedAt, code)
+	require.NoError(t, err)
+
+	count, err := db.CountTrialsByMonth(2026, 3)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	require.NoError(t, db.UpdateInviteExpireDays(555, nil))
+
+	count, err = db.CountTrialsByMonth(2026, 3)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "исторический trial не должен исчезать из статистики после перевода на бессрочный тариф")
 }
 
 func TestExpireOldPendingPayments(t *testing.T) {
