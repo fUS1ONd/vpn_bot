@@ -108,24 +108,21 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 // processTrialUser обрабатывает триального пользователя.
 // Триал: уведомление за 1 день → кик при expireAt (без grace period).
 func (b *Bot) processTrialUser(telegramID int64, dbUser database.User, expireAt, now time.Time) {
-	expireDay := dayUTC(expireAt)
-	nowDay := dayUTC(now)
-
 	// За 1 день до конца триала
-	if expireDay.Equal(nowDay.AddDate(0, 0, 1)) {
+	if notificationWindow(now, expireAt, 0, 24*time.Hour) {
 		b.sendNotification(telegramID, notificationTrialExpire1d,
-			"⏳ Ваш пробный период заканчивается завтра.\n\nОплатите подписку, чтобы сохранить доступ к VPN.")
+			"⏳ Ваш пробный период заканчивается менее чем через 24 часа.\n\nОплатите подписку, чтобы сохранить доступ к VPN.")
 	}
 
 	// Триал истёк — кик
-	if !expireDay.After(nowDay) {
+	if !now.Before(expireAt) {
 		if b.maintenanceMode {
 			slog.Info("Scheduler: maintenance mode, пропускаем кик триального пользователя", "telegram_id", telegramID)
 			return
 		}
 
 		// Защита: проверяем, не оплатил ли пользователь
-		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt.Add(-24*time.Hour))
+		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt)
 		if err != nil {
 			slog.Error("Scheduler: ошибка проверки оплаты при кике триала", "error", err, "telegram_id", telegramID)
 			return
@@ -144,25 +141,22 @@ func (b *Bot) processTrialUser(telegramID int64, dbUser database.User, expireAt,
 // processPaidUser обрабатывает пользователя с оплаченной подпиской.
 // Уведомления за 3д/1д → disable при expireAt → кик через 72ч grace.
 func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, now time.Time) {
-	expireDay := dayUTC(expireAt)
-	nowDay := dayUTC(now)
-
 	// За 3 дня до конца
-	if expireDay.Equal(nowDay.AddDate(0, 0, 3)) {
+	if notificationWindow(now, expireAt, 48*time.Hour, 72*time.Hour) {
 		b.sendNotification(telegramID, notificationExpire3d,
 			"⏳ Ваша подписка заканчивается через 3 дня.\n\nНажмите \"💳 Продлить подписку\" чтобы продлить доступ.")
 	}
 
 	// За 1 день до конца
-	if expireDay.Equal(nowDay.AddDate(0, 0, 1)) {
+	if notificationWindow(now, expireAt, 0, 24*time.Hour) {
 		b.sendNotification(telegramID, notificationExpire1d,
-			"⚠️ Ваша подписка заканчивается завтра!\n\nПродлите сейчас, чтобы не потерять доступ к VPN.")
+			"⚠️ Ваша подписка заканчивается менее чем через 24 часа.\n\nПродлите сейчас, чтобы не потерять доступ к VPN.")
 	}
 
 	// Подписка истекла — disable + начало grace period
-	if !expireDay.After(nowDay) {
+	if !now.Before(expireAt) {
 		// Защита: проверяем, не оплатил ли пользователь после expireAt
-		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt.Add(-24*time.Hour))
+		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt)
 		if err != nil {
 			slog.Error("Scheduler: ошибка проверки оплаты", "error", err, "telegram_id", telegramID)
 			return
@@ -184,14 +178,14 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 
 	// Grace period кик: expireAt + 72 часа
 	graceDeadline := expireAt.Add(72 * time.Hour)
-	if now.After(graceDeadline) {
+	if !now.Before(graceDeadline) {
 		if b.maintenanceMode {
 			slog.Info("Scheduler: maintenance mode, пропускаем grace kick", "telegram_id", telegramID)
 			return
 		}
 
 		// Защита: проверяем оплату за весь grace period
-		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt.Add(-24*time.Hour))
+		hasPaid, err := b.db.HasConfirmedPaymentSince(telegramID, expireAt)
 		if err != nil {
 			slog.Error("Scheduler: ошибка проверки оплаты перед grace kick", "error", err, "telegram_id", telegramID)
 			return
@@ -351,7 +345,11 @@ func logSchedulerSendError(msgType string, telegramID int64, err error) {
 	slog.Warn("Scheduler failed to send message", "type", msgType, "telegram_id", telegramID, "error", err)
 }
 
-func dayUTC(t time.Time) time.Time {
-	utc := t.UTC()
-	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+func notificationWindow(now, target time.Time, minLeft, maxLeft time.Duration) bool {
+	if !target.After(now) {
+		return false
+	}
+
+	timeLeft := target.Sub(now)
+	return timeLeft > minLeft && timeLeft <= maxLeft
 }
