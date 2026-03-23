@@ -671,6 +671,9 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 	graceCount := 0
 	infiniteCount := 0
 
+	// graceDeadline — граница 72 часа назад для определения grace period
+	graceDeadline := now.Add(-72 * time.Hour)
+
 	for _, user := range dbUsers {
 		remUser, ok := byTelegramID[user.TelegramID]
 		if !ok {
@@ -680,7 +683,9 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 		switch {
 		case remUser.ExpireAt.Year() >= 2099:
 			infiniteCount++
-		case remUser.Status == remnawave.StatusDisabled && !remUser.ExpireAt.After(now):
+		case remUser.Status == remnawave.StatusDisabled &&
+			!remUser.ExpireAt.After(now) &&
+			remUser.ExpireAt.After(graceDeadline):
 			graceCount++
 		case b.isTrialUser(user.TelegramID):
 			trialCount++
