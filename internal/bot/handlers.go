@@ -40,6 +40,8 @@ type Bot struct {
 	modChangePriceData map[int64]modChangePriceSession // pending-данные изменения цены для модератора
 	adminSwitchMu      sync.RWMutex
 	adminSwitchData    map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
+	adminPriceMu       sync.RWMutex
+	adminPriceData     map[int64]adminChangePriceSession // pending-данные изменения цены для админа
 }
 
 // New создаёт нового Telegram бота
@@ -65,6 +67,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		sdConfigsPath:      cfg.SDConfigsPath,
 		modChangePriceData: make(map[int64]modChangePriceSession),
 		adminSwitchData:    make(map[int64]adminSwitchSession),
+		adminPriceData:     make(map[int64]adminChangePriceSession),
 	}
 
 	// Middleware для логирования
@@ -246,7 +249,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitBroadcastActive:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
 		}
 		if b.isAdmin(c) {
 			return b.processBroadcastMessage(c)
@@ -255,7 +258,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitBanUser:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
 		}
 		if b.isAdmin(c) {
 			return b.processBanUser(c, text)
@@ -264,7 +267,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitDeleteInvite:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
 		}
 		if b.isAdmin(c) {
 			return b.processDeleteInvite(c, text)
@@ -288,6 +291,35 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		}
 		if b.isAdmin(c) {
 			return b.processSwitchSubscriptionConfirm(c, text)
+		}
+
+	case StateWaitAdminUserInfo:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processAdminUserInfo(c, text)
+		}
+
+	case StateWaitAdminChangePriceID:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearAdminChangePriceSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processAdminChangePriceID(c, text)
+		}
+
+	case StateWaitAdminChangePriceValue:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			b.clearAdminChangePriceSession(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+		}
+		if b.isAdmin(c) {
+			return b.processAdminChangePriceValue(c, text)
 		}
 
 	case StateWaitModDeleteInvite:
@@ -323,7 +355,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitAddModerator:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
 		}
 		if b.isAdmin(c) {
 			return b.processAddModerator(c, text)
@@ -332,7 +364,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case StateWaitRemoveModerator:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard()})
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
 		}
 		if b.isAdmin(c) {
 			return b.processRemoveModerator(c, text)
@@ -370,6 +402,10 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleAdminManageMenu(c)
 		case BtnAdminBroadcast:
 			return b.handleAdminBroadcastMenu(c)
+		case BtnAdminStats:
+			return b.handleAdminStats(c)
+		case BtnAdminMaintenance, BtnAdminMaintenanceOff:
+			return b.handleAdminMaintenanceToggle(c)
 		case BtnAdminUserMode:
 			return b.handleUserMode(c)
 		case BtnAdminBack:
@@ -384,6 +420,12 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleDeleteInviteRequest(c)
 		case BtnAdminSwitchSubscription:
 			return b.handleSwitchSubscription(c)
+		case BtnAdminSwitchInfinite:
+			return b.handleAdminSwitchInfiniteRequest(c)
+		case BtnAdminChangePrice:
+			return b.handleAdminChangePriceRequest(c)
+		case BtnAdminUserInfo:
+			return b.handleAdminUserInfoRequest(c)
 		case BtnBroadcastActive:
 			return b.handleBroadcastActiveRequest(c)
 		case BtnAdminModerators:
@@ -687,6 +729,11 @@ func (b *Bot) userKeyboard(telegramID int64) *tele.ReplyMarkup {
 		return UserMenuKeyboardDynamic("", false, isMod)
 	}
 
+	// В режиме обслуживания скрываем оплату для всех.
+	if b.maintenanceMode {
+		return UserMenuKeyboardDynamic("", false, isMod)
+	}
+
 	// Проверяем тип подписки для определения текста кнопки
 	remUser, err := b.remnawave.GetUserByTelegramID(telegramID)
 	if err != nil || remUser == nil {
@@ -779,13 +826,18 @@ func isMenuNavigationButton(text string) bool {
 		BtnModBack,
 		BtnAdminManage,
 		BtnAdminBroadcast,
+		BtnAdminStats,
+		BtnAdminMaintenance,
+		BtnAdminMaintenanceOff,
 		BtnAdminUserMode,
 		BtnAdminBack,
 		BtnAdminCreateInvite,
 		BtnAdminViewInvites,
 		BtnAdminDeleteInvite,
 		BtnAdminBanUser,
+		BtnAdminUserInfo,
 		BtnAdminSwitchSubscription,
+		BtnAdminSwitchInfinite,
 		BtnBroadcastActive,
 		BtnAdminModerators,
 		BtnAdminAddModerator,

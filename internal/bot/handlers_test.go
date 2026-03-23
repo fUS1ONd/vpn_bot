@@ -11,6 +11,7 @@ import (
 
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/platega"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,10 +21,11 @@ import (
 // MockContext реализует интерфейс tele.Context для тестов
 type MockContext struct {
 	tele.Context
-	sender  *tele.User
-	message *tele.Message
-	sentMsg any
-	opts    []any
+	sender   *tele.User
+	message  *tele.Message
+	sentMsg  any
+	sentMsgs []any
+	opts     []any
 }
 
 func (c *MockContext) Sender() *tele.User {
@@ -36,6 +38,7 @@ func (c *MockContext) Message() *tele.Message {
 
 func (c *MockContext) Send(what any, opts ...any) error {
 	c.sentMsg = what
+	c.sentMsgs = append(c.sentMsgs, what)
 	c.opts = opts
 	return nil
 }
@@ -197,6 +200,51 @@ func TestHandleStart(t *testing.T) {
 		require.True(t, ok)
 		assert.Contains(t, msg, "заблокирован")
 	})
+}
+
+func TestUserKeyboardHidesPaymentButtonInMaintenanceMode(t *testing.T) {
+	b, db := setupTestBot(t)
+
+	userID := int64(777)
+	price := 500
+	_, err := db.CreateUser(userID, "paid", "Paid", "uuid-paid", &price, nil)
+	require.NoError(t, err)
+
+	b.platega = platega.NewClient("merchant", "secret")
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/777" {
+				payload := `{"response":{"uuid":"uuid-paid","username":"paid","status":"ACTIVE","expireAt":"2026-04-15T00:00:00Z"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
+	})
+
+	kb := b.userKeyboard(userID)
+	var normalButtons []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			normalButtons = append(normalButtons, btn.Text)
+		}
+	}
+	assert.Contains(t, normalButtons, BtnRenew)
+
+	b.maintenanceMode = true
+
+	kb = b.userKeyboard(userID)
+	var maintenanceButtons []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			maintenanceButtons = append(maintenanceButtons, btn.Text)
+		}
+	}
+	assert.NotContains(t, maintenanceButtons, BtnPay)
+	assert.NotContains(t, maintenanceButtons, BtnRenew)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

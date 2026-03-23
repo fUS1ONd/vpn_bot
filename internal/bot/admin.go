@@ -19,6 +19,9 @@ const (
 	StateWaitDeleteInvite              = "wait_delete_invite"               // Ожидание кода для удаления
 	StateWaitAddModerator              = "wait_add_moderator"               // Ожидание telegram_id для назначения модератора
 	StateWaitRemoveModerator           = "wait_remove_moderator"            // Ожидание telegram_id для снятия модератора
+	StateWaitAdminUserInfo             = "wait_admin_user_info"             // Ожидание telegram_id для карточки пользователя
+	StateWaitAdminChangePriceID        = "wait_admin_change_price_id"       // Ожидание telegram_id для смены цены
+	StateWaitAdminChangePriceValue     = "wait_admin_change_price_value"    // Ожидание новой цены подписки
 	StateWaitSwitchSubscriptionID      = "wait_switch_subscription_id"      // Ожидание telegram_id для смены тарифа
 	StateWaitSwitchSubscriptionConfirm = "wait_switch_subscription_confirm" // Ожидание подтверждения смены тарифа
 )
@@ -27,6 +30,13 @@ type adminSwitchSession struct {
 	TargetTelegramID int64
 	TargetLabel      string
 	UserUUID         string
+}
+
+type adminChangePriceSession struct {
+	TargetTelegramID int64
+	TargetLabel      string
+	CurrentPrice     int
+	HasCurrentPrice  bool
 }
 
 // isAdmin проверяет, является ли пользователь админом
@@ -38,7 +48,7 @@ func (b *Bot) isAdmin(c tele.Context) bool {
 func (b *Bot) handleAdminStart(c tele.Context) error {
 	return c.Send(MsgAdminWelcome, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminKeyboard(),
+		ReplyMarkup: AdminKeyboard(b.maintenanceMode),
 	})
 }
 
@@ -86,8 +96,20 @@ func (b *Bot) handleBanUserRequest(c tele.Context) error {
 	})
 }
 
-// handleSwitchSubscription запрашивает telegram_id для смены тарифа.
+// handleSwitchSubscription показывает подменю смены тарифа.
 func (b *Bot) handleSwitchSubscription(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	return c.Send("<b>♾️ Смена тарифа</b>\n\nВыберите действие:", &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminSwitchSubmenu(),
+	})
+}
+
+// handleAdminSwitchInfiniteRequest запрашивает telegram_id для перевода на бессрочный тариф.
+func (b *Bot) handleAdminSwitchInfiniteRequest(c tele.Context) error {
 	if !b.isAdmin(c) {
 		return nil
 	}
@@ -175,6 +197,243 @@ func (b *Bot) processSwitchSubscriptionID(c tele.Context, text string) error {
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: ConfirmKeyboard(),
 	})
+}
+
+// handleAdminUserInfoRequest запускает диалог просмотра карточки пользователя.
+func (b *Bot) handleAdminUserInfoRequest(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	b.userStates.Set(c.Sender().ID, StateWaitAdminUserInfo)
+	return c.Send("Введите telegram_id пользователя:", &tele.SendOptions{
+		ReplyMarkup: CancelKeyboard(),
+	})
+}
+
+// processAdminUserInfo показывает полную карточку пользователя.
+func (b *Bot) processAdminUserInfo(c tele.Context, text string) error {
+	adminID := c.Sender().ID
+	targetID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
+	if err != nil {
+		return c.Send("❌ Неверный telegram_id.", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+	}
+
+	b.userStates.Delete(adminID)
+
+	isBanned, err := b.db.IsBanned(targetID)
+	if err != nil {
+		slog.Error("Failed to check ban status for admin user info", "error", err, "telegram_id", targetID)
+		return c.Send("Ошибка проверки пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if isBanned {
+		return c.Send("🚫 Пользователь забанен.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	dbUser, err := b.db.GetUserByTelegramID(targetID)
+	if err != nil {
+		slog.Error("Failed to load DB user for admin info", "error", err, "telegram_id", targetID)
+		return c.Send("Ошибка получения пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if dbUser == nil {
+		return c.Send("❌ Пользователь не найден.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	remUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
+	if err != nil {
+		slog.Error("Failed to load Remnawave user for admin info", "error", err, "telegram_id", targetID)
+		return c.Send("Ошибка получения данных подписки", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	invite, err := b.db.GetInviteByUsedBy(targetID)
+	if err != nil {
+		slog.Error("Failed to load invite for admin info", "error", err, "telegram_id", targetID)
+		return c.Send("Ошибка получения данных пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	curatorLabel := "админ"
+	switch {
+	case dbUser.ModeratorID != nil:
+		curatorLabel = b.formatAdminSwitchCurator(*dbUser.ModeratorID)
+	case invite != nil:
+		curatorLabel = b.formatAdminSwitchCurator(invite.CreatedBy)
+	}
+
+	devicesLabel := "н/д"
+	devicesCount, err := b.remnawave.GetUserHwidDevicesCount(dbUser.RemnawaveUUID)
+	if err != nil {
+		slog.Error("Failed to load user HWID devices for admin info", "error", err, "telegram_id", targetID)
+	} else if remUser.HwidDeviceLimit > 0 {
+		devicesLabel = fmt.Sprintf("%d / %d", devicesCount, remUser.HwidDeviceLimit)
+	} else {
+		devicesLabel = fmt.Sprintf("%d", devicesCount)
+	}
+
+	trafficLabel := "0.00 GB"
+	if remUser.UserTraffic != nil {
+		trafficLabel = fmt.Sprintf("%.2f GB", float64(remUser.UserTraffic.UsedTrafficBytes)/(1024*1024*1024))
+	}
+
+	typeLabel, statusLabel := b.describeAdminUserSubscription(targetID, remUser)
+
+	var msg strings.Builder
+	msg.WriteString("<b>🔍 Информация о пользователе</b>\n\n")
+	fmt.Fprintf(&msg, "👤 %s\n", formatUserLabel(dbUser.FirstName, dbUser.Username, dbUser.TelegramID))
+	fmt.Fprintf(&msg, "📋 Куратор: %s\n", curatorLabel)
+	fmt.Fprintf(&msg, "💳 Цена подписки: %s\n", formatPriceLabel(dbUser.SubscriptionPrice))
+	if remUser.ExpireAt.Year() < 2099 {
+		fmt.Fprintf(
+			&msg,
+			"📅 Подписка до: %s (%s)\n",
+			remUser.ExpireAt.UTC().Format("02.01.2006"),
+			describeAdminRemaining(remUser.ExpireAt, time.Now().UTC()),
+		)
+	}
+	fmt.Fprintf(&msg, "📊 Трафик за месяц: %s\n", trafficLabel)
+	fmt.Fprintf(&msg, "📡 Устройства: %s\n", devicesLabel)
+	fmt.Fprintf(&msg, "🏷 Тип: %s\n", typeLabel)
+	fmt.Fprintf(&msg, "✅ Статус: %s", statusLabel)
+
+	return c.Send(msg.String(), &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminManageKeyboard(),
+	})
+}
+
+// handleAdminChangePriceRequest запускает диалог изменения цены.
+func (b *Bot) handleAdminChangePriceRequest(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	telegramID := c.Sender().ID
+	b.userStates.Set(telegramID, StateWaitAdminChangePriceID)
+	b.clearAdminChangePriceSession(telegramID)
+	return c.Send("Введите telegram_id пользователя:", &tele.SendOptions{
+		ReplyMarkup: CancelKeyboard(),
+	})
+}
+
+// processAdminChangePriceID выбирает пользователя для смены цены.
+func (b *Bot) processAdminChangePriceID(c tele.Context, text string) error {
+	adminID := c.Sender().ID
+	targetID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
+	if err != nil {
+		return c.Send("❌ Неверный telegram_id.", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+	}
+
+	isBanned, err := b.db.IsBanned(targetID)
+	if err != nil {
+		slog.Error("Failed to check ban status before admin price change", "error", err, "telegram_id", targetID)
+		b.userStates.Delete(adminID)
+		return c.Send("Ошибка проверки пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if isBanned {
+		b.userStates.Delete(adminID)
+		return c.Send("❌ Этот пользователь забанен.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	dbUser, err := b.db.GetUserByTelegramID(targetID)
+	if err != nil {
+		slog.Error("Failed to load DB user before admin price change", "error", err, "telegram_id", targetID)
+		b.userStates.Delete(adminID)
+		return c.Send("Ошибка получения пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if dbUser == nil {
+		b.userStates.Delete(adminID)
+		return c.Send("❌ Пользователь не найден.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	invite, err := b.db.GetInviteByUsedBy(targetID)
+	if err != nil {
+		slog.Error("Failed to load invite before admin price change", "error", err, "telegram_id", targetID)
+		b.userStates.Delete(adminID)
+		return c.Send("Ошибка получения пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if invite == nil {
+		b.userStates.Delete(adminID)
+		return c.Send("❌ Пользователь не найден.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if invite.ExpireDays == nil {
+		b.userStates.Delete(adminID)
+		return c.Send("❌ У этого пользователя бессрочная подписка, цена не применяется.", &tele.SendOptions{
+			ReplyMarkup: AdminManageKeyboard(),
+		})
+	}
+
+	label := formatAdminSwitchTargetLabel(dbUser)
+	session := adminChangePriceSession{
+		TargetTelegramID: targetID,
+		TargetLabel:      label,
+	}
+	if dbUser.SubscriptionPrice != nil {
+		session.CurrentPrice = *dbUser.SubscriptionPrice
+		session.HasCurrentPrice = true
+	}
+
+	b.setAdminChangePriceSession(adminID, session)
+	b.userStates.Set(adminID, StateWaitAdminChangePriceValue)
+
+	return c.Send(
+		fmt.Sprintf(
+			"Текущая цена для %s: %s\nВведите новую цену (минимум %d руб):",
+			label,
+			formatAdminPriceValue(dbUser.SubscriptionPrice),
+			b.minSubscriptionPrice(),
+		),
+		&tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: CancelKeyboard(),
+		},
+	)
+}
+
+// processAdminChangePriceValue завершает изменение цены.
+func (b *Bot) processAdminChangePriceValue(c tele.Context, text string) error {
+	adminID := c.Sender().ID
+	newPrice, err := strconv.Atoi(strings.TrimSpace(text))
+	if err != nil {
+		return c.Send("❌ Введите число.", &tele.SendOptions{ReplyMarkup: CancelKeyboard()})
+	}
+	if newPrice < b.minSubscriptionPrice() {
+		return c.Send(
+			fmt.Sprintf("❌ Минимальная цена: %d руб.", b.minSubscriptionPrice()),
+			&tele.SendOptions{ReplyMarkup: CancelKeyboard()},
+		)
+	}
+
+	session, ok := b.getAdminChangePriceSession(adminID)
+	if !ok {
+		b.userStates.Delete(adminID)
+		return c.Send("Сессия изменения цены потеряна. Начните заново.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	if err := b.db.UpdateSubscriptionPrice(session.TargetTelegramID, newPrice); err != nil {
+		slog.Error("Failed to update subscription price by admin", "error", err, "telegram_id", session.TargetTelegramID)
+		b.userStates.Delete(adminID)
+		b.clearAdminChangePriceSession(adminID)
+		return c.Send("Ошибка изменения цены", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+	if err := b.db.UpdateInviteSubscriptionPrice(session.TargetTelegramID, newPrice); err != nil {
+		slog.Error("Failed to update invite subscription price by admin", "error", err, "telegram_id", session.TargetTelegramID)
+	}
+
+	b.userStates.Delete(adminID)
+	b.clearAdminChangePriceSession(adminID)
+	b.notifyUserAboutPriceChange(session.TargetTelegramID, newPrice)
+
+	return c.Send(
+		fmt.Sprintf(
+			"✅ Цена подписки для %s изменена: %s → %d руб/мес",
+			session.TargetLabel,
+			formatAdminOldPrice(session),
+			newPrice,
+		),
+		&tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: AdminManageKeyboard(),
+		},
+	)
 }
 
 // processSwitchSubscriptionConfirm подтверждает перевод на бессрочный тариф.
@@ -357,6 +616,143 @@ func (b *Bot) clearAdminSwitchSession(adminID int64) {
 
 func strPtr(v string) *string {
 	return &v
+}
+
+// handleAdminStats показывает общую финансовую и пользовательскую статистику за текущий месяц.
+func (b *Bot) handleAdminStats(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	year := now.Year()
+	month := int(now.Month())
+
+	monthEarnings, err := b.db.GetAllEarningsByMonth(year, month)
+	if err != nil {
+		slog.Error("Failed to load monthly earnings for admin stats", "error", err)
+		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+	}
+
+	trialsThisMonth, err := b.db.CountTrialsByMonth(year, month)
+	if err != nil {
+		slog.Error("Failed to count trials for admin stats", "error", err)
+		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+	}
+
+	firstPayments, err := b.db.CountFirstPaymentsByMonth(year, month)
+	if err != nil {
+		slog.Error("Failed to count first payments for admin stats", "error", err)
+		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+	}
+
+	dbUsers, err := b.db.GetAllUsers()
+	if err != nil {
+		slog.Error("Failed to load DB users for admin stats", "error", err)
+		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+	}
+
+	remUsers, err := b.remnawave.GetAllUsers()
+	if err != nil {
+		slog.Error("Failed to load Remnawave users for admin stats", "error", err)
+		return c.Send("Ошибка получения статистики из панели", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+	}
+
+	byTelegramID := make(map[int64]remnawave.User, len(remUsers))
+	for _, user := range remUsers {
+		if user.TelegramID == nil || *user.TelegramID == 0 {
+			continue
+		}
+		byTelegramID[*user.TelegramID] = user
+	}
+
+	payingCount := 0
+	trialCount := 0
+	graceCount := 0
+	infiniteCount := 0
+
+	for _, user := range dbUsers {
+		remUser, ok := byTelegramID[user.TelegramID]
+		if !ok {
+			continue
+		}
+
+		switch {
+		case remUser.ExpireAt.Year() >= 2099:
+			infiniteCount++
+		case remUser.Status == remnawave.StatusDisabled && !remUser.ExpireAt.After(now):
+			graceCount++
+		case b.isTrialUser(user.TelegramID):
+			trialCount++
+		case remUser.Status == remnawave.StatusActive && remUser.ExpireAt.After(now):
+			payingCount++
+		}
+	}
+	totalUsers := payingCount + trialCount + graceCount + infiniteCount
+
+	conversion := 0
+	if trialsThisMonth > 0 {
+		conversion = (firstPayments*100 + trialsThisMonth/2) / trialsThisMonth
+	}
+
+	ownerIncome := monthEarnings.TotalNetAmount - monthEarnings.TotalShareAmount
+
+	msg := fmt.Sprintf(
+		"<b>📊 Общая статистика — %s %d</b>\n\n"+
+			"💰 <b>Финансы</b>\n"+
+			"├ Платежей за месяц: %d\n"+
+			"├ Сумма платежей (грязная): %d руб\n"+
+			"├ Комиссии Platega: -%d руб\n"+
+			"├ Комиссия вывода (2%%): -%d руб\n"+
+			"├ Чистый доход: %d руб\n"+
+			"├ Выплаты модераторам: -%d руб\n"+
+			"└ Доход владельца: %d руб\n\n"+
+			"👥 <b>Пользователи</b>\n"+
+			"├ Всего в системе: %d\n"+
+			"├ 💳 Платящих: %d\n"+
+			"├ ⏳ Триал: %d\n"+
+			"├ ⚠️ Grace period: %d\n"+
+			"├ ♾️ Бессрочных: %d\n"+
+			"└ 📈 Конверсия триал → оплата: %d%%",
+		monthNameRu(now.Month()),
+		now.Year(),
+		monthEarnings.TotalPayments,
+		monthEarnings.GrossAmount,
+		monthEarnings.TotalPlategaFee,
+		monthEarnings.TotalWithdrawal,
+		monthEarnings.TotalNetAmount,
+		monthEarnings.TotalShareAmount,
+		ownerIncome,
+		totalUsers,
+		payingCount,
+		trialCount,
+		graceCount,
+		infiniteCount,
+		conversion,
+	)
+
+	return c.Send(msg, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: AdminKeyboard(b.maintenanceMode),
+	})
+}
+
+// handleAdminMaintenanceToggle переключает режим обслуживания.
+func (b *Bot) handleAdminMaintenanceToggle(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return nil
+	}
+
+	b.maintenanceMode = !b.maintenanceMode
+
+	msg := "🔧 Режим обслуживания включён. Оплата и кики приостановлены."
+	if !b.maintenanceMode {
+		msg = "▶️ Штатный режим восстановлен. Оплата и scheduler работают."
+	}
+
+	return c.Send(msg, &tele.SendOptions{
+		ReplyMarkup: AdminKeyboard(b.maintenanceMode),
+	})
 }
 
 // handleAdminBroadcastMenu показывает меню рассылки
@@ -738,11 +1134,12 @@ func (b *Bot) handleAdminModStats(c tele.Context) error {
 	}
 
 	now := time.Now().UTC()
-	totalActive := 0
-	totalExpired := 0
-
-	var msg strings.Builder
-	msg.WriteString("<b>📊 Статистика модераторов</b>\n\n")
+	reportDate := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	reportYear := reportDate.Year()
+	reportMonth := int(reportDate.Month())
+	totalPayments := 0
+	totalGross := 0
+	totalShare := 0
 
 	for _, mod := range mods {
 		subs, err := b.db.GetSubscribersByModerator(mod.TelegramID)
@@ -751,33 +1148,79 @@ func (b *Bot) handleAdminModStats(c tele.Context) error {
 			continue
 		}
 
-		active := 0
-		expired := 0
+		paying := 0
+		trial := 0
+		grace := 0
 		for _, sub := range subs {
 			remUser, ok := byTelegramID[sub.TelegramID]
 			if !ok {
 				continue
 			}
-			if remUser.Status == remnawave.StatusExpired || remUser.ExpireAt.Before(now) {
-				expired++
-			} else {
-				active++
+			switch b.describeSubscriberStatus(sub.TelegramID, remUser, now) {
+			case "paid":
+				paying++
+			case "trial":
+				trial++
+			case "grace":
+				grace++
 			}
 		}
 
-		totalActive += active
-		totalExpired += expired
+		monthStats, err := b.db.GetModeratorEarningsByMonth(mod.TelegramID, reportYear, reportMonth)
+		if err != nil {
+			slog.Error("Failed to load moderator month earnings", "error", err, "moderator_id", mod.TelegramID)
+			continue
+		}
+		totalEarnings, err := b.db.GetModeratorTotalEarnings(mod.TelegramID)
+		if err != nil {
+			slog.Error("Failed to load moderator total earnings", "error", err, "moderator_id", mod.TelegramID)
+			continue
+		}
 
-		fmt.Fprintf(&msg, "👤 %s\n", formatUserLabel(mod.FirstName, mod.Username, mod.TelegramID))
-		fmt.Fprintf(&msg, "   ✅ Активных: %d\n", active)
-		fmt.Fprintf(&msg, "   ⏰ Истекших: %d\n", expired)
-		fmt.Fprintf(&msg, "   👥 Всего приглашено: %d\n\n", len(subs))
+		totalPayments += monthStats.TotalPayments
+		totalGross += monthStats.GrossAmount
+		totalShare += monthStats.TotalShareAmount
+
+		sharePercent := monthStats.SharePercent
+		msg := fmt.Sprintf(
+			"📊 <b>Статистика: %s — %s %d</b>\n\n"+
+				"💳 Платящих: %d │ ⏳ Триал: %d │ ⚠️ Grace: %d\n"+
+				"📥 Платежи: %d руб\n"+
+				"📉 Комиссии Platega: -%d руб\n"+
+				"📉 Комиссия вывода (2%%): -%d руб\n"+
+				"📊 Чистый доход: %d руб\n"+
+				"💰 Доля модератора (%d%%): %d руб\n"+
+				"💰 За всё время: %d руб",
+			formatAdminModeratorLabel(mod.FirstName, mod.Username, mod.TelegramID),
+			monthNameRu(reportDate.Month()),
+			reportYear,
+			paying,
+			trial,
+			grace,
+			monthStats.GrossAmount,
+			monthStats.TotalPlategaFee,
+			monthStats.TotalWithdrawal,
+			monthStats.TotalNetAmount,
+			sharePercent,
+			monthStats.TotalShareAmount,
+			totalEarnings,
+		)
+
+		if err := c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML}); err != nil {
+			return err
+		}
 	}
 
-	msg.WriteString("───\n")
-	fmt.Fprintf(&msg, "Итого: ✅ %d активных │ ⏰ %d истекших", totalActive, totalExpired)
+	summary := fmt.Sprintf(
+		"<b>Итого за %s %d</b>\n\n📥 Платежей: %d\n💰 Сумма платежей: %d руб\n💸 Выплаты модераторам: %d руб",
+		monthNameRu(reportDate.Month()),
+		reportYear,
+		totalPayments,
+		totalGross,
+		totalShare,
+	)
 
-	return c.Send(msg.String(), &tele.SendOptions{
+	return c.Send(summary, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: AdminModeratorKeyboard(),
 	})
@@ -817,4 +1260,105 @@ func (b *Bot) processRemoveModerator(c tele.Context, text string) error {
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: AdminModeratorKeyboard(),
 	})
+}
+
+func (b *Bot) setAdminChangePriceSession(adminID int64, session adminChangePriceSession) {
+	b.adminPriceMu.Lock()
+	defer b.adminPriceMu.Unlock()
+	if b.adminPriceData == nil {
+		b.adminPriceData = make(map[int64]adminChangePriceSession)
+	}
+	b.adminPriceData[adminID] = session
+}
+
+func (b *Bot) getAdminChangePriceSession(adminID int64) (adminChangePriceSession, bool) {
+	b.adminPriceMu.RLock()
+	defer b.adminPriceMu.RUnlock()
+	session, ok := b.adminPriceData[adminID]
+	return session, ok
+}
+
+func (b *Bot) clearAdminChangePriceSession(adminID int64) {
+	b.adminPriceMu.Lock()
+	defer b.adminPriceMu.Unlock()
+	delete(b.adminPriceData, adminID)
+}
+
+func (b *Bot) notifyUserAboutPriceChange(telegramID int64, newPrice int) {
+	if b.bot == nil {
+		return
+	}
+
+	_, err := b.bot.Send(&tele.User{ID: telegramID}, fmt.Sprintf("💳 Цена вашей подписки изменена: %d руб/мес", newPrice))
+	if err != nil {
+		slog.Error("Failed to notify user about price change", "error", err, "telegram_id", telegramID)
+	}
+}
+
+func (b *Bot) describeAdminUserSubscription(telegramID int64, remUser *remnawave.User) (string, string) {
+	if remUser == nil {
+		return "неизвестно", "неизвестно"
+	}
+
+	switch {
+	case remUser.ExpireAt.Year() >= 2099:
+		return "♾️ Безлимитная", "Активен"
+	case remUser.Status == remnawave.StatusDisabled && !remUser.ExpireAt.After(time.Now().UTC()):
+		return "💳 Подписка", "Grace period"
+	case b.isTrialUser(telegramID):
+		return "⏳ Триал", "Активен"
+	default:
+		return "💳 Подписка", humanizeAdminStatus(remUser.Status)
+	}
+}
+
+func describeAdminRemaining(expireAt, now time.Time) string {
+	if !expireAt.After(now) {
+		return "истекла"
+	}
+
+	days := daysUntil(expireAt, now)
+	return fmt.Sprintf("осталось %d дн.", days)
+}
+
+func humanizeAdminStatus(status string) string {
+	switch status {
+	case remnawave.StatusActive:
+		return "Активен"
+	case remnawave.StatusDisabled:
+		return "Отключён"
+	case remnawave.StatusExpired:
+		return "Истёк"
+	case remnawave.StatusLimited:
+		return "Лимит трафика"
+	default:
+		return status
+	}
+}
+
+func formatAdminPriceValue(price *int) string {
+	if price == nil {
+		return "не установлена"
+	}
+	return fmt.Sprintf("%d руб/мес", *price)
+}
+
+func formatAdminOldPrice(session adminChangePriceSession) string {
+	if !session.HasCurrentPrice {
+		return "не установлена"
+	}
+	return fmt.Sprintf("%d", session.CurrentPrice)
+}
+
+func formatAdminModeratorLabel(firstName, username string, telegramID int64) string {
+	switch {
+	case firstName != "" && username != "":
+		return fmt.Sprintf("%s (@%s)", html.EscapeString(firstName), username)
+	case username != "":
+		return "@" + username
+	case firstName != "":
+		return html.EscapeString(firstName)
+	default:
+		return fmt.Sprintf("<code>%d</code>", telegramID)
+	}
 }

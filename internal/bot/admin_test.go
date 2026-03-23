@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -185,6 +186,39 @@ func TestHandleAdminModStats(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv.Code, subID))
 
+	paymentID, err := db.CreatePayment(&database.Payment{
+		TelegramID:    subID,
+		ModeratorID:   &modID,
+		Amount:        500,
+		PaymentMethod: "card",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(paymentID))
+
+	_, err = db.CreateEarning(&database.ModeratorEarning{
+		PaymentID:     paymentID,
+		ModeratorID:   modID,
+		GrossAmount:   500,
+		PlategaFee:    50,
+		WithdrawalFee: 10,
+		NetAmount:     440,
+		SharePercent:  15,
+		ShareAmount:   66,
+	})
+	require.NoError(t, err)
+
+	rawDB, err := sql.Open("sqlite3", dbFile)
+	require.NoError(t, err)
+	defer rawDB.Close()
+
+	prevMonth := time.Now().UTC().AddDate(0, -1, 0)
+	_, err = rawDB.Exec(
+		`UPDATE moderator_earnings SET created_at = ?`,
+		time.Date(prevMonth.Year(), prevMonth.Month(), 15, 12, 0, 0, 0, time.UTC),
+	)
+	require.NoError(t, err)
+
 	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -228,11 +262,20 @@ func TestHandleAdminModStats(t *testing.T) {
 	err = b.handleAdminModStats(ctx)
 	require.NoError(t, err)
 
-	msg, ok := ctx.sentMsg.(string)
+	require.Len(t, ctx.sentMsgs, 2)
+
+	msg, ok := ctx.sentMsgs[0].(string)
 	require.True(t, ok)
-	assert.Contains(t, msg, "Статистика модераторов")
+	assert.Contains(t, msg, "Статистика:")
 	assert.Contains(t, msg, "@moderator")
-	assert.Contains(t, msg, "Активных: 1")
+	assert.Contains(t, msg, "Платящих: 1")
+	assert.Contains(t, msg, "Платежи: 500 руб")
+	assert.Contains(t, msg, "Доля модератора (15%)")
+
+	summary, ok := ctx.sentMsgs[1].(string)
+	require.True(t, ok)
+	assert.Contains(t, summary, "Итого")
+	assert.Contains(t, summary, "66 руб")
 }
 
 // TestFormatAdminSwitchTargetLabel_HTMLEscaping проверяет экранирование HTML в имени пользователя
@@ -410,6 +453,292 @@ func TestProcessSwitchSubscription_ConfirmFlow(t *testing.T) {
 	msgConfirm, ok := ctxConfirm.sentMsg.(string)
 	require.True(t, ok)
 	assert.Contains(t, msgConfirm, "переведён на бессрочный тариф")
+	assert.Empty(t, b.userStates.Get(adminID))
+}
+
+func TestHandleAdminStats_ShowsFinanceAndConversion(t *testing.T) {
+	dbFile := "test_admin_stats.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999999)
+	modID := int64(100)
+	payingID := int64(200)
+	trialID := int64(201)
+	graceID := int64(202)
+	infiniteID := int64(203)
+
+	_, err = db.CreateUser(modID, "moderator", "Модератор", "uuid-mod", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AddModerator(modID, adminID))
+
+	price := 500
+	_, err = db.CreateUser(payingID, "paid", "Paid", "uuid-paid", &price, &modID)
+	require.NoError(t, err)
+	_, err = db.CreateUser(trialID, "trial", "Trial", "uuid-trial", &price, &modID)
+	require.NoError(t, err)
+	_, err = db.CreateUser(graceID, "grace", "Grace", "uuid-grace", &price, &modID)
+	require.NoError(t, err)
+	_, err = db.CreateUser(infiniteID, "inf", "Infinite", "uuid-inf", nil, nil)
+	require.NoError(t, err)
+
+	finiteInvite, err := db.CreateInviteWithExpiry(modID, intPtrAdmin(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(finiteInvite.Code, payingID))
+
+	finiteInvite2, err := db.CreateInviteWithExpiry(modID, intPtrAdmin(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(finiteInvite2.Code, trialID))
+
+	finiteInvite3, err := db.CreateInviteWithExpiry(modID, intPtrAdmin(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(finiteInvite3.Code, graceID))
+
+	infiniteInvite, err := db.CreateInviteWithExpiry(adminID, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(infiniteInvite.Code, infiniteID))
+
+	paymentID, err := db.CreatePayment(&database.Payment{
+		TelegramID:    payingID,
+		ModeratorID:   &modID,
+		Amount:        500,
+		PaymentMethod: "card",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(paymentID))
+
+	_, err = db.CreateEarning(&database.ModeratorEarning{
+		PaymentID:     paymentID,
+		ModeratorID:   modID,
+		GrossAmount:   500,
+		PlategaFee:    50,
+		WithdrawalFee: 10,
+		NetAmount:     440,
+		SharePercent:  15,
+		ShareAmount:   66,
+	})
+	require.NoError(t, err)
+
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users" {
+				payload, err := json.Marshal(map[string]any{
+					"response": map[string]any{
+						"users": []map[string]any{
+							{
+								"uuid":       "uuid-paid",
+								"telegramId": payingID,
+								"status":     remnawave.StatusActive,
+								"expireAt":   time.Now().UTC().AddDate(0, 0, 20).Format(time.RFC3339),
+							},
+							{
+								"uuid":       "uuid-trial",
+								"telegramId": trialID,
+								"status":     remnawave.StatusActive,
+								"expireAt":   time.Now().UTC().AddDate(0, 0, 2).Format(time.RFC3339),
+							},
+							{
+								"uuid":       "uuid-grace",
+								"telegramId": graceID,
+								"status":     remnawave.StatusDisabled,
+								"expireAt":   time.Now().UTC().Add(-12 * time.Hour).Format(time.RFC3339),
+							},
+							{
+								"uuid":       "uuid-inf",
+								"telegramId": infiniteID,
+								"status":     remnawave.StatusActive,
+								"expireAt":   time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+							},
+						},
+						"total": 4,
+					},
+				})
+				require.NoError(t, err)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(payload))),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
+	})
+
+	b := &Bot{
+		db:         db,
+		remnawave:  client,
+		config:     &config.Config{AdminID: adminID},
+		userStates: newStateMap(),
+	}
+
+	ctx := &MockContext{sender: &tele.User{ID: adminID}}
+	err = b.handleAdminStats(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "Общая статистика")
+	assert.Contains(t, msg, "Платежей за месяц: 1")
+	assert.Contains(t, msg, "Сумма платежей (грязная): 500 руб")
+	assert.Contains(t, msg, "Комиссии Platega: -50 руб")
+	assert.Contains(t, msg, "Комиссия вывода (2%): -10 руб")
+	assert.Contains(t, msg, "Чистый доход: 440 руб")
+	assert.Contains(t, msg, "Выплаты модераторам: -66 руб")
+	assert.Contains(t, msg, "Доход владельца: 374 руб")
+	assert.Contains(t, msg, "Всего в системе: 4")
+	assert.Contains(t, msg, "💳 Платящих: 1")
+	assert.Contains(t, msg, "⏳ Триал: 1")
+	assert.Contains(t, msg, "⚠️ Grace period: 1")
+	assert.Contains(t, msg, "♾️ Бессрочных: 1")
+	assert.Contains(t, msg, "Конверсия триал → оплата: 33%")
+}
+
+func TestProcessAdminUserInfo_ShowsFullCard(t *testing.T) {
+	dbFile := "test_admin_user_info.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999999)
+	modID := int64(100)
+	targetID := int64(12345)
+	price := 500
+
+	_, err = db.CreateUser(modID, "petr", "Пётр", "uuid-mod", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AddModerator(modID, adminID))
+
+	_, err = db.CreateUser(targetID, "ivan", "Иван", "uuid-target", &price, &modID)
+	require.NoError(t, err)
+	invite, err := db.CreateInviteWithExpiry(modID, intPtrAdmin(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(invite.Code, targetID))
+	paymentID, err := db.CreatePayment(&database.Payment{
+		TelegramID:    targetID,
+		ModeratorID:   &modID,
+		Amount:        price,
+		PaymentMethod: "card",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(paymentID))
+
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-target":
+				payload := `{"response":{"uuid":"uuid-target","username":"ivan","status":"ACTIVE","expireAt":"2026-04-15T00:00:00Z","hwidDeviceLimit":3,"userTraffic":{"usedTrafficBytes":13421772800,"lifetimeUsedTrafficBytes":13421772800}}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodGet && r.URL.Path == "/api/hwid/devices/uuid-target":
+				payload := `{"response":{"total":2,"devices":[{"hwid":"a"},{"hwid":"b"}]}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	b := &Bot{
+		db:         db,
+		remnawave:  client,
+		config:     &config.Config{AdminID: adminID},
+		userStates: newStateMap(),
+	}
+
+	ctx := &MockContext{sender: &tele.User{ID: adminID}}
+	err = b.processAdminUserInfo(ctx, strconv.FormatInt(targetID, 10))
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "Информация о пользователе")
+	assert.Contains(t, msg, "@ivan")
+	assert.Contains(t, msg, "@petr")
+	assert.Contains(t, msg, "500 руб/мес")
+	assert.Contains(t, msg, "15.04.2026")
+	assert.Contains(t, msg, "12.50 GB")
+	assert.Contains(t, msg, "2 / 3")
+	assert.Contains(t, msg, "💳 Подписка")
+	assert.Contains(t, msg, "Статус: Активен")
+}
+
+func TestAdminChangePriceFlow_UpdatesPaidUser(t *testing.T) {
+	dbFile := "test_admin_change_price.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999999)
+	targetID := int64(12345)
+	oldPrice := 500
+
+	_, err = db.CreateUser(targetID, "paid", "Paid", "uuid-target", &oldPrice, nil)
+	require.NoError(t, err)
+	invite, err := db.CreateInviteWithExpiry(adminID, intPtrAdmin(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(invite.Code, targetID))
+
+	paymentID, err := db.CreatePayment(&database.Payment{
+		TelegramID:    targetID,
+		Amount:        oldPrice,
+		PaymentMethod: "card",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(paymentID))
+
+	b := &Bot{
+		db:         db,
+		config:     &config.Config{AdminID: adminID, MinSubscriptionPrice: 400},
+		userStates: newStateMap(),
+	}
+
+	ctxID := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceID(ctxID, strconv.FormatInt(targetID, 10)))
+	require.Equal(t, StateWaitAdminChangePriceValue, b.userStates.Get(adminID))
+
+	msgID, ok := ctxID.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msgID, "Текущая цена")
+	assert.Contains(t, msgID, "500 руб/мес")
+
+	ctxValue := &MockContext{sender: &tele.User{ID: adminID}}
+	require.NoError(t, b.processAdminChangePriceValue(ctxValue, "650"))
+
+	updatedUser, err := db.GetUserByTelegramID(targetID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedUser.SubscriptionPrice)
+	assert.Equal(t, 650, *updatedUser.SubscriptionPrice)
+
+	updatedInvite, err := db.GetInviteByUsedBy(targetID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedInvite.SubscriptionPrice)
+	assert.Equal(t, 650, *updatedInvite.SubscriptionPrice)
+
+	msgValue, ok := ctxValue.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msgValue, "изменена: 500 → 650 руб/мес")
 	assert.Empty(t, b.userStates.Get(adminID))
 }
 

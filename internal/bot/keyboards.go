@@ -32,13 +32,19 @@ const (
 	// Админ-кнопки
 	BtnAdminManage             = "📋 Управление"
 	BtnAdminBroadcast          = "📢 Рассылка"
+	BtnAdminStats              = "📊 Общая статистика"
+	BtnAdminMaintenance        = "🔧 Режим обслуживания"
+	BtnAdminMaintenanceOff     = "▶️ Штатный режим"
 	BtnAdminUserMode           = "👤 Режим пользователя"
 	BtnAdminBack               = "🔙 В меню админа"
 	BtnAdminCreateInvite       = "🎟 Создать инвайт"
 	BtnAdminViewInvites        = "📋 Коды"
 	BtnAdminDeleteInvite       = "🗑 Удалить код"
 	BtnAdminBanUser            = "🚫 Забанить"
+	BtnAdminUserInfo           = "🔍 Инфо о пользователе"
 	BtnAdminSwitchSubscription = "♾️ Сменить тариф"
+	BtnAdminSwitchInfinite     = "♾️ Перевести на бессрочную"
+	BtnAdminChangePrice        = "✏️ Изменить цену"
 
 	// Кнопки подтверждения
 	BtnConfirmYes = "Да"
@@ -97,11 +103,17 @@ func InstructionsKeyboard() *tele.ReplyMarkup {
 }
 
 // AdminKeyboard возвращает главное меню админа
-func AdminKeyboard() *tele.ReplyMarkup {
+func AdminKeyboard(maintenanceMode bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	maintenanceBtn := BtnAdminMaintenance
+	if maintenanceMode {
+		maintenanceBtn = BtnAdminMaintenanceOff
+	}
 	menu.Reply(
 		menu.Row(menu.Text(BtnAdminManage), menu.Text(BtnAdminModerators)),
-		menu.Row(menu.Text(BtnAdminBroadcast), menu.Text(BtnAdminUserMode)),
+		menu.Row(menu.Text(BtnAdminBroadcast), menu.Text(BtnAdminStats)),
+		menu.Row(menu.Text(maintenanceBtn)),
+		menu.Row(menu.Text(BtnAdminUserMode)),
 	)
 	return menu
 }
@@ -113,6 +125,18 @@ func AdminManageKeyboard() *tele.ReplyMarkup {
 		menu.Row(menu.Text(BtnAdminCreateInvite), menu.Text(BtnAdminViewInvites)),
 		menu.Row(menu.Text(BtnAdminBanUser), menu.Text(BtnAdminDeleteInvite)),
 		menu.Row(menu.Text(BtnAdminSwitchSubscription)),
+		menu.Row(menu.Text(BtnAdminUserInfo)),
+		menu.Row(menu.Text(BtnAdminBack)),
+	)
+	return menu
+}
+
+// AdminSwitchSubmenu возвращает подменю смены тарифа.
+func AdminSwitchSubmenu() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnAdminSwitchInfinite)),
+		menu.Row(menu.Text(BtnAdminChangePrice)),
 		menu.Row(menu.Text(BtnAdminBack)),
 	)
 	return menu

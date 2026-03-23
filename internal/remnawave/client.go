@@ -60,6 +60,7 @@ type User struct {
 	Status            string    `json:"status"`
 	TelegramID        *int64    `json:"telegramId"`
 	TrafficLimitBytes int64     `json:"trafficLimitBytes"`
+	HwidDeviceLimit   int       `json:"hwidDeviceLimit"`
 	SubscriptionURL   string    `json:"subscriptionUrl"`
 	CreatedAt         time.Time `json:"createdAt"`
 	ExpireAt          time.Time `json:"expireAt"`
@@ -223,6 +224,25 @@ func (c *Client) GetAllUsers() ([]User, error) {
 	}
 
 	return result.Response.Users, nil
+}
+
+// GetUserHwidDevicesCount возвращает количество HWID-устройств пользователя.
+func (c *Client) GetUserHwidDevicesCount(uuid string) (int, error) {
+	resp, err := c.doRequest("GET", "/api/hwid/devices/"+uuid, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	var result struct {
+		Response struct {
+			Total int `json:"total"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return 0, fmt.Errorf("failed to unmarshal hwid devices response: %w", err)
+	}
+
+	return result.Response.Total, nil
 }
 
 // UpdateUsername обновляет username пользователя в панели Remnawave

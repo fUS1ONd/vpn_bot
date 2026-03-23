@@ -22,6 +22,54 @@ func TestAdminManageKeyboardDoesNotContainAddTrafficButton(t *testing.T) {
 	assert.Contains(t, buttons, BtnAdminDeleteInvite)
 	assert.Contains(t, buttons, BtnAdminBanUser)
 	assert.Contains(t, buttons, BtnAdminSwitchSubscription)
+	assert.Contains(t, buttons, BtnAdminUserInfo)
+	assert.Contains(t, buttons, BtnAdminBack)
+}
+
+func TestAdminKeyboardShowsStatsAndMaintenanceToggle(t *testing.T) {
+	t.Run("штатный режим", func(t *testing.T) {
+		keyboard := AdminKeyboard(false)
+
+		var buttons []string
+		for _, row := range keyboard.ReplyKeyboard {
+			for _, btn := range row {
+				buttons = append(buttons, btn.Text)
+			}
+		}
+
+		assert.Contains(t, buttons, BtnAdminStats)
+		assert.Contains(t, buttons, BtnAdminMaintenance)
+		assert.NotContains(t, buttons, BtnAdminMaintenanceOff)
+	})
+
+	t.Run("режим обслуживания", func(t *testing.T) {
+		keyboard := AdminKeyboard(true)
+
+		var buttons []string
+		for _, row := range keyboard.ReplyKeyboard {
+			for _, btn := range row {
+				buttons = append(buttons, btn.Text)
+			}
+		}
+
+		assert.Contains(t, buttons, BtnAdminStats)
+		assert.Contains(t, buttons, BtnAdminMaintenanceOff)
+		assert.NotContains(t, buttons, BtnAdminMaintenance)
+	})
+}
+
+func TestAdminSwitchSubmenuContainsExpectedButtons(t *testing.T) {
+	keyboard := AdminSwitchSubmenu()
+
+	var buttons []string
+	for _, row := range keyboard.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+
+	assert.Contains(t, buttons, BtnAdminSwitchInfinite)
+	assert.Contains(t, buttons, BtnAdminChangePrice)
 	assert.Contains(t, buttons, BtnAdminBack)
 }
 

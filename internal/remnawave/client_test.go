@@ -251,3 +251,24 @@ func TestExtendUserSubscription_RejectTooEarly(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, gotPatch)
 }
+
+func TestGetUserHwidDevicesCount(t *testing.T) {
+	client := NewClient("https://panel.example.com", "test-token", nil)
+	client.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			require.Equal(t, http.MethodGet, r.Method)
+			require.Equal(t, "/api/hwid/devices/uuid-1", r.URL.Path)
+
+			payload := `{"response":{"total":2,"devices":[{"hwid":"a"},{"hwid":"b"}]}}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(payload)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	count, err := client.GetUserHwidDevicesCount("uuid-1")
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+}
