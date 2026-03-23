@@ -6,10 +6,10 @@ import (
 )
 
 // CreateUser создаёт нового пользователя
-func (db *DB) CreateUser(telegramID int64, username, firstName, remnawaveUUID string) (*User, error) {
+func (db *DB) CreateUser(telegramID int64, username, firstName, remnawaveUUID string, subscriptionPrice *int, moderatorID *int64) (*User, error) {
 	_, err := db.conn.Exec(
-		`INSERT INTO users (telegram_id, username, first_name, remnawave_uuid) VALUES (?, ?, ?, ?)`,
-		telegramID, username, firstName, remnawaveUUID,
+		`INSERT INTO users (telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		telegramID, username, firstName, remnawaveUUID, subscriptionPrice, moderatorID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
@@ -22,10 +22,12 @@ func (db *DB) CreateUser(telegramID int64, username, firstName, remnawaveUUID st
 func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 	var user User
 	var firstName sql.NullString
+	var subPrice sql.NullInt64
+	var modID sql.NullInt64
 	err := db.conn.QueryRow(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, created_at FROM users WHERE telegram_id = ?`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, created_at FROM users WHERE telegram_id = ?`,
 		telegramID,
-	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &user.CreatedAt)
+	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &user.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -36,6 +38,13 @@ func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 
 	if firstName.Valid {
 		user.FirstName = firstName.String
+	}
+	if subPrice.Valid {
+		v := int(subPrice.Int64)
+		user.SubscriptionPrice = &v
+	}
+	if modID.Valid {
+		user.ModeratorID = &modID.Int64
 	}
 
 	return &user, nil
@@ -45,10 +54,12 @@ func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
 	var user User
 	var firstName sql.NullString
+	var subPrice sql.NullInt64
+	var modID sql.NullInt64
 	err := db.conn.QueryRow(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, created_at FROM users WHERE remnawave_uuid = ?`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, created_at FROM users WHERE remnawave_uuid = ?`,
 		uuid,
-	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &user.CreatedAt)
+	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &user.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -60,6 +71,13 @@ func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
 	if firstName.Valid {
 		user.FirstName = firstName.String
 	}
+	if subPrice.Valid {
+		v := int(subPrice.Int64)
+		user.SubscriptionPrice = &v
+	}
+	if modID.Valid {
+		user.ModeratorID = &modID.Int64
+	}
 
 	return &user, nil
 }
@@ -67,7 +85,7 @@ func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
 // GetAllUsers получает всех пользователей
 func (db *DB) GetAllUsers() ([]User, error) {
 	rows, err := db.conn.Query(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, created_at FROM users ORDER BY created_at`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, created_at FROM users ORDER BY created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query users: %w", err)
@@ -78,11 +96,20 @@ func (db *DB) GetAllUsers() ([]User, error) {
 	for rows.Next() {
 		var user User
 		var firstName sql.NullString
-		if err := rows.Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &user.CreatedAt); err != nil {
+		var subPrice sql.NullInt64
+		var modID sql.NullInt64
+		if err := rows.Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &user.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
 		}
 		if firstName.Valid {
 			user.FirstName = firstName.String
+		}
+		if subPrice.Valid {
+			v := int(subPrice.Int64)
+			user.SubscriptionPrice = &v
+		}
+		if modID.Valid {
+			user.ModeratorID = &modID.Int64
 		}
 		users = append(users, user)
 	}
@@ -92,6 +119,12 @@ func (db *DB) GetAllUsers() ([]User, error) {
 	}
 
 	return users, nil
+}
+
+// UpdateSubscriptionPrice обновляет цену подписки пользователя
+func (db *DB) UpdateSubscriptionPrice(telegramID int64, price int) error {
+	_, err := db.conn.Exec(`UPDATE users SET subscription_price = ? WHERE telegram_id = ?`, price, telegramID)
+	return err
 }
 
 // UpdateUsername обновляет username пользователя

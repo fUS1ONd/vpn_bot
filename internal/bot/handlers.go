@@ -415,7 +415,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	}
 
 	// Сохраняем связку в БД
-	_, err = b.db.CreateUser(telegramID, username, c.Sender().FirstName, remnawaveUser.UUID)
+	_, err = b.db.CreateUser(telegramID, username, c.Sender().FirstName, remnawaveUser.UUID, nil, nil)
 	if err != nil {
 		slog.Error("Failed to create user in DB", "error", err)
 		// Откатываем: удаляем из Remnawave и освобождаем инвайт

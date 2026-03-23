@@ -60,12 +60,13 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	var usedBy sql.NullInt64
 	var usedAt sql.NullTime
 	var expireDays sql.NullInt64
+	var subscriptionPrice sql.NullInt64
 	var kickedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT code, created_by, used_by, used_at, expire_days, kicked_at, created_at FROM invites WHERE code = ?`,
+		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, kicked_at, created_at FROM invites WHERE code = ?`,
 		code,
-	).Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &kickedAt, &invite.CreatedAt)
+	).Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &subscriptionPrice, &kickedAt, &invite.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -83,6 +84,10 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	if expireDays.Valid {
 		v := int(expireDays.Int64)
 		invite.ExpireDays = &v
+	}
+	if subscriptionPrice.Valid {
+		v := int(subscriptionPrice.Int64)
+		invite.SubscriptionPrice = &v
 	}
 	if kickedAt.Valid {
 		invite.KickedAt = &kickedAt.Time
@@ -213,7 +218,7 @@ func (db *DB) IsInviteValid(code string) (bool, error) {
 // GetAllInvites получает все инвайты
 func (db *DB) GetAllInvites() ([]Invite, error) {
 	rows, err := db.conn.Query(
-		`SELECT code, created_by, used_by, used_at, expire_days, created_at FROM invites ORDER BY created_at DESC`,
+		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, created_at FROM invites ORDER BY created_at DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query invites: %w", err)
@@ -226,8 +231,9 @@ func (db *DB) GetAllInvites() ([]Invite, error) {
 		var usedBy sql.NullInt64
 		var usedAt sql.NullTime
 		var expireDays sql.NullInt64
+		var subscriptionPrice sql.NullInt64
 
-		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &invite.CreatedAt); err != nil {
+		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &subscriptionPrice, &invite.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan invite: %w", err)
 		}
 
@@ -240,6 +246,10 @@ func (db *DB) GetAllInvites() ([]Invite, error) {
 		if expireDays.Valid {
 			v := int(expireDays.Int64)
 			invite.ExpireDays = &v
+		}
+		if subscriptionPrice.Valid {
+			v := int(subscriptionPrice.Int64)
+			invite.SubscriptionPrice = &v
 		}
 
 		invites = append(invites, invite)
@@ -255,7 +265,7 @@ func (db *DB) GetAllInvites() ([]Invite, error) {
 // GetUnusedInvites получает неиспользованные инвайты
 func (db *DB) GetUnusedInvites() ([]Invite, error) {
 	rows, err := db.conn.Query(
-		`SELECT code, created_by, used_by, used_at, expire_days, created_at FROM invites WHERE used_by IS NULL ORDER BY created_at DESC`,
+		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, created_at FROM invites WHERE used_by IS NULL ORDER BY created_at DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query invites: %w", err)
@@ -268,8 +278,9 @@ func (db *DB) GetUnusedInvites() ([]Invite, error) {
 		var usedBy sql.NullInt64
 		var usedAt sql.NullTime
 		var expireDays sql.NullInt64
+		var subscriptionPrice sql.NullInt64
 
-		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &invite.CreatedAt); err != nil {
+		if err := rows.Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &subscriptionPrice, &invite.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan invite: %w", err)
 		}
 		if usedAt.Valid {
@@ -278,6 +289,10 @@ func (db *DB) GetUnusedInvites() ([]Invite, error) {
 		if expireDays.Valid {
 			v := int(expireDays.Int64)
 			invite.ExpireDays = &v
+		}
+		if subscriptionPrice.Valid {
+			v := int(subscriptionPrice.Int64)
+			invite.SubscriptionPrice = &v
 		}
 
 		invites = append(invites, invite)
@@ -457,16 +472,17 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 	var usedByNullable sql.NullInt64
 	var usedAt sql.NullTime
 	var expireDays sql.NullInt64
+	var subscriptionPrice sql.NullInt64
 	var kickedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT code, created_by, used_by, used_at, expire_days, kicked_at, created_at
+		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, kicked_at, created_at
 		 FROM invites
 		 WHERE used_by = ? AND kicked_at IS NULL
 		 ORDER BY used_at DESC
 		 LIMIT 1`,
 		usedBy,
-	).Scan(&invite.Code, &invite.CreatedBy, &usedByNullable, &usedAt, &expireDays, &kickedAt, &invite.CreatedAt)
+	).Scan(&invite.Code, &invite.CreatedBy, &usedByNullable, &usedAt, &expireDays, &subscriptionPrice, &kickedAt, &invite.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -483,6 +499,10 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 	if expireDays.Valid {
 		v := int(expireDays.Int64)
 		invite.ExpireDays = &v
+	}
+	if subscriptionPrice.Valid {
+		v := int(subscriptionPrice.Int64)
+		invite.SubscriptionPrice = &v
 	}
 	if kickedAt.Valid {
 		invite.KickedAt = &kickedAt.Time
@@ -626,6 +646,23 @@ func (db *DB) DeleteUnusedInvitesByCreator(createdBy int64) (int64, error) {
 	}
 
 	return rows, nil
+}
+
+// CreateInviteWithPrice создаёт модераторский инвайт с ценой подписки.
+// expireDays = срок действия инвайта в днях, price = цена подписки в руб/мес.
+func (db *DB) CreateInviteWithPrice(createdBy int64, expireDays int, price int) (string, error) {
+	code, err := generateInviteCode()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate invite code: %w", err)
+	}
+	_, err = db.conn.Exec(
+		`INSERT INTO invites (code, created_by, expire_days, subscription_price) VALUES (?, ?, ?, ?)`,
+		code, createdBy, expireDays, price,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to create invite with price: %w", err)
+	}
+	return code, nil
 }
 
 // generateInviteCode генерирует случайный 8-символьный код

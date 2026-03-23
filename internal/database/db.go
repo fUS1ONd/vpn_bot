@@ -17,22 +17,25 @@ type DB struct {
 
 // User представляет запись пользователя
 type User struct {
-	TelegramID    int64
-	Username      string
-	FirstName     string // Имя пользователя из Telegram
-	RemnawaveUUID string
-	CreatedAt     time.Time
+	TelegramID        int64
+	Username          string
+	FirstName         string // Имя пользователя из Telegram
+	RemnawaveUUID     string
+	SubscriptionPrice *int   // Цена подписки руб/мес (NULL = не установлена)
+	ModeratorID       *int64 // Telegram ID куратора (NULL = админский/снят)
+	CreatedAt         time.Time
 }
 
 // Invite представляет запись инвайта
 type Invite struct {
-	Code       string
-	CreatedBy  int64
-	UsedBy     *int64
-	UsedAt     *time.Time // Время активации кода
-	ExpireDays *int       // NULL = бессрочный инвайт
-	KickedAt   *time.Time // Время автокика — инвайт нельзя переиспользовать
-	CreatedAt  time.Time
+	Code              string
+	CreatedBy         int64
+	UsedBy            *int64
+	UsedAt            *time.Time // Время активации кода
+	ExpireDays        *int       // NULL = бессрочный инвайт
+	SubscriptionPrice *int       // Цена подписки при создании инвайта
+	KickedAt          *time.Time // Время автокика — инвайт нельзя переиспользовать
+	CreatedAt         time.Time
 }
 
 // New создаёт новое подключение к БД и инициализирует схему
@@ -110,9 +113,43 @@ func migrate(conn *sql.DB) error {
 			PRIMARY KEY (telegram_id, type)
 		)`,
 
+		// Таблица платежей
+		`CREATE TABLE IF NOT EXISTS payments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			telegram_id INTEGER NOT NULL,
+			moderator_id INTEGER,
+			amount INTEGER NOT NULL,
+			payment_method TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			platega_transaction_id TEXT UNIQUE,
+			redirect_url TEXT,
+			expires_at TIMESTAMP,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			confirmed_at TIMESTAMP
+		)`,
+
+		// Таблица начислений модераторов
+		`CREATE TABLE IF NOT EXISTS moderator_earnings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			payment_id INTEGER NOT NULL REFERENCES payments(id),
+			moderator_id INTEGER NOT NULL,
+			gross_amount INTEGER NOT NULL,
+			platega_fee INTEGER NOT NULL,
+			withdrawal_fee INTEGER NOT NULL,
+			net_amount INTEGER NOT NULL,
+			share_percent INTEGER NOT NULL,
+			share_amount INTEGER NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+
 		// Индексы
 		`CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid)`,
 		`CREATE INDEX IF NOT EXISTS idx_invites_used_by ON invites(used_by)`,
+		`CREATE INDEX IF NOT EXISTS idx_payments_telegram_id ON payments(telegram_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_payments_platega_tx ON payments(platega_transaction_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_earnings_moderator ON moderator_earnings(moderator_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_earnings_payment ON moderator_earnings(payment_id)`,
 	}
 
 	for _, m := range migrations {
@@ -131,6 +168,12 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE invites ADD COLUMN expire_days INTEGER`,
 		// Миграция: метка автокика — инвайт нельзя использовать повторно, но история сохраняется
 		`ALTER TABLE invites ADD COLUMN kicked_at TIMESTAMP`,
+		// Миграция: цена подписки пользователя (руб/мес, NULL = не установлена)
+		`ALTER TABLE users ADD COLUMN subscription_price INTEGER`,
+		// Миграция: telegram_id модератора-куратора (NULL = админский или снят модератор)
+		`ALTER TABLE users ADD COLUMN moderator_id INTEGER`,
+		// Миграция: цена подписки при создании инвайта
+		`ALTER TABLE invites ADD COLUMN subscription_price INTEGER`,
 	}
 
 	for _, m := range alterMigrations {
