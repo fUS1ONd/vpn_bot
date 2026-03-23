@@ -340,6 +340,18 @@ func (b *Bot) sendSchedulerMessage(telegramID int64, message string) error {
 	return err
 }
 
+// sendSchedulerMessageWithKeyboard отправляет сообщение с клавиатурой (для замены текущих кнопок)
+func (b *Bot) sendSchedulerMessageWithKeyboard(telegramID int64, message string, markup *tele.ReplyMarkup) error {
+	if b.bot == nil {
+		return fmt.Errorf("telegram bot is not initialized")
+	}
+	_, err := b.bot.Send(&tele.User{ID: telegramID}, message, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: markup,
+	})
+	return err
+}
+
 // isSchedulerForbiddenError проверяет, заблокировал ли пользователь бот или деактивирован.
 func isSchedulerForbiddenError(err error) bool {
 	return errors.Is(err, tele.ErrBlockedByUser) ||
