@@ -17,10 +17,40 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
 
-// recoverGoroutine логирует панику в горутине вместо краша всего процесса.
-func recoverGoroutine(name string) {
-	if r := recover(); r != nil {
-		slog.Error("goroutine panicked", "goroutine", name, "recover", r)
+// runWithRestart запускает fn в цикле: при панике логирует, ждёт backoff и перезапускает.
+// Если ctx отменён — выходит без retry.
+func runWithRestart(ctx context.Context, name string, fn func()) {
+	const maxBackoff = 5 * time.Minute
+	backoff := 5 * time.Second
+
+	for {
+		panicked := func() (didPanic bool) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("goroutine panicked, will restart", "goroutine", name, "recover", r, "backoff", backoff)
+					didPanic = true
+				}
+			}()
+			fn()
+			return false
+		}()
+
+		if !panicked {
+			// fn вернулась штатно (ctx отменён внутри)
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+
+		// Экспоненциальный backoff до maxBackoff
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
 }
 
@@ -90,7 +120,11 @@ func main() {
 		callbackServer := callback.NewServer(cfg.CallbackPort, cfg.PlategaMerchantID, cfg.PlategaSecret, telegramBot.PaymentCallbackHandler())
 
 		go func() {
-			defer recoverGoroutine("callback-server")
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("goroutine panicked", "goroutine", "callback-server", "recover", r)
+				}
+			}()
 			if err := callbackServer.Start(); err != nil && err != http.ErrServerClosed {
 				slog.Error("Callback server error", "error", err)
 			}
@@ -109,23 +143,20 @@ func main() {
 	}
 
 	// Запуск фоновой синхронизации targets.json для мониторинга нод
-	go func() {
-		defer recoverGoroutine("sync-loop")
+	go runWithRestart(ctx, "sync-loop", func() {
 		monitoring.StartSyncLoop(ctx, remnawaveClient, cfg.SDConfigsPath)
-	}()
+	})
 
 	// Запуск алертера (проверка состояния нод раз в минуту)
 	alertSender := bot.NewBotAlertSender(telegramBot)
-	go func() {
-		defer recoverGoroutine("alerter")
+	go runWithRestart(ctx, "alerter", func() {
 		monitoring.StartAlerter(ctx, telegramBot.MetricsClient(), cfg.SDConfigsPath, alertSender)
-	}()
+	})
 
 	// Запуск ежедневного scheduler подписок (уведомления и автокик).
-	go func() {
-		defer recoverGoroutine("scheduler")
+	go runWithRestart(ctx, "scheduler", func() {
 		telegramBot.StartScheduler(ctx)
-	}()
+	})
 
 	// Запуск бота (блокирующий вызов)
 	telegramBot.Run()

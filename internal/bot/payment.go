@@ -409,26 +409,45 @@ func (h *paymentCallbackHandler) handleCanceled(payment *database.Payment) error
 	return nil
 }
 
-// handleChargeback обрабатывает chargeback
+// handleChargeback обрабатывает chargeback.
+// Полностью зеркалит admin-ban flow (processBanUser): BanUser + DeleteUser из Remnawave + DeleteUser из БД.
 func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) error {
 	if err := h.bot.db.UpdatePaymentStatus(payment.ID, "chargebacked"); err != nil {
 		return fmt.Errorf("update status to chargebacked: %w", err)
 	}
 
-	// Деактивируем пользователя
-	user, err := h.bot.db.GetUserByTelegramID(payment.TelegramID)
-	if err == nil && user != nil {
-		_ = h.bot.remnawave.DisableUser(user.RemnawaveUUID)
+	// Банём пользователя — chargeback = мошенничество, повторная регистрация запрещена.
+	// Если BanUser не сработает — возвращаем ошибку, чтобы Platega retry-ла callback.
+	if err := h.bot.db.BanUser(payment.TelegramID, 0); err != nil {
+		return fmt.Errorf("chargeback ban user: %w", err)
 	}
 
-	// Банём пользователя — chargeback = мошенничество, повторная регистрация запрещена
-	if err := h.bot.db.BanUser(payment.TelegramID, 0); err != nil {
-		slog.Warn("Chargeback: не удалось забанить пользователя", "error", err, "telegram_id", payment.TelegramID)
+	// Каскадное удаление: если пользователь — модератор
+	if h.bot.isModerator(payment.TelegramID) {
+		h.bot.cascadeDeleteModerator(payment.TelegramID)
+	}
+
+	// Удаляем из Remnawave (полное удаление, не просто disable)
+	user, err := h.bot.db.GetUserByTelegramID(payment.TelegramID)
+	if err == nil && user != nil {
+		if delErr := h.bot.remnawave.DeleteUser(user.RemnawaveUUID); delErr != nil {
+			slog.Error("Chargeback: не удалось удалить из Remnawave", "error", delErr, "telegram_id", payment.TelegramID)
+		}
+	}
+
+	// Удаляем из БД бота
+	if delErr := h.bot.db.DeleteUser(payment.TelegramID); delErr != nil {
+		slog.Error("Chargeback: не удалось удалить из БД", "error", delErr, "telegram_id", payment.TelegramID)
+	}
+
+	// Очищаем маркеры отправленных уведомлений
+	if clearErr := h.bot.db.ClearNotifications(payment.TelegramID); clearErr != nil {
+		slog.Error("Chargeback: не удалось очистить уведомления", "error", clearErr, "telegram_id", payment.TelegramID)
 	}
 
 	// Уведомляем админа
 	h.bot.sendAdminAlert(fmt.Sprintf(
-		"⚠️ Chargeback от %d, сумма: %d руб. Пользователь деактивирован и забанен.",
+		"⚠️ Chargeback от %d, сумма: %d руб. Пользователь удалён из Remnawave и забанен.",
 		payment.TelegramID, payment.Amount,
 	))
 

@@ -77,7 +77,7 @@ func TestCheckPaymentStatusSyncsCanceledAndChargebacked(t *testing.T) {
 			})
 			b.remnawave.SetHTTPClient(&http.Client{
 				Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-					if tt.remoteStatus == platega.StatusChargebacked && r.Method == http.MethodPatch {
+					if tt.remoteStatus == platega.StatusChargebacked && (r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
 						return &http.Response{
 							StatusCode: http.StatusOK,
 							Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
