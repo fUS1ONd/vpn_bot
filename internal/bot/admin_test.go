@@ -135,7 +135,7 @@ func TestProcessBanUser_PersistsBanAndKeepsInviteHistory(t *testing.T) {
 	b := &Bot{
 		db:         db,
 		remnawave:  client,
-		config:     &config.Config{AdminID: adminID},
+		config:     &config.Config{AdminID: adminID, PlategaFeeCard: 10, PlategaFeeWithdrawal: 2},
 		userStates: newStateMap(),
 	}
 
@@ -214,8 +214,9 @@ func TestHandleAdminModStats(t *testing.T) {
 
 	prevMonth := time.Now().UTC().AddDate(0, -1, 0)
 	_, err = rawDB.Exec(
-		`UPDATE moderator_earnings SET created_at = ?`,
+		`UPDATE payments SET confirmed_at = ? WHERE id = ?`,
 		time.Date(prevMonth.Year(), prevMonth.Month(), 15, 12, 0, 0, 0, time.UTC),
+		paymentID,
 	)
 	require.NoError(t, err)
 
@@ -250,7 +251,7 @@ func TestHandleAdminModStats(t *testing.T) {
 	b := &Bot{
 		db:         db,
 		remnawave:  client,
-		config:     &config.Config{AdminID: adminID},
+		config:     &config.Config{AdminID: adminID, PlategaFeeCard: 10, PlategaFeeWithdrawal: 2},
 		userStates: newStateMap(),
 	}
 
@@ -415,7 +416,7 @@ func TestProcessSwitchSubscription_ConfirmFlow(t *testing.T) {
 	b := &Bot{
 		db:         db,
 		remnawave:  client,
-		config:     &config.Config{AdminID: adminID},
+		config:     &config.Config{AdminID: adminID, PlategaFeeCard: 10, PlategaFeeWithdrawal: 2},
 		userStates: newStateMap(),
 	}
 
@@ -573,7 +574,7 @@ func TestHandleAdminStats_ShowsFinanceAndConversion(t *testing.T) {
 	b := &Bot{
 		db:         db,
 		remnawave:  client,
-		config:     &config.Config{AdminID: adminID},
+		config:     &config.Config{AdminID: adminID, PlategaFeeCard: 10, PlategaFeeWithdrawal: 2},
 		userStates: newStateMap(),
 	}
 
@@ -586,17 +587,182 @@ func TestHandleAdminStats_ShowsFinanceAndConversion(t *testing.T) {
 	assert.Contains(t, msg, "Общая статистика")
 	assert.Contains(t, msg, "Платежей за месяц: 1")
 	assert.Contains(t, msg, "Сумма платежей (грязная): 500 руб")
+	// Комиссии считаются через calculateMonthlyPaymentFinance (целочисленное деление):
+	// 500 card(10%): platega=50, afterPlatega=450, withdrawal=450*2/100=9, net=441, share=66 (из earnings), owner=375
 	assert.Contains(t, msg, "Комиссии Platega: -50 руб")
-	assert.Contains(t, msg, "Комиссия вывода (2%): -10 руб")
-	assert.Contains(t, msg, "Чистый доход: 440 руб")
+	assert.Contains(t, msg, "Комиссия вывода (2%): -9 руб")
+	assert.Contains(t, msg, "Чистый доход: 441 руб")
 	assert.Contains(t, msg, "Выплаты модераторам: -66 руб")
-	assert.Contains(t, msg, "Доход владельца: 374 руб")
+	assert.Contains(t, msg, "Доход владельца: 375 руб")
 	assert.Contains(t, msg, "Всего в системе: 4")
 	assert.Contains(t, msg, "💳 Платящих: 1")
 	assert.Contains(t, msg, "⏳ Триал: 1")
 	assert.Contains(t, msg, "⚠️ Grace period: 1")
 	assert.Contains(t, msg, "♾️ Бессрочных: 1")
 	assert.Contains(t, msg, "Конверсия триал → оплата: 33%")
+}
+
+func TestHandleAdminStats_IncludesAdminPaymentsAndModeratorPayouts(t *testing.T) {
+	dbFile := "test_admin_stats_regression.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999999)
+	modID := int64(100)
+	moderatorPaymentUserID := int64(200)
+	adminPaymentUserID := int64(201)
+	previousMonthPaymentUserID := int64(202)
+	notActivatedPaymentUserID := int64(203)
+
+	_, err = db.CreateUser(modID, "moderator", "Модератор", "uuid-mod", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AddModerator(modID, adminID))
+
+	_, err = db.CreateUser(moderatorPaymentUserID, "paid-mod", "Paid Mod", "uuid-paid-mod", nil, &modID)
+	require.NoError(t, err)
+	_, err = db.CreateUser(adminPaymentUserID, "paid-admin", "Paid Admin", "uuid-paid-admin", nil, nil)
+	require.NoError(t, err)
+	_, err = db.CreateUser(previousMonthPaymentUserID, "paid-prev", "Paid Prev", "uuid-paid-prev", nil, &modID)
+	require.NoError(t, err)
+	_, err = db.CreateUser(notActivatedPaymentUserID, "paid-pending", "Paid Pending", "uuid-paid-pending", nil, &modID)
+	require.NoError(t, err)
+
+	moderatorPaymentID, err := db.CreatePayment(&database.Payment{
+		TelegramID:    moderatorPaymentUserID,
+		ModeratorID:   &modID,
+		Amount:        500,
+		PaymentMethod: "card",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(moderatorPaymentID))
+
+	_, err = db.CreateEarning(&database.ModeratorEarning{
+		PaymentID:     moderatorPaymentID,
+		ModeratorID:   modID,
+		GrossAmount:   500,
+		PlategaFee:    60,
+		WithdrawalFee: 8,
+		NetAmount:     432,
+		SharePercent:  15,
+		ShareAmount:   66,
+	})
+	require.NoError(t, err)
+
+	adminPaymentID, err := db.CreatePayment(&database.Payment{
+		TelegramID:    adminPaymentUserID,
+		Amount:        1000,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(adminPaymentID))
+
+	previousMonthPaymentID, err := db.CreatePayment(&database.Payment{
+		TelegramID:    previousMonthPaymentUserID,
+		ModeratorID:   &modID,
+		Amount:        700,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(previousMonthPaymentID))
+
+	notActivatedPaymentID, err := db.CreatePayment(&database.Payment{
+		TelegramID:    notActivatedPaymentUserID,
+		ModeratorID:   &modID,
+		Amount:        800,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(notActivatedPaymentID))
+
+	now := time.Now().UTC()
+	previousMonth := time.Date(now.Year(), now.Month(), 1, 12, 0, 0, 0, time.UTC).AddDate(0, -1, 0)
+	currentMonthConfirmedAt := time.Date(now.Year(), now.Month(), 10, 12, 0, 0, 0, time.UTC)
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, currentMonthConfirmedAt, moderatorPaymentID)
+	require.NoError(t, err)
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, currentMonthConfirmedAt, adminPaymentID)
+	require.NoError(t, err)
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, previousMonth, previousMonthPaymentID)
+	require.NoError(t, err)
+	_, err = db.Conn().Exec(`UPDATE payments SET status = 'confirmed_not_activated', confirmed_at = ? WHERE id = ?`, currentMonthConfirmedAt, notActivatedPaymentID)
+	require.NoError(t, err)
+
+	_, err = db.CreateEarning(&database.ModeratorEarning{
+		PaymentID:     previousMonthPaymentID,
+		ModeratorID:   modID,
+		GrossAmount:   700,
+		PlategaFee:    70,
+		WithdrawalFee: 12,
+		NetAmount:     618,
+		SharePercent:  15,
+		ShareAmount:   92,
+	})
+	require.NoError(t, err)
+	_, err = db.CreateEarning(&database.ModeratorEarning{
+		PaymentID:     notActivatedPaymentID,
+		ModeratorID:   modID,
+		GrossAmount:   800,
+		PlategaFee:    80,
+		WithdrawalFee: 14,
+		NetAmount:     706,
+		SharePercent:  15,
+		ShareAmount:   105,
+	})
+	require.NoError(t, err)
+
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.RawQuery == "size=1000" {
+				payload := `{"response":{"users":[],"total":0}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
+	})
+
+	b := &Bot{
+		db:         db,
+		remnawave:  client,
+		config:     &config.Config{AdminID: adminID, PlategaFeeSBP: 10, PlategaFeeCard: 12, PlategaFeeWithdrawal: 2},
+		userStates: newStateMap(),
+	}
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: adminID, Username: "admin"},
+		message: &tele.Message{},
+	}
+
+	err = b.handleAdminStats(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	// Финансовая статистика считается по всем confirmed-платежам месяца через GetConfirmedPaymentsByMonth.
+	// previousMonthPaymentID подтверждён в прошлом месяце — не входит.
+	// В текущем месяце: moderatorPayment (500 card) + adminPayment (1000 sbp) + notActivatedPayment (800 sbp) = 3 платежа.
+	// moderatorPayment (500, card 12%): platega=60, withdrawal=8, net=432, share=66
+	// adminPayment (1000, sbp 10%): platega=100, withdrawal=18, net=882, share=0 (нет earnings)
+	// notActivatedPayment (800, sbp 10%): platega=80, withdrawal=14, net=706, share=105
+	// Итого: gross=2300, platega=240, withdrawal=40, net=2020, share=171, owner=1849
+	assert.Contains(t, msg, "Платежей за месяц: 3")
+	assert.Contains(t, msg, "Сумма платежей (грязная): 2300 руб")
+	assert.Contains(t, msg, "Комиссии Platega: -240 руб")
+	assert.Contains(t, msg, "Комиссия вывода (2%): -40 руб")
+	assert.Contains(t, msg, "Чистый доход: 2020 руб")
+	assert.Contains(t, msg, "Выплаты модераторам: -171 руб")
+	assert.Contains(t, msg, "Доход владельца: 1849 руб")
 }
 
 func TestProcessAdminUserInfo_ShowsFullCard(t *testing.T) {

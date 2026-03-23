@@ -618,6 +618,18 @@ func strPtr(v string) *string {
 	return &v
 }
 
+// calculateMonthlyPaymentFinance считает комиссии платежа по текущим конфигурационным ставкам.
+// Используется для расчёта финансовой статистики в отчёте админа.
+func (b *Bot) calculateMonthlyPaymentFinance(payment database.MonthlyConfirmedPayment) (plategaFee, withdrawalFee, netAmount int) {
+	feePercent := b.getPlategaFeePercent(payment.PaymentMethod)
+	grossAmount := payment.Amount
+	plategaFee = grossAmount * feePercent / 100
+	afterPlatega := grossAmount - plategaFee
+	withdrawalFee = afterPlatega * b.config.PlategaFeeWithdrawal / 100
+	netAmount = afterPlatega - withdrawalFee
+	return
+}
+
 // handleAdminStats показывает общую финансовую и пользовательскую статистику за текущий месяц.
 func (b *Bot) handleAdminStats(c tele.Context) error {
 	if !b.isAdmin(c) {
@@ -628,10 +640,23 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 	year := now.Year()
 	month := int(now.Month())
 
-	monthEarnings, err := b.db.GetAllEarningsByMonth(year, month)
+	// Источник финансовой статистики — все подтверждённые платежи месяца.
+	// Платежи без earnings (админские) включаются с share_amount = 0.
+	confirmedPayments, err := b.db.GetConfirmedPaymentsByMonth(year, month)
 	if err != nil {
-		slog.Error("Failed to load monthly earnings for admin stats", "error", err)
+		slog.Error("Failed to load monthly confirmed payments for admin stats", "error", err)
 		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.maintenanceMode)})
+	}
+
+	monthEarnings := &database.MonthlyEarnings{}
+	for _, payment := range confirmedPayments {
+		plategaFee, withdrawalFee, netAmount := b.calculateMonthlyPaymentFinance(payment)
+		monthEarnings.TotalPayments++
+		monthEarnings.GrossAmount += payment.Amount
+		monthEarnings.TotalPlategaFee += plategaFee
+		monthEarnings.TotalWithdrawal += withdrawalFee
+		monthEarnings.TotalNetAmount += netAmount
+		monthEarnings.TotalShareAmount += payment.ShareAmount
 	}
 
 	trialsThisMonth, err := b.db.CountTrialsByMonth(year, month)
