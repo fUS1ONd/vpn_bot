@@ -2,6 +2,7 @@ package callback
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,6 +46,7 @@ func NewServer(port int, merchantID, secret string, handler PaymentHandler) *Ser
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 65 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	return s
@@ -77,7 +79,8 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	merchantID := r.Header.Get("X-MerchantId")
 	secret := r.Header.Get("X-Secret")
 
-	if merchantID != s.merchantID || secret != s.secret {
+	if subtle.ConstantTimeCompare([]byte(merchantID), []byte(s.merchantID)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(secret), []byte(s.secret)) != 1 {
 		slog.Warn("Callback rejected: invalid credentials",
 			"merchant_id", merchantID,
 			"remote_addr", r.RemoteAddr,

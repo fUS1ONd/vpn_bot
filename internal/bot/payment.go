@@ -187,6 +187,11 @@ func (b *Bot) schedulePaymentActivationRetry(paymentID int64) {
 	delays := b.paymentActivationRetryDelays()
 	go func() {
 		defer b.paymentRetryInFlight.Delete(paymentID)
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("payment retry goroutine panicked", "payment_id", paymentID, "recover", r)
+			}
+		}()
 
 		for attempt, delay := range delays {
 			time.Sleep(delay)
@@ -416,9 +421,14 @@ func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) err
 		_ = h.bot.remnawave.DisableUser(user.RemnawaveUUID)
 	}
 
+	// Банём пользователя — chargeback = мошенничество, повторная регистрация запрещена
+	if err := h.bot.db.BanUser(payment.TelegramID, 0); err != nil {
+		slog.Warn("Chargeback: не удалось забанить пользователя", "error", err, "telegram_id", payment.TelegramID)
+	}
+
 	// Уведомляем админа
 	h.bot.sendAdminAlert(fmt.Sprintf(
-		"⚠️ Chargeback от %d, сумма: %d руб. Пользователь деактивирован.",
+		"⚠️ Chargeback от %d, сумма: %d руб. Пользователь деактивирован и забанен.",
 		payment.TelegramID, payment.Amount,
 	))
 

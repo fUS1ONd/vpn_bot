@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"html"
 	"log/slog"
 	"strings"
 	"sync"
@@ -122,6 +123,11 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 func (b *Bot) Run() {
 	slog.Info("Bot started", "username", b.bot.Me.Username)
 	b.bot.Start()
+}
+
+// Stop останавливает бота (для graceful shutdown)
+func (b *Bot) Stop() {
+	b.bot.Stop()
 }
 
 // handleMediaMessage обрабатывает медиа-сообщения (для рассылки)
@@ -340,14 +346,18 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 		}
-		return b.processModeratorDeleteInvite(c, text)
+		if b.isModerator(telegramID) {
+			return b.processModeratorDeleteInvite(c, text)
+		}
 
 	case StateWaitModInvitePrice:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 		}
-		return b.processModeratorInvitePrice(c, text)
+		if b.isModerator(telegramID) {
+			return b.processModeratorInvitePrice(c, text)
+		}
 
 	case StateWaitModChangePriceID:
 		if text == BtnCancel {
@@ -355,7 +365,9 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			b.clearModChangePriceSession(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
 		}
-		return b.processModChangePriceID(c, text)
+		if b.isModerator(telegramID) {
+			return b.processModChangePriceID(c, text)
+		}
 
 	case StateWaitModChangePriceValue:
 		if text == BtnCancel {
@@ -363,7 +375,9 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			b.clearModChangePriceSession(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
 		}
-		return b.processModChangePriceValue(c, text)
+		if b.isModerator(telegramID) {
+			return b.processModChangePriceValue(c, text)
+		}
 
 	case StateWaitAddModerator:
 		if text == BtnCancel {
@@ -608,7 +622,7 @@ func (b *Bot) notifyAdminNewUser(telegramID int64, username, firstName string) {
 
 	// First name (если есть)
 	if firstName != "" {
-		fmt.Fprintf(&msg, "👤 %s\n", firstName)
+		fmt.Fprintf(&msg, "👤 %s\n", html.EscapeString(firstName))
 	}
 
 	admin := &tele.User{ID: b.config.AdminID}

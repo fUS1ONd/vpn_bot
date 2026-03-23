@@ -17,6 +17,13 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
 
+// recoverGoroutine логирует панику в горутине вместо краша всего процесса.
+func recoverGoroutine(name string) {
+	if r := recover(); r != nil {
+		slog.Error("goroutine panicked", "goroutine", name, "recover", r)
+	}
+}
+
 func main() {
 	// Настройка логирования
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -75,6 +82,7 @@ func main() {
 		<-sigChan
 		slog.Info("Shutdown signal received, stopping bot...")
 		cancel()
+		telegramBot.Stop()
 	}()
 
 	// Запуск callback-сервера (если Platega настроена)
@@ -82,6 +90,7 @@ func main() {
 		callbackServer := callback.NewServer(cfg.CallbackPort, cfg.PlategaMerchantID, cfg.PlategaSecret, telegramBot.PaymentCallbackHandler())
 
 		go func() {
+			defer recoverGoroutine("callback-server")
 			if err := callbackServer.Start(); err != nil && err != http.ErrServerClosed {
 				slog.Error("Callback server error", "error", err)
 			}
@@ -100,14 +109,23 @@ func main() {
 	}
 
 	// Запуск фоновой синхронизации targets.json для мониторинга нод
-	go monitoring.StartSyncLoop(ctx, remnawaveClient, cfg.SDConfigsPath)
+	go func() {
+		defer recoverGoroutine("sync-loop")
+		monitoring.StartSyncLoop(ctx, remnawaveClient, cfg.SDConfigsPath)
+	}()
 
 	// Запуск алертера (проверка состояния нод раз в минуту)
 	alertSender := bot.NewBotAlertSender(telegramBot)
-	go monitoring.StartAlerter(ctx, telegramBot.MetricsClient(), cfg.SDConfigsPath, alertSender)
+	go func() {
+		defer recoverGoroutine("alerter")
+		monitoring.StartAlerter(ctx, telegramBot.MetricsClient(), cfg.SDConfigsPath, alertSender)
+	}()
 
 	// Запуск ежедневного scheduler подписок (уведомления и автокик).
-	go telegramBot.StartScheduler(ctx)
+	go func() {
+		defer recoverGoroutine("scheduler")
+		telegramBot.StartScheduler(ctx)
+	}()
 
 	// Запуск бота (блокирующий вызов)
 	telegramBot.Run()

@@ -60,7 +60,7 @@ func (m *MetricsClient) query(promql string) (*promResult, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB max
 	if err != nil {
 		return nil, fmt.Errorf("ошибка чтения ответа VM: %w", err)
 	}

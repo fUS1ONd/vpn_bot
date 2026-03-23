@@ -421,7 +421,7 @@ func TestHandleModeratorEarnings(t *testing.T) {
 
 	b.remnawave.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.RawQuery == "size=1000" {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.Query().Get("size") == "1000" {
 				payload := `{"response":{"users":[{"uuid":"uuid-300","telegramId":300,"username":"paid","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}],"total":1}}`
 				return &http.Response{
 					StatusCode: http.StatusOK,
@@ -516,7 +516,7 @@ func TestHandleTextMessage_ModeratorButtons(t *testing.T) {
 	t.Run("Кнопка_Заработок_открывает_сводку", func(t *testing.T) {
 		b.remnawave.SetHTTPClient(&http.Client{
 			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.RawQuery == "size=1000" {
+				if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.Query().Get("size") == "1000" {
 					payload := `{"response":{"users":[],"total":0}}`
 					return &http.Response{
 						StatusCode: http.StatusOK,

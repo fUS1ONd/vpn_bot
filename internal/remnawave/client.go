@@ -205,25 +205,35 @@ func (c *Client) GetUserByTelegramID(telegramID int64) (*User, error) {
 	return &user, nil
 }
 
-// GetAllUsers получает список всех пользователей
+// GetAllUsers получает список всех пользователей с пагинацией.
 func (c *Client) GetAllUsers() ([]User, error) {
-	// Получаем с максимальным лимитом (API ограничивает до 1000)
-	resp, err := c.doRequest("GET", "/api/users?size=1000", nil)
-	if err != nil {
-		return nil, err
+	const pageSize = 1000
+	var allUsers []User
+
+	for start := 0; ; start += pageSize {
+		resp, err := c.doRequest("GET", fmt.Sprintf("/api/users?size=%d&start=%d", pageSize, start), nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var result struct {
+			Response struct {
+				Users []User `json:"users"`
+				Total int    `json:"total"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal(resp, &result); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		}
+
+		allUsers = append(allUsers, result.Response.Users...)
+
+		if len(allUsers) >= result.Response.Total || len(result.Response.Users) < pageSize {
+			break
+		}
 	}
 
-	var result struct {
-		Response struct {
-			Users []User `json:"users"`
-			Total int    `json:"total"`
-		} `json:"response"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return result.Response.Users, nil
+	return allUsers, nil
 }
 
 // GetUserHwidDevicesCount возвращает количество HWID-устройств пользователя.
@@ -411,7 +421,7 @@ func (c *Client) doRequest(method, path string, body []byte) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB max
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
