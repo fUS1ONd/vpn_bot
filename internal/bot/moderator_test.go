@@ -419,6 +419,20 @@ func TestHandleModeratorEarnings(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.RawQuery == "size=1000" {
+				payload := `{"response":{"users":[{"uuid":"uuid-300","telegramId":300,"username":"paid","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}],"total":1}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
+	})
+
 	ctx := &MockContext{
 		sender:  &tele.User{ID: modID, Username: "moderator"},
 		message: &tele.Message{},
@@ -430,7 +444,11 @@ func TestHandleModeratorEarnings(t *testing.T) {
 	sentStr, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
 	assert.Contains(t, sentStr, "Мой заработок")
-	assert.Contains(t, sentStr, "Платящих клиентов")
+	assert.Contains(t, sentStr, "Финансы за")
+	assert.Contains(t, sentStr, "За всё время")
+	assert.Contains(t, sentStr, "Текущее состояние подписчиков")
+	assert.Contains(t, sentStr, "💳 Платящих: 1")
+	assert.NotContains(t, sentStr, "Платящих клиентов")
 	assert.Contains(t, sentStr, "500 руб")
 	assert.Contains(t, sentStr, "65 руб")
 }
@@ -496,6 +514,20 @@ func TestHandleTextMessage_ModeratorButtons(t *testing.T) {
 	})
 
 	t.Run("Кнопка_Заработок_открывает_сводку", func(t *testing.T) {
+		b.remnawave.SetHTTPClient(&http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.RawQuery == "size=1000" {
+					payload := `{"response":{"users":[],"total":0}}`
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(payload)),
+						Header:     make(http.Header),
+					}, nil
+				}
+				return nil, assert.AnError
+			}),
+		})
+
 		ctx := &MockContext{
 			sender:  user,
 			message: &tele.Message{Text: BtnModEarnings},

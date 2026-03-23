@@ -730,7 +730,7 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 
 	msg := fmt.Sprintf(
 		"<b>📊 Общая статистика — %s %d</b>\n\n"+
-			"💰 <b>Финансы</b>\n"+
+			"💰 <b>Финансы за %s %d</b>\n"+
 			"├ Платежей за месяц: %d\n"+
 			"├ Сумма платежей (грязная): %d руб\n"+
 			"├ Комиссии Platega: -%d руб\n"+
@@ -738,13 +738,16 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 			"├ Чистый доход: %d руб\n"+
 			"├ Выплаты модераторам: -%d руб\n"+
 			"└ Доход владельца: %d руб\n\n"+
-			"👥 <b>Пользователи</b>\n"+
+			"📈 <b>Воронка за %s %d</b>\n"+
+			"└ Конверсия триал → оплата: %d%%\n\n"+
+			"👥 <b>Текущее состояние пользователей</b>\n"+
 			"├ Всего в системе: %d\n"+
 			"├ 💳 Платящих: %d\n"+
 			"├ ⏳ Триал: %d\n"+
 			"├ ⚠️ Grace period: %d\n"+
-			"├ ♾️ Бессрочных: %d\n"+
-			"└ 📈 Конверсия триал → оплата: %d%%",
+			"└ ♾️ Бессрочных: %d",
+		monthNameRu(now.Month()),
+		now.Year(),
 		monthNameRu(now.Month()),
 		now.Year(),
 		monthEarnings.TotalPayments,
@@ -754,12 +757,14 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 		monthEarnings.TotalNetAmount,
 		monthEarnings.TotalShareAmount,
 		ownerIncome,
+		monthNameRu(now.Month()),
+		now.Year(),
+		conversion,
 		totalUsers,
 		payingCount,
 		trialCount,
 		graceCount,
 		infiniteCount,
-		conversion,
 	)
 
 	return c.Send(msg, &tele.SendOptions{
@@ -1179,23 +1184,7 @@ func (b *Bot) handleAdminModStats(c tele.Context) error {
 			continue
 		}
 
-		paying := 0
-		trial := 0
-		grace := 0
-		for _, sub := range subs {
-			remUser, ok := byTelegramID[sub.TelegramID]
-			if !ok {
-				continue
-			}
-			switch b.describeSubscriberStatus(sub.TelegramID, remUser, now) {
-			case "paid":
-				paying++
-			case "trial":
-				trial++
-			case "grace":
-				grace++
-			}
-		}
+		currentState := b.summarizeModeratorSubscriberStates(subs, byTelegramID, now)
 
 		monthStats, err := b.db.GetModeratorEarningsByMonth(mod.TelegramID, reportYear, reportMonth)
 		if err != nil {
@@ -1215,19 +1204,21 @@ func (b *Bot) handleAdminModStats(c tele.Context) error {
 		sharePercent := monthStats.SharePercent
 		msg := fmt.Sprintf(
 			"📊 <b>Статистика: %s — %s %d</b>\n\n"+
-				"💳 Платящих: %d │ ⏳ Триал: %d │ ⚠️ Grace: %d\n"+
-				"📥 Платежи: %d руб\n"+
-				"📉 Комиссии Platega: -%d руб\n"+
-				"📉 Комиссия вывода (2%%): -%d руб\n"+
-				"📊 Чистый доход: %d руб\n"+
-				"💰 Доля модератора (%d%%): %d руб\n"+
-				"💰 За всё время: %d руб",
+				"💰 <b>Финансы за %s %d</b>\n"+
+				"├ Платежи: %d руб\n"+
+				"├ Комиссии Platega: -%d руб\n"+
+				"├ Комиссия вывода (2%%): -%d руб\n"+
+				"├ Чистый доход: %d руб\n"+
+				"└ Доля модератора (%d%%): %d руб\n\n"+
+				"💰 <b>За всё время</b>\n"+
+				"└ Заработано: %d руб\n\n"+
+				"👥 <b>Текущее состояние клиентов</b>\n"+
+				"└ 💳 Платящих: %d │ ⏳ Триал: %d │ ⚠️ Grace: %d",
 			formatAdminModeratorLabel(mod.FirstName, mod.Username, mod.TelegramID),
 			monthNameRu(reportDate.Month()),
 			reportYear,
-			paying,
-			trial,
-			grace,
+			monthNameRu(reportDate.Month()),
+			reportYear,
 			monthStats.GrossAmount,
 			monthStats.TotalPlategaFee,
 			monthStats.TotalWithdrawal,
@@ -1235,6 +1226,9 @@ func (b *Bot) handleAdminModStats(c tele.Context) error {
 			sharePercent,
 			monthStats.TotalShareAmount,
 			totalEarnings,
+			currentState.Paying,
+			currentState.Trial,
+			currentState.Grace,
 		)
 
 		if err := c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML}); err != nil {

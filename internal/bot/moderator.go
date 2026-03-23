@@ -28,6 +28,14 @@ type modChangePriceSession struct {
 	CurrentPrice         int
 }
 
+type moderatorSubscriberStateSummary struct {
+	Paying  int
+	Trial   int
+	Grace   int
+	Expired int
+	Deleted int
+}
+
 // isModerator проверяет, является ли пользователь модератором.
 func (b *Bot) isModerator(telegramID int64) bool {
 	ok, err := b.db.IsModerator(telegramID)
@@ -244,30 +252,50 @@ func (b *Bot) handleModeratorEarnings(c tele.Context) error {
 		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 	}
 
-	payingCount, err := b.db.CountPayingSubscribersByModerator(moderatorID)
+	subscribers, err := b.db.GetSubscribersByModerator(moderatorID)
 	if err != nil {
-		slog.Error("Failed to count paying subscribers", "error", err, "moderator_id", moderatorID)
+		slog.Error("Failed to load subscribers for moderator earnings", "error", err, "moderator_id", moderatorID)
 		return c.Send("Ошибка получения статистики", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 	}
 
+	remUsers, err := b.remnawave.GetAllUsers()
+	if err != nil {
+		slog.Error("Failed to load Remnawave users for moderator earnings", "error", err, "moderator_id", moderatorID)
+		return c.Send("Ошибка получения статистики из панели", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
+	}
+
+	remByTelegramID := make(map[int64]remnawave.User, len(remUsers))
+	for _, user := range remUsers {
+		if user.TelegramID == nil || *user.TelegramID == 0 {
+			continue
+		}
+		remByTelegramID[*user.TelegramID] = user
+	}
+
+	currentState := b.summarizeModeratorSubscriberStates(subscribers, remByTelegramID, now)
+
 	sharePercent := monthStats.SharePercent
 	if sharePercent == 0 {
-		sharePercent = calculateSharePercent(payingCount)
+		sharePercent = calculateSharePercent(currentState.Paying)
 	}
 
 	msg := fmt.Sprintf(
-		"<b>💰 Мой заработок</b>\n\nЗа %s %d:\n"+
-			"├ Платящих клиентов: %d\n"+
+		"<b>💰 Мой заработок</b>\n\n"+
+			"💰 <b>Финансы за %s %d</b>\n"+
+			"├ Платежей: %d\n"+
 			"├ Ваша доля: %d%%\n"+
 			"├ Сумма платежей: %d руб\n"+
 			"├ Комиссии Platega: -%d руб\n"+
 			"├ Комиссия вывода: -%d руб\n"+
 			"├ Чистый доход: %d руб\n"+
-			"└ Ваша доля: %d руб\n\n"+
-			"За всё время: %d руб",
+			"└ Заработок за период: %d руб\n\n"+
+			"💰 <b>За всё время</b>\n"+
+			"└ Заработано: %d руб\n\n"+
+			"👥 <b>Текущее состояние подписчиков</b>\n"+
+			"└ 💳 Платящих: %d │ ⏳ Триал: %d │ ⚠️ Grace: %d │ ⏰ Истекших: %d │ ❌ Удалённых: %d",
 		monthNameRu(now.Month()),
 		now.Year(),
-		payingCount,
+		monthStats.TotalPayments,
 		sharePercent,
 		monthStats.GrossAmount,
 		monthStats.TotalPlategaFee,
@@ -275,6 +303,11 @@ func (b *Bot) handleModeratorEarnings(c tele.Context) error {
 		monthStats.TotalNetAmount,
 		monthStats.TotalShareAmount,
 		totalEarnings,
+		currentState.Paying,
+		currentState.Trial,
+		currentState.Grace,
+		currentState.Expired,
+		currentState.Deleted,
 	)
 
 	return c.Send(msg, &tele.SendOptions{
@@ -533,6 +566,40 @@ func (b *Bot) describeSubscriberStatus(telegramID int64, remUser remnawave.User,
 		return "expired"
 	}
 	return "paid"
+}
+
+func (b *Bot) summarizeModeratorSubscriberStates(
+	subscribers []database.Subscriber,
+	byTelegramID map[int64]remnawave.User,
+	now time.Time,
+) moderatorSubscriberStateSummary {
+	var summary moderatorSubscriberStateSummary
+
+	for _, sub := range subscribers {
+		if sub.RemnawaveUUID == nil {
+			summary.Deleted++
+			continue
+		}
+
+		remUser, ok := byTelegramID[sub.TelegramID]
+		if !ok {
+			summary.Deleted++
+			continue
+		}
+
+		switch b.describeSubscriberStatus(sub.TelegramID, remUser, now) {
+		case "trial":
+			summary.Trial++
+		case "grace":
+			summary.Grace++
+		case "expired":
+			summary.Expired++
+		default:
+			summary.Paying++
+		}
+	}
+
+	return summary
 }
 
 func formatPriceLabel(price *int) string {

@@ -269,6 +269,9 @@ func TestHandleAdminModStats(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, msg, "Статистика:")
 	assert.Contains(t, msg, "@moderator")
+	assert.Contains(t, msg, "Финансы за")
+	assert.Contains(t, msg, "За всё время")
+	assert.Contains(t, msg, "Текущее состояние клиентов")
 	assert.Contains(t, msg, "Платящих: 1")
 	assert.Contains(t, msg, "Платежи: 500 руб")
 	assert.Contains(t, msg, "Доля модератора (15%)")
@@ -585,6 +588,9 @@ func TestHandleAdminStats_ShowsFinanceAndConversion(t *testing.T) {
 	msg, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
 	assert.Contains(t, msg, "Общая статистика")
+	assert.Contains(t, msg, "Финансы за")
+	assert.Contains(t, msg, "Воронка за")
+	assert.Contains(t, msg, "Текущее состояние пользователей")
 	assert.Contains(t, msg, "Платежей за месяц: 1")
 	assert.Contains(t, msg, "Сумма платежей (грязная): 500 руб")
 	// Комиссии считаются через calculateMonthlyPaymentFinance (целочисленное деление):
@@ -600,6 +606,7 @@ func TestHandleAdminStats_ShowsFinanceAndConversion(t *testing.T) {
 	assert.Contains(t, msg, "⚠️ Grace period: 1")
 	assert.Contains(t, msg, "♾️ Бессрочных: 1")
 	assert.Contains(t, msg, "Конверсия триал → оплата: 33%")
+	assert.NotContains(t, msg, "👥 <b>Пользователи</b>")
 }
 
 func TestHandleAdminStats_IncludesAdminPaymentsAndModeratorPayouts(t *testing.T) {
