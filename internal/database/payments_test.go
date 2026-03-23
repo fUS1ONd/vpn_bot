@@ -153,6 +153,41 @@ func TestConfirmPayment(t *testing.T) {
 	assert.NotNil(t, got.ConfirmedAt)
 }
 
+func TestConfirmPaymentPreservesExistingConfirmedAt(t *testing.T) {
+	dbFile := "test_payments_confirm_preserve.db"
+	db, err := New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	p := &Payment{
+		TelegramID:    12345,
+		Amount:        500,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	id, err := db.CreatePayment(p)
+	require.NoError(t, err)
+
+	require.NoError(t, db.ConfirmPayment(id))
+
+	original := time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC)
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, original, id)
+	require.NoError(t, err)
+
+	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
+	require.NoError(t, db.ConfirmPayment(id))
+
+	got, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.ConfirmedAt)
+	assert.Equal(t, "confirmed", got.Status)
+	assert.True(t, got.ConfirmedAt.Equal(original), "confirmed_at не должен перезаписываться при retry")
+}
+
 func TestExpireOldPendingPayments(t *testing.T) {
 	dbFile := "test_payments_expire.db"
 	db, err := New(dbFile)

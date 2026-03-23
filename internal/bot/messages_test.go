@@ -20,7 +20,7 @@ func TestFormatUserStatusShowsUsedTrafficPerMonthWithoutLimit(t *testing.T) {
 		},
 	}
 
-	msg := FormatUserStatus(user, nil, false)
+	msg := FormatUserStatus(user, nil, false, nil)
 
 	assert.Contains(t, msg, "<b>Трафик за месяц:</b> 5.00 GB")
 	assert.NotContains(t, msg, "<b>Трафик:</b>")
@@ -39,7 +39,7 @@ func TestFormatUserStatusGraceShowsPaymentWindow(t *testing.T) {
 		ExpireAt:          time.Now().UTC().Add(-12 * time.Hour),
 	}, &database.User{
 		SubscriptionPrice: &price,
-	}, false)
+	}, false, nil)
 
 	assert.Contains(t, msg, "⚠️ Подписка истекла")
 	assert.Contains(t, msg, "VPN деактивирован")

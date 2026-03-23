@@ -163,7 +163,10 @@ func (db *DB) UpdatePaymentStatus(id int64, status string) error {
 // ConfirmPayment помечает платёж как confirmed с датой подтверждения
 func (db *DB) ConfirmPayment(id int64) error {
 	_, err := db.conn.Exec(
-		`UPDATE payments SET status = 'confirmed', confirmed_at = datetime('now') WHERE id = ?`, id,
+		`UPDATE payments
+		 SET status = 'confirmed',
+		     confirmed_at = COALESCE(confirmed_at, datetime('now'))
+		 WHERE id = ?`, id,
 	)
 	return err
 }

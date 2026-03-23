@@ -180,26 +180,26 @@ func determineSubscriptionType(remUser *remnawave.User, isTrial bool) subscripti
 }
 
 // FormatUserStatus форматирует статус пользователя с учётом типа подписки
-func FormatUserStatus(remUser *remnawave.User, dbUser *database.User, isTrial bool) string {
+func FormatUserStatus(remUser *remnawave.User, dbUser *database.User, isTrial bool, devicesCount *int) string {
 	subType := determineSubscriptionType(remUser, isTrial)
 
 	var msg string
 
 	switch subType {
 	case subTypeInfinite:
-		msg = formatInfiniteStatus(remUser)
+		msg = formatInfiniteStatus(remUser, devicesCount)
 	case subTypeGrace:
 		msg = formatGraceStatus(remUser, dbUser)
 	case subTypeTrial:
-		msg = formatTrialStatus(remUser, dbUser)
+		msg = formatTrialStatus(remUser, dbUser, devicesCount)
 	case subTypePaid:
-		msg = formatPaidStatus(remUser, dbUser)
+		msg = formatPaidStatus(remUser, dbUser, devicesCount)
 	}
 
 	return msg
 }
 
-func formatInfiniteStatus(remUser *remnawave.User) string {
+func formatInfiniteStatus(remUser *remnawave.User, devicesCount *int) string {
 	msg := "<b>👤 Ваш статус</b>\n\n"
 	msg += "<b>Тип:</b> ♾️ Безлимитная подписка\n"
 	msg += "<b>Статус:</b> ✅ Активен\n"
@@ -208,6 +208,7 @@ func formatInfiniteStatus(remUser *remnawave.User) string {
 		usedGB := float64(remUser.UserTraffic.UsedTrafficBytes) / (1024 * 1024 * 1024)
 		msg += fmt.Sprintf("\n<b>Трафик за месяц:</b> %.2f GB\n", usedGB)
 	}
+	msg += formatDevicesLine(remUser, devicesCount)
 
 	msg += fmt.Sprintf("\n<b>Ссылка подписки:</b>\n<code>%s</code>", remUser.SubscriptionURL)
 	return msg
@@ -242,7 +243,7 @@ func formatGraceStatus(remUser *remnawave.User, dbUser *database.User) string {
 	return msg
 }
 
-func formatTrialStatus(remUser *remnawave.User, dbUser *database.User) string {
+func formatTrialStatus(remUser *remnawave.User, dbUser *database.User, devicesCount *int) string {
 	msg := "<b>👤 Ваш статус</b>\n\n"
 	msg += "<b>Тип:</b> ⏳ Пробный период\n"
 
@@ -270,6 +271,7 @@ func formatTrialStatus(remUser *remnawave.User, dbUser *database.User) string {
 			msg += fmt.Sprintf("<b>Трафик за месяц:</b> %.2f GB\n", usedGB)
 		}
 	}
+	msg += formatDevicesLine(remUser, devicesCount)
 
 	if dbUser != nil && dbUser.SubscriptionPrice != nil {
 		msg += fmt.Sprintf("\n<b>Цена подписки:</b> %d руб/мес\n", *dbUser.SubscriptionPrice)
@@ -291,7 +293,7 @@ func formatTrialStatus(remUser *remnawave.User, dbUser *database.User) string {
 	return msg
 }
 
-func formatPaidStatus(remUser *remnawave.User, dbUser *database.User) string {
+func formatPaidStatus(remUser *remnawave.User, dbUser *database.User, devicesCount *int) string {
 	msg := "<b>👤 Ваш статус</b>\n\n"
 	msg += "<b>Тип:</b> 💳 Подписка\n"
 
@@ -313,6 +315,7 @@ func formatPaidStatus(remUser *remnawave.User, dbUser *database.User) string {
 		usedGB := float64(remUser.UserTraffic.UsedTrafficBytes) / (1024 * 1024 * 1024)
 		msg += fmt.Sprintf("<b>Трафик за месяц:</b> %.2f GB\n", usedGB)
 	}
+	msg += formatDevicesLine(remUser, devicesCount)
 
 	if dbUser != nil && dbUser.SubscriptionPrice != nil {
 		msg += fmt.Sprintf("\n<b>Цена продления:</b> %d руб/мес\n", *dbUser.SubscriptionPrice)
@@ -324,6 +327,18 @@ func formatPaidStatus(remUser *remnawave.User, dbUser *database.User) string {
 	}
 
 	return msg
+}
+
+func formatDevicesLine(remUser *remnawave.User, devicesCount *int) string {
+	if devicesCount == nil {
+		return ""
+	}
+
+	if remUser.HwidDeviceLimit > 0 {
+		return fmt.Sprintf("<b>Устройства:</b> %d / %d\n", *devicesCount, remUser.HwidDeviceLimit)
+	}
+
+	return fmt.Sprintf("<b>Устройства:</b> %d\n", *devicesCount)
 }
 
 // formatStatusLine возвращает эмоджи и текст для статуса

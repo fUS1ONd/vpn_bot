@@ -44,7 +44,7 @@ func NewServer(port int, merchantID, secret string, handler PaymentHandler) *Ser
 		Addr:         fmt.Sprintf(":%d", port),
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 65 * time.Second,
 	}
 
 	return s

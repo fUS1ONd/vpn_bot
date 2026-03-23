@@ -124,6 +124,12 @@ func (b *Bot) handleCheckPayment(c tele.Context) error {
 			ParseMode:   tele.ModeHTML,
 			ReplyMarkup: b.userKeyboard(telegramID),
 		})
+	case "confirmed_not_activated":
+		b.userStates.Delete(telegramID)
+		return c.Send("✅ Оплата подтверждена, но активация подписки ещё не завершена.\n\nМы повторим попытку автоматически и отдельно сообщим о результате.", &tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: b.userKeyboard(telegramID),
+		})
 	case "not_found":
 		b.userStates.Delete(telegramID)
 		return c.Send("Активных платежей не найдено.", &tele.SendOptions{
@@ -132,6 +138,11 @@ func (b *Bot) handleCheckPayment(c tele.Context) error {
 	case platega.StatusCanceled:
 		b.userStates.Delete(telegramID)
 		return c.Send("❌ Платёж отменён. Вы можете попробовать снова.", &tele.SendOptions{
+			ReplyMarkup: b.userKeyboard(telegramID),
+		})
+	case platega.StatusChargebacked:
+		b.userStates.Delete(telegramID)
+		return c.Send("⚠️ По платежу выполнен возврат средств. Доступ будет отключён или уже отключён. Если это ошибка, обратитесь к администратору.", &tele.SendOptions{
 			ReplyMarkup: b.userKeyboard(telegramID),
 		})
 	default:

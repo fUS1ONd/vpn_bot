@@ -1,11 +1,16 @@
 package bot
 
 import (
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -93,4 +98,60 @@ func TestHandleConfirmedIdempotency(t *testing.T) {
 	after, err := db.GetPaymentByID(id)
 	require.NoError(t, err)
 	assert.Equal(t, "confirmed", after.Status)
+}
+
+func TestHandleConfirmedReturnsQuicklyWhenActivationFails(t *testing.T) {
+	dbFile := "test_payment_confirm_retry.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.Close()
+		os.Remove(dbFile)
+	})
+
+	_, err = db.CreateUser(501, "payer", "Payer", "uuid-501", nil, nil)
+	require.NoError(t, err)
+
+	txID := "tx-quick-fail"
+	payment := &database.Payment{
+		TelegramID:           501,
+		Amount:               400,
+		PaymentMethod:        "sbp",
+		Status:               "pending",
+		PlategaTransactionID: &txID,
+	}
+	id, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+	payment.ID = id
+
+	cfg := &config.Config{AdminID: 999}
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-501" {
+				return &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Body:       io.NopCloser(strings.NewReader(`{"error":"boom"}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
+	})
+
+	b := &Bot{db: db, config: cfg, userStates: newStateMap(), remnawave: client}
+	handler := &paymentCallbackHandler{bot: b}
+
+	start := time.Now()
+	err = handler.handleConfirmed(payment)
+	duration := time.Since(start)
+
+	assert.NoError(t, err)
+	assert.Less(t, duration, 2*time.Second, "handleConfirmed не должен держать request path на retry/sleep")
+
+	stored, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "confirmed_not_activated", stored.Status)
+	require.NotNil(t, stored.ConfirmedAt)
 }

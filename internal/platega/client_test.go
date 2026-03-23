@@ -2,9 +2,11 @@ package platega_test
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/platega"
 	"github.com/stretchr/testify/require"
@@ -42,20 +44,20 @@ func TestPaymentMethodConversionUnknown(t *testing.T) {
 func TestClientHeaders(t *testing.T) {
 	var receivedMerchantID, receivedSecret string
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedMerchantID = r.Header.Get("X-MerchantId")
-		receivedSecret = r.Header.Get("X-Secret")
-		// Возвращаем минимальный валидный ответ
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":     "tx-123",
-			"status": "PENDING",
-		})
-	}))
-	defer server.Close()
+	client := platega.NewClientWithBaseURL("merchant-id-test", "secret-test", "https://platega.test")
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			receivedMerchantID = r.Header.Get("X-MerchantId")
+			receivedSecret = r.Header.Get("X-Secret")
 
-	client := platega.NewClientWithBaseURL("merchant-id-test", "secret-test", server.URL)
+			body := `{"id":"tx-123","paymentDetails":{"amount":500,"currency":"RUB"},"paymentMethod":"SBPQR","status":"PENDING"}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	})
 	_, _ = client.GetTransactionStatus("tx-123")
 
 	require.Equal(t, "merchant-id-test", receivedMerchantID)
@@ -64,27 +66,29 @@ func TestClientHeaders(t *testing.T) {
 
 // TestCreatePayment проверяет создание платежа через мок-сервер
 func TestCreatePayment(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "POST", r.Method)
-		require.Equal(t, "/transaction/process", r.URL.Path)
-		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+	client := platega.NewClientWithBaseURL("merchant", "secret", "https://platega.test")
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			require.Equal(t, "POST", r.Method)
+			require.Equal(t, "/transaction/process", r.URL.Path)
+			require.Equal(t, "application/json", r.Header.Get("Content-Type"))
 
-		var body map[string]interface{}
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		require.Equal(t, float64(2), body["paymentMethod"]) // СБП = 2
+			var body map[string]interface{}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			require.Equal(t, float64(2), body["paymentMethod"]) // СБП = 2
+			paymentDetails, ok := body["paymentDetails"].(map[string]interface{})
+			require.True(t, ok)
+			require.Equal(t, float64(500), paymentDetails["amount"])
+			require.Equal(t, "RUB", paymentDetails["currency"])
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"transactionId": "tx-abc",
-			"redirect":      "https://pay.platega.io/tx-abc",
-			"status":        "PENDING",
-			"expiresIn":     900,
-		})
-	}))
-	defer server.Close()
-
-	client := platega.NewClientWithBaseURL("merchant", "secret", server.URL)
+			resp := `{"transactionId":"tx-abc","redirect":"https://pay.platega.io/tx-abc","status":"PENDING","expiresIn":"00:15:00"}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(resp)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	})
 	resp, err := client.CreatePayment(platega.CreateTransactionRequest{
 		PaymentMethod: platega.PaymentMethodSBP,
 		Amount:        500,
@@ -100,18 +104,21 @@ func TestCreatePayment(t *testing.T) {
 	require.Equal(t, "tx-abc", resp.TransactionID)
 	require.Equal(t, "https://pay.platega.io/tx-abc", resp.Redirect)
 	require.Equal(t, "PENDING", resp.Status)
-	require.Equal(t, 900, resp.ExpiresIn)
+	require.Equal(t, 15*time.Minute, resp.ExpiresIn)
 }
 
 // TestCreatePaymentError проверяет обработку ошибки от API
 func TestCreatePaymentError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error": "unauthorized"}`))
-	}))
-	defer server.Close()
-
-	client := platega.NewClientWithBaseURL("wrong", "wrong", server.URL)
+	client := platega.NewClientWithBaseURL("wrong", "wrong", "https://platega.test")
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusUnauthorized,
+				Body:       io.NopCloser(strings.NewReader(`{"error":"unauthorized"}`)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	})
 	_, err := client.CreatePayment(platega.CreateTransactionRequest{
 		PaymentMethod: platega.PaymentMethodSBP,
 		Amount:        500,
@@ -124,43 +131,44 @@ func TestCreatePaymentError(t *testing.T) {
 
 // TestGetTransactionStatus проверяет получение статуса транзакции
 func TestGetTransactionStatus(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "GET", r.Method)
-		require.Equal(t, "/transaction/tx-xyz", r.URL.Path)
+	client := platega.NewClientWithBaseURL("merchant", "secret", "https://platega.test")
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			require.Equal(t, "GET", r.Method)
+			require.Equal(t, "/transaction/tx-xyz", r.URL.Path)
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":            "tx-xyz",
-			"amount":        "500",
-			"currency":      "RUB",
-			"status":        "CONFIRMED",
-			"paymentMethod": 2,
-			"payload":       "789012",
-		})
-	}))
-	defer server.Close()
-
-	client := platega.NewClientWithBaseURL("merchant", "secret", server.URL)
+			resp := `{"id":"tx-xyz","paymentDetails":{"amount":500,"currency":"RUB"},"status":"CONFIRMED","paymentMethod":"SBPQR","expiresIn":"00:15:00","payload":"789012"}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(resp)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	})
 	status, err := client.GetTransactionStatus("tx-xyz")
 
 	require.NoError(t, err)
 	require.Equal(t, "tx-xyz", status.ID)
-	require.Equal(t, "500", status.Amount)
+	require.Equal(t, 500.0, status.PaymentDetails.Amount)
+	require.Equal(t, "RUB", status.PaymentDetails.Currency)
 	require.Equal(t, "CONFIRMED", status.Status)
-	require.Equal(t, 2, status.PaymentMethod)
+	require.Equal(t, "SBPQR", status.PaymentMethod)
+	require.Equal(t, 15*time.Minute, status.ExpiresIn)
 	require.Equal(t, "789012", status.Payload)
 }
 
 // TestGetTransactionStatusNotFound проверяет обработку 404
 func TestGetTransactionStatusNotFound(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"error": "not found"}`))
-	}))
-	defer server.Close()
-
-	client := platega.NewClientWithBaseURL("merchant", "secret", server.URL)
+	client := platega.NewClientWithBaseURL("merchant", "secret", "https://platega.test")
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader(`{"error":"not found"}`)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	})
 	_, err := client.GetTransactionStatus("nonexistent")
 
 	require.Error(t, err)
@@ -173,4 +181,10 @@ func TestClientMerchantAndSecretAccessors(t *testing.T) {
 
 	require.Equal(t, "my-merchant", client.MerchantID())
 	require.Equal(t, "my-secret", client.Secret())
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }

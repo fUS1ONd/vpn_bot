@@ -20,10 +20,11 @@ const (
 
 // Статусы платежа
 const (
-	StatusPending      = "PENDING"
-	StatusConfirmed    = "CONFIRMED"
-	StatusCanceled     = "CANCELED"
-	StatusChargebacked = "CHARGEBACKED"
+	StatusPending         = "PENDING"
+	StatusConfirmed       = "CONFIRMED"
+	StatusManualConfirmed = "MANUAL_CONFIRMED"
+	StatusCanceled        = "CANCELED"
+	StatusChargebacked    = "CHARGEBACKED"
 )
 
 // Client — HTTP-клиент Platega API
@@ -46,6 +47,13 @@ func NewClientWithBaseURL(merchantID, secret, baseURL string) *Client {
 		secret:     secret,
 		baseURL:    baseURL,
 		http:       &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// SetHTTPClient переопределяет HTTP-клиент (используется в тестах).
+func (c *Client) SetHTTPClient(httpClient *http.Client) {
+	if httpClient != nil {
+		c.http = httpClient
 	}
 }
 
@@ -73,31 +81,91 @@ type CreateTransactionRequest struct {
 
 // CreateTransactionResponse — ответ на создание платежа
 type CreateTransactionResponse struct {
-	TransactionID string `json:"transactionId"`
-	Redirect      string `json:"redirect"` // Ссылка для перенаправления пользователя
-	Status        string `json:"status"`
-	ExpiresIn     int    `json:"expiresIn"` // Время жизни в секундах
+	TransactionID string        `json:"transactionId"`
+	Redirect      string        `json:"redirect"` // Ссылка для перенаправления пользователя
+	Status        string        `json:"status"`
+	ExpiresIn     time.Duration `json:"-"`
 }
 
-// TransactionStatus — полный статус транзакции
+// PaymentDetails — денежные реквизиты платежа.
+type PaymentDetails struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
+}
+
+// TransactionStatus — полный статус транзакции.
 type TransactionStatus struct {
-	ID            string `json:"id"`
-	Amount        string `json:"amount"`
-	Currency      string `json:"currency"`
-	Status        string `json:"status"`
-	PaymentMethod int    `json:"paymentMethod"`
-	Payload       string `json:"payload"`
+	ID             string         `json:"id"`
+	PaymentDetails PaymentDetails `json:"paymentDetails"`
+	Status         string         `json:"status"`
+	PaymentMethod  string         `json:"paymentMethod"`
+	Payload        string         `json:"payload"`
+	ExpiresIn      time.Duration  `json:"-"`
 }
 
 // CallbackPayload — тело callback-запроса от Platega.
 // Используется и в platega-клиенте, и в callback-сервере (импортируется оттуда).
 type CallbackPayload struct {
-	ID            string `json:"id"`
-	Amount        string `json:"amount"`
-	Currency      string `json:"currency"`
-	Status        string `json:"status"`
-	PaymentMethod int    `json:"paymentMethod"`
-	Payload       string `json:"payload"`
+	ID            string  `json:"id"`
+	Amount        float64 `json:"amount"`
+	Currency      string  `json:"currency"`
+	Status        string  `json:"status"`
+	PaymentMethod int     `json:"paymentMethod"`
+	Payload       string  `json:"payload"`
+}
+
+func (r *CreateTransactionResponse) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		TransactionID string `json:"transactionId"`
+		Redirect      string `json:"redirect"`
+		Status        string `json:"status"`
+		ExpiresIn     string `json:"expiresIn"`
+	}
+
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	expiresIn, err := parseHHMMSSDuration(raw.ExpiresIn)
+	if err != nil {
+		return fmt.Errorf("parse expiresIn: %w", err)
+	}
+
+	r.TransactionID = raw.TransactionID
+	r.Redirect = raw.Redirect
+	r.Status = raw.Status
+	r.ExpiresIn = expiresIn
+
+	return nil
+}
+
+func (r *TransactionStatus) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		ID             string         `json:"id"`
+		PaymentDetails PaymentDetails `json:"paymentDetails"`
+		Status         string         `json:"status"`
+		PaymentMethod  string         `json:"paymentMethod"`
+		Payload        string         `json:"payload"`
+		ExpiresIn      string         `json:"expiresIn"`
+	}
+
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	expiresIn, err := parseHHMMSSDuration(raw.ExpiresIn)
+	if err != nil {
+		return fmt.Errorf("parse expiresIn: %w", err)
+	}
+
+	r.ID = raw.ID
+	r.PaymentDetails = raw.PaymentDetails
+	r.Status = raw.Status
+	r.PaymentMethod = raw.PaymentMethod
+	r.Payload = raw.Payload
+	r.ExpiresIn = expiresIn
+
+	return nil
 }
 
 // CreatePayment создаёт платёж в Platega
@@ -110,10 +178,18 @@ func (c *Client) CreatePayment(req CreateTransactionRequest) (*CreateTransaction
 			"currency": req.Currency,
 		},
 		"description": req.Description,
-		"return":      req.ReturnURL,
-		"failedUrl":   req.FailedURL,
-		"callbackUrl": req.CallbackURL,
-		"payload":     req.Payload,
+	}
+	if req.ReturnURL != "" {
+		body["return"] = req.ReturnURL
+	}
+	if req.FailedURL != "" {
+		body["failedUrl"] = req.FailedURL
+	}
+	if req.CallbackURL != "" {
+		body["callbackUrl"] = req.CallbackURL
+	}
+	if req.Payload != "" {
+		body["payload"] = req.Payload
 	}
 
 	data, err := json.Marshal(body)
@@ -188,6 +264,21 @@ func (c *Client) GetTransactionStatus(transactionID string) (*TransactionStatus,
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("X-MerchantId", c.merchantID)
 	req.Header.Set("X-Secret", c.secret)
+}
+
+func parseHHMMSSDuration(raw string) (time.Duration, error) {
+	if raw == "" {
+		return 0, nil
+	}
+
+	parsed, err := time.Parse("15:04:05", raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid HH:MM:SS value %q: %w", raw, err)
+	}
+
+	return time.Duration(parsed.Hour())*time.Hour +
+		time.Duration(parsed.Minute())*time.Minute +
+		time.Duration(parsed.Second())*time.Second, nil
 }
 
 // PaymentMethodName возвращает человекочитаемое название способа оплаты

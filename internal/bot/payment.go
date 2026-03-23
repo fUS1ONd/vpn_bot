@@ -50,7 +50,7 @@ func (h *paymentCallbackHandler) HandlePaymentCallback(payload platega.CallbackP
 	defer mu.Unlock()
 
 	switch payload.Status {
-	case platega.StatusConfirmed:
+	case platega.StatusConfirmed, platega.StatusManualConfirmed:
 		return h.handleConfirmed(payment)
 	case platega.StatusCanceled:
 		return h.handleCanceled(payment)
@@ -70,39 +70,37 @@ func (h *paymentCallbackHandler) handleConfirmed(payment *database.Payment) erro
 		return nil
 	}
 
+	alreadyMarkedForRetry := payment.Status == "confirmed_not_activated"
+
 	// Подтверждаем платёж в БД
 	if err := h.bot.db.ConfirmPayment(payment.ID); err != nil {
 		return fmt.Errorf("confirm payment: %w", err)
 	}
 
-	// Активируем подписку в Remnawave с retry и backoff (3 попытки: 30с, 1м, 5м)
-	retryDelays := []time.Duration{30 * time.Second, 1 * time.Minute, 5 * time.Minute}
-	var activateErr error
-	for attempt, delay := range retryDelays {
-		activateErr = h.activateSubscription(payment)
-		if activateErr == nil {
-			break
+	// Пытаемся активировать подписку один раз.
+	// Долгие retry выполняет scheduler, чтобы не держать callback/manual-check path открытым.
+	if err := h.activateSubscription(payment); err != nil {
+		slog.Error("Не удалось активировать подписку после подтверждения, помечаем для scheduler",
+			"error", err, "payment_id", payment.ID)
+		if updateErr := h.bot.db.UpdatePaymentStatus(payment.ID, "confirmed_not_activated"); updateErr != nil {
+			return fmt.Errorf("update status to confirmed_not_activated: %w", updateErr)
 		}
-		slog.Warn("Не удалось активировать подписку, повторяем",
-			"error", activateErr, "payment_id", payment.ID,
-			"attempt", attempt+1, "next_retry_in", delay)
-		time.Sleep(delay)
-	}
-
-	if activateErr != nil {
-		// Все попытки провалились — помечаем для retry через scheduler
-		slog.Error("Все попытки активации провалились, помечаем для scheduler",
-			"error", activateErr, "payment_id", payment.ID)
-		h.bot.db.UpdatePaymentStatus(payment.ID, "confirmed_not_activated")
 
 		// Уведомляем админа
-		h.bot.sendAdminAlert(fmt.Sprintf(
-			"⚠️ Платёж #%d подтверждён, но не удалось активировать подписку для %d после 3 попыток. Требуется ручная проверка.",
-			payment.ID, payment.TelegramID,
-		))
+		if !alreadyMarkedForRetry {
+			h.bot.sendAdminAlert(fmt.Sprintf(
+				"⚠️ Платёж #%d подтверждён, но не удалось активировать подписку для %d. Платёж помечен как confirmed_not_activated и будет повторно обработан scheduler.",
+				payment.ID, payment.TelegramID,
+			))
+		}
 		return nil // Не возвращаем ошибку — платёж уже сохранён
 	}
 
+	h.finalizeActivatedPayment(payment)
+	return nil
+}
+
+func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Payment) {
 	// Создаём запись в moderator_earnings (если есть модератор)
 	h.createEarningRecord(payment)
 
@@ -121,8 +119,6 @@ func (h *paymentCallbackHandler) handleConfirmed(payment *database.Payment) erro
 
 	// Очищаем уведомления (пользователь мог быть в grace period)
 	h.bot.db.ClearNotifications(payment.TelegramID)
-
-	return nil
 }
 
 // activateSubscription продлевает подписку в Remnawave
@@ -327,7 +323,7 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 	// Вычисляем время жизни
 	var expiresAt *time.Time
 	if resp.ExpiresIn > 0 {
-		t := time.Now().Add(time.Duration(resp.ExpiresIn) * time.Second)
+		t := time.Now().Add(resp.ExpiresIn)
 		expiresAt = &t
 	}
 
@@ -383,8 +379,52 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	if status.Status == platega.StatusConfirmed {
 		// Платёж подтверждён — обрабатываем как callback (мьютекс уже взят)
 		handler := &paymentCallbackHandler{bot: b}
-		handler.handleConfirmed(pending)
-		return "confirmed", nil
+		if err := handler.handleConfirmed(pending); err != nil {
+			return "", err
+		}
+
+		updated, err := b.db.GetPaymentByID(pending.ID)
+		if err != nil {
+			return "", fmt.Errorf("reload payment after confirm: %w", err)
+		}
+		if updated == nil {
+			return "confirmed", nil
+		}
+
+		return updated.Status, nil
+	}
+
+	if status.Status == platega.StatusManualConfirmed {
+		handler := &paymentCallbackHandler{bot: b}
+		if err := handler.handleConfirmed(pending); err != nil {
+			return "", err
+		}
+
+		updated, err := b.db.GetPaymentByID(pending.ID)
+		if err != nil {
+			return "", fmt.Errorf("reload payment after manual confirm: %w", err)
+		}
+		if updated == nil {
+			return "confirmed", nil
+		}
+
+		return updated.Status, nil
+	}
+
+	if status.Status == platega.StatusCanceled {
+		handler := &paymentCallbackHandler{bot: b}
+		if err := handler.handleCanceled(pending); err != nil {
+			return "", err
+		}
+		return platega.StatusCanceled, nil
+	}
+
+	if status.Status == platega.StatusChargebacked {
+		handler := &paymentCallbackHandler{bot: b}
+		if err := handler.handleChargeback(pending); err != nil {
+			return "", err
+		}
+		return platega.StatusChargebacked, nil
 	}
 
 	return status.Status, nil

@@ -609,6 +609,9 @@ func TestSchedulerRetryConfirmedNotActivated(t *testing.T) {
 	id, err := db.CreatePayment(payment)
 	require.NoError(t, err)
 	require.NoError(t, db.ConfirmPayment(id))
+	confirmedAt := time.Date(2026, time.March, 5, 12, 0, 0, 0, time.UTC)
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, confirmedAt, id)
+	require.NoError(t, err)
 	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
 
 	var enableCalled bool
@@ -661,4 +664,6 @@ func TestSchedulerRetryConfirmedNotActivated(t *testing.T) {
 	p, err := db.GetPaymentByID(id)
 	require.NoError(t, err)
 	assert.Equal(t, "confirmed", p.Status, "статус должен стать confirmed после retry")
+	require.NotNil(t, p.ConfirmedAt)
+	assert.True(t, p.ConfirmedAt.Equal(confirmedAt), "confirmed_at должен сохраниться после retry")
 }

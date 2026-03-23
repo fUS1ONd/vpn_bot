@@ -619,7 +619,15 @@ func (b *Bot) handleStatus(c tele.Context) error {
 		return c.Send("Ошибка получения статуса. Попробуйте позже.")
 	}
 
-	msg := FormatUserStatus(remnawaveUser, user, b.isTrialUser(telegramID))
+	var devicesCount *int
+	count, err := b.remnawave.GetUserHwidDevicesCount(user.RemnawaveUUID)
+	if err != nil {
+		slog.Warn("Failed to get user HWID devices for status", "error", err, "telegram_id", telegramID)
+	} else {
+		devicesCount = &count
+	}
+
+	msg := FormatUserStatus(remnawaveUser, user, b.isTrialUser(telegramID), devicesCount)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: b.userKeyboard(telegramID),

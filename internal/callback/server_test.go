@@ -74,7 +74,7 @@ func TestCallbackValidRequest(t *testing.T) {
 	payload := platega.CallbackPayload{
 		ID:     "tx-42",
 		Status: platega.StatusConfirmed,
-		Amount: "500.00",
+		Amount: 500,
 	}
 	body := makeCallbackBody(t, payload)
 
@@ -94,6 +94,9 @@ func TestCallbackValidRequest(t *testing.T) {
 	}
 	if handler.payload.ID != "tx-42" {
 		t.Errorf("ожидали ID=tx-42, получили %s", handler.payload.ID)
+	}
+	if handler.payload.Amount != 500 {
+		t.Errorf("ожидали amount=500, получили %v", handler.payload.Amount)
 	}
 }
 

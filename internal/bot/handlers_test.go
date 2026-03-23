@@ -247,6 +247,70 @@ func TestUserKeyboardHidesPaymentButtonInMaintenanceMode(t *testing.T) {
 	assert.NotContains(t, maintenanceButtons, BtnRenew)
 }
 
+func TestUserKeyboardHidesPaymentButtonWithoutPlatega(t *testing.T) {
+	b, db := setupTestBot(t)
+
+	userID := int64(778)
+	price := 500
+	_, err := db.CreateUser(userID, "paid", "Paid", "uuid-paid", &price, nil)
+	require.NoError(t, err)
+
+	kb := b.userKeyboard(userID)
+	var buttons []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+
+	assert.NotContains(t, buttons, BtnPay)
+	assert.NotContains(t, buttons, BtnRenew)
+}
+
+func TestHandleStatusShowsDevices(t *testing.T) {
+	b, db := setupTestBot(t)
+
+	userID := int64(779)
+	price := 500
+	_, err := db.CreateUser(userID, "paid", "Paid", "uuid-devices", &price, nil)
+	require.NoError(t, err)
+
+	b.remnawave.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-devices":
+				payload := `{"response":{"uuid":"uuid-devices","username":"paid","status":"ACTIVE","expireAt":"2026-04-15T00:00:00Z","subscriptionUrl":"vless://example","hwidDeviceLimit":3,"userTraffic":{"usedTrafficBytes":2147483648}}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodGet && r.URL.Path == "/api/hwid/devices/uuid-devices":
+				payload := `{"response":{"total":2,"devices":[{"hwid":"a"},{"hwid":"b"}]}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: userID},
+		message: &tele.Message{},
+	}
+
+	err = b.handleStatus(ctx)
+	require.NoError(t, err)
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "<b>Устройства:</b> 2 / 3")
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
