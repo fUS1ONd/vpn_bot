@@ -11,6 +11,7 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/callback"
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/platega"
+	tele "gopkg.in/telebot.v3"
 )
 
 // paymentMu — мьютексы по telegram_id для защиты от race condition при обработке callback.
@@ -156,8 +157,20 @@ func (b *Bot) paymentActivatedMessage(telegramID int64) string {
 }
 
 func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Payment, notifyUser bool) {
+	// Сбрасываем состояние оплаты, чтобы убрать клавиатуру "Проверить оплату"
+	h.bot.userStates.Delete(payment.TelegramID)
+
 	if notifyUser {
-		_ = h.bot.sendSchedulerMessage(payment.TelegramID, h.bot.paymentActivatedMessage(payment.TelegramID))
+		msg := h.bot.paymentActivatedMessage(payment.TelegramID)
+		kb := h.bot.userKeyboard(payment.TelegramID)
+		_, err := h.bot.bot.Send(&tele.User{ID: payment.TelegramID}, msg, &tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: kb,
+		})
+		if err != nil {
+			slog.Warn("Не удалось отправить уведомление об активации с клавиатурой",
+				"telegram_id", payment.TelegramID, "error", err)
+		}
 	}
 
 	// Очищаем уведомления (пользователь мог быть в grace period)
