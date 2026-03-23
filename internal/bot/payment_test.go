@@ -157,6 +157,200 @@ func TestHandleConfirmedReturnsQuicklyWhenActivationFails(t *testing.T) {
 	require.NotNil(t, stored.ConfirmedAt)
 }
 
+func TestHandleConfirmedCreatesModeratorEarningBeforeActivationRetry(t *testing.T) {
+	dbFile := "test_payment_confirm_retry_earning.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.Close()
+		os.Remove(dbFile)
+	})
+
+	adminID := int64(999)
+	modID := int64(550)
+	userID := int64(551)
+	price := 400
+
+	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-550", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AddModerator(modID, adminID))
+	_, err = db.CreateUser(userID, "payer", "Payer", "uuid-551", &price, &modID)
+	require.NoError(t, err)
+
+	txID := "tx-retry-earning"
+	payment := &database.Payment{
+		TelegramID:           userID,
+		ModeratorID:          &modID,
+		Amount:               price,
+		PaymentMethod:        "sbp",
+		Status:               "pending",
+		PlategaTransactionID: &txID,
+	}
+	id, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+	payment.ID = id
+
+	cfg := &config.Config{AdminID: adminID, PlategaFeeSBP: 11, PlategaFeeWithdrawal: 2}
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-551" {
+				return &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Body:       io.NopCloser(strings.NewReader(`{"error":"boom"}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return nil, assert.AnError
+		}),
+	})
+
+	b := &Bot{db: db, config: cfg, userStates: newStateMap(), remnawave: client}
+	handler := &paymentCallbackHandler{bot: b}
+
+	err = handler.handleConfirmed(payment)
+	require.NoError(t, err)
+
+	stored, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "confirmed_not_activated", stored.Status)
+
+	var count int
+	err = db.Conn().QueryRow(`SELECT COUNT(*) FROM moderator_earnings WHERE payment_id = ?`, id).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	var shareAmount int
+	err = db.Conn().QueryRow(`SELECT share_amount FROM moderator_earnings WHERE payment_id = ?`, id).Scan(&shareAmount)
+	require.NoError(t, err)
+	assert.Equal(t, 52, shareAmount)
+}
+
+func TestRetryConfirmedPaymentActivationDoesNotDuplicateEarning(t *testing.T) {
+	dbFile := "test_payment_retry_duplicate_earning.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.Close()
+		os.Remove(dbFile)
+	})
+
+	adminID := int64(999)
+	modID := int64(560)
+	userID := int64(561)
+	price := 400
+
+	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-560", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.AddModerator(modID, adminID))
+	_, err = db.CreateUser(userID, "payer", "Payer", "uuid-561", &price, &modID)
+	require.NoError(t, err)
+
+	txID := "tx-retry-no-duplicate"
+	payment := &database.Payment{
+		TelegramID:           userID,
+		ModeratorID:          &modID,
+		Amount:               price,
+		PaymentMethod:        "sbp",
+		Status:               "pending",
+		PlategaTransactionID: &txID,
+	}
+	id, err := db.CreatePayment(payment)
+	require.NoError(t, err)
+	payment.ID = id
+
+	var getUserAttempts atomic.Int32
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-561":
+				if getUserAttempts.Add(1) == 1 {
+					return &http.Response{
+						StatusCode: http.StatusInternalServerError,
+						Body:       io.NopCloser(strings.NewReader(`{"error":"boom"}`)),
+						Header:     make(http.Header),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{"uuid":"uuid-561","status":"EXPIRED","expireAt":"2026-03-01T00:00:00Z"}}`)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/users":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{}}`)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/561":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"response":{"uuid":"uuid-561","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	cfg := &config.Config{AdminID: adminID, PlategaFeeSBP: 11, PlategaFeeWithdrawal: 2}
+	b := &Bot{db: db, config: cfg, userStates: newStateMap(), remnawave: client}
+	handler := &paymentCallbackHandler{bot: b}
+
+	err = handler.handleConfirmed(payment)
+	require.NoError(t, err)
+
+	ok := b.retryConfirmedPaymentActivation(id, "test")
+	require.True(t, ok)
+
+	var count int
+	err = db.Conn().QueryRow(`SELECT COUNT(*) FROM moderator_earnings WHERE payment_id = ?`, id).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
+func TestCreatePaymentForUser_RejectsZeroOrNilPrice(t *testing.T) {
+	dbFile := "test_payment_zero_price.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.Close()
+		os.Remove(dbFile)
+	})
+
+	// Пользователь без цены подписки (NULL)
+	_, err = db.CreateUser(700, "user_no_price", "No Price", "uuid-700", nil, nil)
+	require.NoError(t, err)
+
+	// Пользователь с нулевой ценой подписки
+	zeroPrice := 0
+	_, err = db.CreateUser(701, "user_zero_price", "Zero Price", "uuid-701", &zeroPrice, nil)
+	require.NoError(t, err)
+
+	cfg := &config.Config{AdminID: 999}
+	b := &Bot{
+		db:         db,
+		config:     cfg,
+		userStates: newStateMap(),
+		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
+	}
+
+	t.Run("SubscriptionPrice is nil — ошибка", func(t *testing.T) {
+		_, _, createErr := b.createPaymentForUser(700, 1)
+		require.Error(t, createErr)
+		assert.Contains(t, createErr.Error(), "subscription price")
+	})
+
+	t.Run("SubscriptionPrice равен 0 — ошибка валидации", func(t *testing.T) {
+		_, _, createErr := b.createPaymentForUser(701, 1)
+		require.Error(t, createErr)
+		assert.Contains(t, createErr.Error(), "некорректная сумма платежа")
+	})
+}
+
 func TestHandleConfirmedRetriesActivationInBackground(t *testing.T) {
 	dbFile := "test_payment_background_retry.db"
 	db, err := database.New(dbFile)

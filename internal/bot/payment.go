@@ -83,6 +83,9 @@ func (h *paymentCallbackHandler) handleConfirmed(payment *database.Payment) erro
 		return fmt.Errorf("confirm payment: %w", err)
 	}
 
+	// Финансовый учёт фиксируем в момент подтверждения денег, даже если активация ещё retry-ится.
+	h.createEarningRecord(payment)
+
 	// Пытаемся активировать подписку один раз.
 	// Долгие retry выполняет scheduler, чтобы не держать callback/manual-check path открытым.
 	if err := h.activateSubscription(payment); err != nil {
@@ -108,9 +111,6 @@ func (h *paymentCallbackHandler) handleConfirmed(payment *database.Payment) erro
 }
 
 func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Payment) {
-	// Создаём запись в moderator_earnings (если есть модератор)
-	h.createEarningRecord(payment)
-
 	// Уведомляем пользователя
 	remUser, _ := h.bot.remnawave.GetUserByTelegramID(payment.TelegramID)
 
@@ -258,11 +258,8 @@ func (h *paymentCallbackHandler) createEarningRecord(payment *database.Payment) 
 	}
 
 	moderatorID := *payment.ModeratorID
-
-	// Проверяем, что модератор ещё активен
-	if !h.bot.isModerator(moderatorID) {
-		return
-	}
+	// payments.moderator_id хранит snapshot куратора на момент создания платежа,
+	// поэтому финансовая история не должна зависеть от последующего снятия роли.
 
 	// Считаем количество платящих клиентов для определения доли
 	payingCount, err := h.bot.db.CountPayingSubscribersByModerator(moderatorID)
@@ -375,6 +372,11 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 		return nil, "", fmt.Errorf("subscription price not set")
 	}
 
+	price := *user.SubscriptionPrice
+	if price <= 0 {
+		return nil, "", fmt.Errorf("некорректная сумма платежа: %d", price)
+	}
+
 	// Проверка лимита 90 дней: нельзя оплатить, если до конца подписки >= 90 дней
 	remUser, err := b.remnawave.GetUserByTelegramID(telegramID)
 	if err == nil && remUser != nil && remUser.Status == "ACTIVE" && remUser.ExpireAt.Year() < 2099 {
@@ -411,7 +413,7 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 
 	resp, err := b.platega.CreatePayment(platega.CreateTransactionRequest{
 		PaymentMethod: paymentMethodInt,
-		Amount:        *user.SubscriptionPrice,
+		Amount:        price,
 		Currency:      "RUB",
 		Description:   "VPN подписка на 1 месяц",
 		ReturnURL:     fmt.Sprintf("https://t.me/%s", b.bot.Me.Username),
@@ -434,7 +436,7 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 	payment := &database.Payment{
 		TelegramID:           telegramID,
 		ModeratorID:          user.ModeratorID,
-		Amount:               *user.SubscriptionPrice,
+		Amount:               price,
 		PaymentMethod:        paymentMethodStr,
 		Status:               "pending",
 		PlategaTransactionID: &resp.TransactionID,
