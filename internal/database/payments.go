@@ -166,6 +166,24 @@ func (db *DB) UpdatePaymentStatus(id int64, status string) error {
 	return err
 }
 
+// UpdatePaymentStatusIfNot обновляет статус платежа только если текущий статус не равен excludedStatus.
+// Возвращает true если обновление произошло (строк изменено > 0), false если статус уже excludedStatus.
+// Используется для атомарной idempotency при обработке chargeback.
+func (db *DB) UpdatePaymentStatusIfNot(id int64, newStatus, excludedStatus string) (bool, error) {
+	res, err := db.conn.Exec(
+		`UPDATE payments SET status = ? WHERE id = ? AND status != ?`,
+		newStatus, id, excludedStatus,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 // ConfirmPayment помечает платёж как confirmed с датой подтверждения
 func (db *DB) ConfirmPayment(id int64) error {
 	_, err := db.conn.Exec(
@@ -274,6 +292,7 @@ func (db *DB) GetConfirmedPaymentsByMonth(year int, month int) ([]MonthlyConfirm
 		     GROUP BY payment_id
 		 ) me ON me.payment_id = p.id
 		 WHERE p.confirmed_at >= ? AND p.confirmed_at < ?
+		   AND p.status NOT IN ('chargebacked')
 		 ORDER BY p.confirmed_at ASC, p.id ASC`,
 		start, end,
 	)
@@ -323,7 +342,7 @@ func (db *DB) CountConfirmedPaymentsByMonth(year int, month int) (int, error) {
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	err := db.conn.QueryRow(
-		`SELECT COUNT(*) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ?`,
+		`SELECT COUNT(*) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ? AND status NOT IN ('chargebacked')`,
 		start, end,
 	).Scan(&count)
 	return count, err
@@ -335,7 +354,7 @@ func (db *DB) SumConfirmedPaymentsByMonth(year int, month int) (int, error) {
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	err := db.conn.QueryRow(
-		`SELECT COALESCE(SUM(amount), 0) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ?`,
+		`SELECT COALESCE(SUM(amount), 0) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ? AND status NOT IN ('chargebacked')`,
 		start, end,
 	).Scan(&sum)
 	return sum, err
@@ -363,7 +382,7 @@ func (db *DB) CountFirstPaymentsByMonth(year int, month int) (int, error) {
 		`SELECT COUNT(*) FROM (
 		    SELECT telegram_id, MIN(confirmed_at) as first_payment
 		    FROM payments
-		    WHERE confirmed_at IS NOT NULL
+		    WHERE confirmed_at IS NOT NULL AND status NOT IN ('chargebacked')
 		    GROUP BY telegram_id
 		    HAVING first_payment >= ? AND first_payment < ?
 		)`, start, end,

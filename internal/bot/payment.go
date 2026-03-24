@@ -187,9 +187,19 @@ func (b *Bot) schedulePaymentActivationRetry(paymentID int64) {
 	delays := b.paymentActivationRetryDelays()
 	go func() {
 		defer b.paymentRetryInFlight.Delete(paymentID)
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("payment retry goroutine panicked", "payment_id", paymentID, "recover", r)
+			}
+		}()
 
 		for attempt, delay := range delays {
-			time.Sleep(delay)
+			select {
+			case <-b.shutdownCh:
+				slog.Info("Payment retry cancelled by shutdown", "payment_id", paymentID, "attempt", attempt+1)
+				return
+			case <-time.After(delay):
+			}
 
 			if b.retryConfirmedPaymentActivation(paymentID, "background_retry") {
 				return
@@ -404,21 +414,52 @@ func (h *paymentCallbackHandler) handleCanceled(payment *database.Payment) error
 	return nil
 }
 
-// handleChargeback обрабатывает chargeback
+// handleChargeback обрабатывает chargeback.
+// Полностью зеркалит admin-ban flow (processBanUser): BanUser + DeleteUser из Remnawave + DeleteUser из БД.
 func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) error {
-	if err := h.bot.db.UpdatePaymentStatus(payment.ID, "chargebacked"); err != nil {
+	// Атомарная idempotency: обновляем статус только если ещё не chargebacked.
+	// Защита от race condition при параллельных retry от Platega.
+	updated, err := h.bot.db.UpdatePaymentStatusIfNot(payment.ID, "chargebacked", "chargebacked")
+	if err != nil {
 		return fmt.Errorf("update status to chargebacked: %w", err)
 	}
+	if !updated {
+		// Уже обработан другим параллельным запросом
+		return nil
+	}
 
-	// Деактивируем пользователя
+	// Банём пользователя — chargeback = мошенничество, повторная регистрация запрещена.
+	// Если BanUser не сработает — возвращаем ошибку, чтобы Platega retry-ла callback.
+	if err := h.bot.db.BanUser(payment.TelegramID, 0); err != nil {
+		return fmt.Errorf("chargeback ban user: %w", err)
+	}
+
+	// Каскадное удаление: если пользователь — модератор
+	if h.bot.isModerator(payment.TelegramID) {
+		h.bot.cascadeDeleteModerator(payment.TelegramID)
+	}
+
+	// Удаляем из Remnawave (полное удаление, не просто disable)
 	user, err := h.bot.db.GetUserByTelegramID(payment.TelegramID)
 	if err == nil && user != nil {
-		_ = h.bot.remnawave.DisableUser(user.RemnawaveUUID)
+		if delErr := h.bot.remnawave.DeleteUser(user.RemnawaveUUID); delErr != nil {
+			slog.Error("Chargeback: не удалось удалить из Remnawave", "error", delErr, "telegram_id", payment.TelegramID)
+		}
+	}
+
+	// Удаляем из БД бота
+	if delErr := h.bot.db.DeleteUser(payment.TelegramID); delErr != nil {
+		slog.Error("Chargeback: не удалось удалить из БД", "error", delErr, "telegram_id", payment.TelegramID)
+	}
+
+	// Очищаем маркеры отправленных уведомлений
+	if clearErr := h.bot.db.ClearNotifications(payment.TelegramID); clearErr != nil {
+		slog.Error("Chargeback: не удалось очистить уведомления", "error", clearErr, "telegram_id", payment.TelegramID)
 	}
 
 	// Уведомляем админа
 	h.bot.sendAdminAlert(fmt.Sprintf(
-		"⚠️ Chargeback от %d, сумма: %d руб. Пользователь деактивирован.",
+		"⚠️ Chargeback от %d, сумма: %d руб. Пользователь удалён из Remnawave и забанен.",
 		payment.TelegramID, payment.Amount,
 	))
 
@@ -449,7 +490,7 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 	// Проверка лимита 90 дней: нельзя оплатить, если до конца подписки >= 90 дней
 	remUser, err := b.remnawave.GetUserByTelegramID(telegramID)
 	if err == nil && remUser != nil && remUser.Status == "ACTIVE" && remUser.ExpireAt.Year() < 2099 {
-		daysLeft := int(time.Until(remUser.ExpireAt).Hours() / 24)
+		daysLeft := int(remUser.ExpireAt.Sub(time.Now().UTC()).Hours() / 24)
 		if daysLeft >= 90 {
 			return nil, "", fmt.Errorf("subscription_too_far: %d days left", daysLeft)
 		}
@@ -535,13 +576,14 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 // Защищён мьютексом по telegram_id для предотвращения race condition
 // с параллельным callback от Platega.
 func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
+	// Глобальная операция: помечаем протухшие PENDING как expired (не ждём scheduler).
+	// Вызывается ДО захвата per-user mutex, т.к. операция не привязана к конкретному пользователю.
+	b.db.ExpireOldPendingPayments()
+
 	// Берём мьютекс ДО чтения из БД — та же блокировка, что и в callback
 	mu := getPaymentMutex(telegramID)
 	mu.Lock()
 	defer mu.Unlock()
-
-	// Попутно помечаем протухшие PENDING как expired (не ждём scheduler)
-	b.db.ExpireOldPendingPayments()
 
 	pending, err := b.db.GetPendingPayment(telegramID)
 	if err != nil {

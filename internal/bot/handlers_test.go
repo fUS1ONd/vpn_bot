@@ -71,6 +71,7 @@ func setupTestBot(t *testing.T) (*Bot, *database.DB) {
 		config:     cfg,
 		userStates: newStateMap(),
 		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
+		shutdownCh: make(chan struct{}),
 	}
 	return b, db
 }
@@ -624,6 +625,42 @@ func TestHandleTextMessage_InfoButtonRoutesToHelpMessage(t *testing.T) {
 	msg, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
 	assert.Equal(t, MsgInfo, msg)
+}
+
+func TestHandleTextMessage_ModeratorStateClearedWhenRightsRevoked(t *testing.T) {
+	moderatorStates := []string{
+		StateWaitModDeleteInvite,
+		StateWaitModInvitePrice,
+		StateWaitModChangePriceID,
+		StateWaitModChangePriceValue,
+	}
+
+	for _, state := range moderatorStates {
+		t.Run(state, func(t *testing.T) {
+			b, db := setupTestBot(t)
+
+			// Создаём пользователя БЕЗ прав модератора
+			userID := int64(55001)
+			_, err := db.CreateUser(userID, "exmod", "ExMod", "uuid-exmod", nil, nil)
+			require.NoError(t, err)
+
+			// Устанавливаем зависшее модераторское состояние
+			b.userStates.Set(userID, state)
+
+			// Отправляем произвольный текст
+			ctx := &MockContext{
+				sender:  &tele.User{ID: userID, Username: "exmod"},
+				message: &tele.Message{Text: "какой-то текст"},
+			}
+
+			err = b.handleTextMessage(ctx)
+			require.NoError(t, err)
+
+			// Состояние должно быть очищено
+			assert.Equal(t, StateNone, b.userStates.Get(userID),
+				"состояние должно очищаться при отзыве прав модератора (state: %s)", state)
+		})
+	}
 }
 
 func TestHandleTextMessage_PaymentFlowResetsOnMainMenuButtons(t *testing.T) {

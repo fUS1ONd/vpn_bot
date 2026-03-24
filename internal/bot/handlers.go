@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"html"
 	"log/slog"
 	"strings"
 	"sync"
@@ -39,6 +40,8 @@ type Bot struct {
 	maintenanceMode      atomic.Bool               // Режим обслуживания (сбрасывается при перезапуске)
 	paymentRetryDelays   []time.Duration           // Тестовые override-задержки для короткого background retry активации
 	paymentRetryInFlight sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
+	shutdownCh           chan struct{}             // Закрывается при Stop() для отмены фоновых горутин
+	userLimiter          *userRateLimiter          // per-user rate limiter для команд бота
 	modChangePriceMu     sync.RWMutex
 	modChangePriceData   map[int64]modChangePriceSession // pending-данные изменения цены для модератора
 	adminSwitchMu        sync.RWMutex
@@ -68,10 +71,23 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		metricsClient:      monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
 		dashboardMgr:       newDashboardManager(),
 		sdConfigsPath:      cfg.SDConfigsPath,
+		shutdownCh:         make(chan struct{}),
 		modChangePriceData: make(map[int64]modChangePriceSession),
 		adminSwitchData:    make(map[int64]adminSwitchSession),
 		adminPriceData:     make(map[int64]adminChangePriceSession),
 	}
+	bot.userLimiter = newUserRateLimiter(3, 5, bot.shutdownCh) // 3 req/s, burst 5
+
+	// Rate limiting middleware — защита от спама командами
+	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
+		return func(c tele.Context) error {
+			if c.Sender() != nil && !bot.userLimiter.allow(c.Sender().ID) {
+				slog.Warn("Rate limit exceeded", "telegram_id", c.Sender().ID)
+				return nil // Молча игнорируем
+			}
+			return next(c)
+		}
+	})
 
 	// Middleware для логирования
 	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
@@ -122,6 +138,12 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 func (b *Bot) Run() {
 	slog.Info("Bot started", "username", b.bot.Me.Username)
 	b.bot.Start()
+}
+
+// Stop останавливает бота (для graceful shutdown)
+func (b *Bot) Stop() {
+	close(b.shutdownCh)
+	b.bot.Stop()
 }
 
 // handleMediaMessage обрабатывает медиа-сообщения (для рассылки)
@@ -202,7 +224,7 @@ func (b *Bot) handleStart(c tele.Context) error {
 		subType := determineSubscriptionType(remUser, b.isTrialUser(telegramID))
 		if subType == subTypeGrace {
 			graceDeadline := remUser.ExpireAt.Add(72 * time.Hour)
-			remaining := time.Until(graceDeadline)
+			remaining := graceDeadline.Sub(time.Now().UTC())
 			var remainStr string
 			days := int(remaining.Hours() / 24)
 			if days > 0 {
@@ -340,14 +362,20 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 		}
-		return b.processModeratorDeleteInvite(c, text)
+		if b.isModerator(telegramID) {
+			return b.processModeratorDeleteInvite(c, text)
+		}
+		b.userStates.Delete(telegramID) // права модератора отозваны — сбрасываем состояние
 
 	case StateWaitModInvitePrice:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
 		}
-		return b.processModeratorInvitePrice(c, text)
+		if b.isModerator(telegramID) {
+			return b.processModeratorInvitePrice(c, text)
+		}
+		b.userStates.Delete(telegramID) // права модератора отозваны — сбрасываем состояние
 
 	case StateWaitModChangePriceID:
 		if text == BtnCancel {
@@ -355,7 +383,11 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			b.clearModChangePriceSession(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
 		}
-		return b.processModChangePriceID(c, text)
+		if b.isModerator(telegramID) {
+			return b.processModChangePriceID(c, text)
+		}
+		b.userStates.Delete(telegramID)          // права модератора отозваны — сбрасываем состояние
+		b.clearModChangePriceSession(telegramID) // очищаем сессионные данные смены цены
 
 	case StateWaitModChangePriceValue:
 		if text == BtnCancel {
@@ -363,7 +395,11 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			b.clearModChangePriceSession(telegramID)
 			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
 		}
-		return b.processModChangePriceValue(c, text)
+		if b.isModerator(telegramID) {
+			return b.processModChangePriceValue(c, text)
+		}
+		b.userStates.Delete(telegramID)          // права модератора отозваны — сбрасываем состояние
+		b.clearModChangePriceSession(telegramID) // очищаем сессионные данные смены цены
 
 	case StateWaitAddModerator:
 		if text == BtnCancel {
@@ -608,7 +644,7 @@ func (b *Bot) notifyAdminNewUser(telegramID int64, username, firstName string) {
 
 	// First name (если есть)
 	if firstName != "" {
-		fmt.Fprintf(&msg, "👤 %s\n", firstName)
+		fmt.Fprintf(&msg, "👤 %s\n", html.EscapeString(firstName))
 	}
 
 	admin := &tele.User{ID: b.config.AdminID}

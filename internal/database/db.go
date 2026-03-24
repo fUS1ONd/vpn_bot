@@ -55,6 +55,13 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	// Включаем WAL mode для корректной работы при concurrent writes
+	// (callback-сервер + scheduler + Telegram handler)
+	if _, err := conn.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
+	}
+
 	// Включаем foreign keys
 	if _, err := conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		conn.Close()

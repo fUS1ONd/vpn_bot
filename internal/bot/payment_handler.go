@@ -49,7 +49,7 @@ func (b *Bot) handlePayButton(c tele.Context) error {
 	// Проверка лимита 90 дней
 	remUser, err := b.remnawave.GetUserByTelegramID(telegramID)
 	if err == nil && remUser != nil && remUser.Status == "ACTIVE" && remUser.ExpireAt.Year() < 2099 {
-		daysLeft := int(time.Until(remUser.ExpireAt).Hours() / 24)
+		daysLeft := int(remUser.ExpireAt.Sub(time.Now().UTC()).Hours() / 24)
 		if daysLeft >= 90 {
 			msg := fmt.Sprintf("ℹ️ Подписка уже оплачена до <b>%s</b>.\nПродлить можно не раньше чем за 90 дней до окончания.",
 				remUser.ExpireAt.Format("02.01.2006"))

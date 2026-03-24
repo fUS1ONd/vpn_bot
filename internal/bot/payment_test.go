@@ -601,6 +601,7 @@ func TestHandleConfirmedRetriesActivationInBackground(t *testing.T) {
 		userStates:         newStateMap(),
 		remnawave:          client,
 		paymentRetryDelays: []time.Duration{10 * time.Millisecond},
+		shutdownCh:         make(chan struct{}),
 	}
 	handler := &paymentCallbackHandler{bot: b}
 

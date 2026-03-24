@@ -216,7 +216,7 @@ func formatInfiniteStatus(remUser *remnawave.User, devicesCount *int) string {
 
 func formatGraceStatus(remUser *remnawave.User, dbUser *database.User) string {
 	graceDeadline := remUser.ExpireAt.Add(72 * time.Hour)
-	remaining := time.Until(graceDeadline)
+	remaining := graceDeadline.Sub(time.Now().UTC())
 
 	var remainStr string
 	days := int(remaining.Hours() / 24)
@@ -253,7 +253,8 @@ func formatTrialStatus(remUser *remnawave.User, dbUser *database.User, devicesCo
 	msg += fmt.Sprintf("<b>Статус:</b> %s %s\n", statusEmoji, statusText)
 
 	// Осталось дней
-	remaining := time.Until(remUser.ExpireAt)
+	now := time.Now().UTC()
+	remaining := remUser.ExpireAt.Sub(now)
 	days := int(remaining.Hours() / 24)
 	if days > 0 {
 		msg += fmt.Sprintf("<b>Осталось:</b> %d дн. (до %s)\n", days, remUser.ExpireAt.Format("02.01.2006"))
@@ -302,7 +303,8 @@ func formatPaidStatus(remUser *remnawave.User, dbUser *database.User, devicesCou
 	msg += fmt.Sprintf("<b>Статус:</b> %s %s\n", statusEmoji, statusText)
 
 	// Осталось дней
-	remaining := time.Until(remUser.ExpireAt)
+	now := time.Now().UTC()
+	remaining := remUser.ExpireAt.Sub(now)
 	days := int(remaining.Hours() / 24)
 	if days > 0 {
 		msg += fmt.Sprintf("<b>Осталось:</b> %d дн. (до %s)\n", days, remUser.ExpireAt.Format("02.01.2006"))

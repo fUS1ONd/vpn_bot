@@ -728,7 +728,7 @@ func TestHandleAdminStats_IncludesAdminPaymentsAndModeratorPayouts(t *testing.T)
 	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.RawQuery == "size=1000" {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.Query().Get("size") == "1000" {
 				payload := `{"response":{"users":[],"total":0}}`
 				return &http.Response{
 					StatusCode: http.StatusOK,

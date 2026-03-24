@@ -336,7 +336,7 @@ func TestGetConfirmedPaymentsByMonth(t *testing.T) {
 
 	payments, err := db.GetConfirmedPaymentsByMonth(2026, 3)
 	require.NoError(t, err)
-	require.Len(t, payments, 4)
+	require.Len(t, payments, 3, "chargebacked платежи не должны попадать в выручку")
 
 	byTelegramID := make(map[int64]MonthlyConfirmedPayment, len(payments))
 	for _, payment := range payments {
@@ -366,10 +366,8 @@ func TestGetConfirmedPaymentsByMonth(t *testing.T) {
 	assert.Equal(t, 800, notActivatedPayment.Amount)
 	assert.Equal(t, 105, notActivatedPayment.ShareAmount)
 
-	chargebackedPayment, ok := byTelegramID[204]
-	require.True(t, ok)
-	assert.Equal(t, 600, chargebackedPayment.Amount)
-	assert.Equal(t, 0, chargebackedPayment.ShareAmount)
+	_, ok = byTelegramID[204]
+	assert.False(t, ok, "chargebacked платёж не должен попадать в выручку")
 }
 
 func TestCountFirstPaymentsByMonth_IncludesFinanciallyConfirmedStatuses(t *testing.T) {
@@ -438,7 +436,7 @@ func TestCountFirstPaymentsByMonth_IncludesFinanciallyConfirmedStatuses(t *testi
 
 	count, err := db.CountFirstPaymentsByMonth(2026, 3)
 	require.NoError(t, err)
-	assert.Equal(t, 3, count)
+	assert.Equal(t, 2, count, "chargebacked платежи не должны считаться как первые оплаты")
 }
 
 func TestCountTrialsByMonthKeepsHistoricalTrialAfterSwitchToUnlimited(t *testing.T) {
@@ -467,6 +465,37 @@ func TestCountTrialsByMonthKeepsHistoricalTrialAfterSwitchToUnlimited(t *testing
 	count, err = db.CountTrialsByMonth(2026, 3)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "исторический trial не должен исчезать из статистики после перевода на бессрочный тариф")
+}
+
+func TestUpdatePaymentStatusIfNot(t *testing.T) {
+	dbFile := "test_payments_status_if_not.db"
+	db, err := New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	// Создаём платёж со статусом "confirmed"
+	p := &Payment{
+		TelegramID:    12345,
+		Amount:        500,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	id, err := db.CreatePayment(p)
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(id))
+
+	// Первый вызов: статус не "chargebacked" → должен обновить
+	updated, err := db.UpdatePaymentStatusIfNot(id, "chargebacked", "chargebacked")
+	require.NoError(t, err)
+	assert.True(t, updated, "должен обновить, т.к. статус был не chargebacked")
+
+	// Второй вызов: статус уже "chargebacked" → не должен обновлять
+	updated, err = db.UpdatePaymentStatusIfNot(id, "chargebacked", "chargebacked")
+	require.NoError(t, err)
+	assert.False(t, updated, "не должен обновлять повторно")
 }
 
 func TestExpireOldPendingPayments(t *testing.T) {
