@@ -436,7 +436,7 @@ func TestCountFirstPaymentsByMonth_IncludesFinanciallyConfirmedStatuses(t *testi
 
 	count, err := db.CountFirstPaymentsByMonth(2026, 3)
 	require.NoError(t, err)
-	assert.Equal(t, 3, count)
+	assert.Equal(t, 2, count, "chargebacked платежи не должны считаться как первые оплаты")
 }
 
 func TestCountTrialsByMonthKeepsHistoricalTrialAfterSwitchToUnlimited(t *testing.T) {

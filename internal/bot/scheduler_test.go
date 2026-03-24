@@ -34,6 +34,7 @@ func setupSchedulerTestBot(t *testing.T) (*Bot, *database.DB) {
 		config:     cfg,
 		userStates: newStateMap(),
 		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
+		shutdownCh: make(chan struct{}),
 	}
 	return b, db
 }

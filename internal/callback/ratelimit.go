@@ -13,6 +13,7 @@ type ipRateLimiter struct {
 	buckets map[string]*tokenBucket
 	rate    float64 // токенов в секунду
 	burst   int     // максимальный burst
+	done    chan struct{}
 }
 
 // tokenBucket — простой token bucket для одного IP.
@@ -22,11 +23,13 @@ type tokenBucket struct {
 }
 
 // newIPRateLimiter создаёт rate limiter с заданной скоростью (req/s) и burst.
-func newIPRateLimiter(rate float64, burst int) *ipRateLimiter {
+// done — канал, при закрытии которого cleanup-горутина завершается.
+func newIPRateLimiter(rate float64, burst int, done chan struct{}) *ipRateLimiter {
 	rl := &ipRateLimiter{
 		buckets: make(map[string]*tokenBucket),
 		rate:    rate,
 		burst:   burst,
+		done:    done,
 	}
 	go rl.cleanupLoop()
 	return rl
@@ -68,15 +71,20 @@ func (rl *ipRateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		rl.mu.Lock()
-		now := time.Now()
-		for ip, b := range rl.buckets {
-			if now.Sub(b.lastTime) > 10*time.Minute {
-				delete(rl.buckets, ip)
+	for {
+		select {
+		case <-rl.done:
+			return
+		case <-ticker.C:
+			rl.mu.Lock()
+			now := time.Now()
+			for ip, b := range rl.buckets {
+				if now.Sub(b.lastTime) > 10*time.Minute {
+					delete(rl.buckets, ip)
+				}
 			}
+			rl.mu.Unlock()
 		}
-		rl.mu.Unlock()
 	}
 }
 

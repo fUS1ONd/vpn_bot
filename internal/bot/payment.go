@@ -417,6 +417,11 @@ func (h *paymentCallbackHandler) handleCanceled(payment *database.Payment) error
 // handleChargeback обрабатывает chargeback.
 // Полностью зеркалит admin-ban flow (processBanUser): BanUser + DeleteUser из Remnawave + DeleteUser из БД.
 func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) error {
+	// Idempotency: если уже обработан — не повторяем
+	if payment.Status == "chargebacked" {
+		return nil
+	}
+
 	if err := h.bot.db.UpdatePaymentStatus(payment.ID, "chargebacked"); err != nil {
 		return fmt.Errorf("update status to chargebacked: %w", err)
 	}

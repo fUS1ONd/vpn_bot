@@ -72,11 +72,11 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		dashboardMgr:       newDashboardManager(),
 		sdConfigsPath:      cfg.SDConfigsPath,
 		shutdownCh:         make(chan struct{}),
-		userLimiter:        newUserRateLimiter(3, 5), // 3 req/s, burst 5
 		modChangePriceData: make(map[int64]modChangePriceSession),
 		adminSwitchData:    make(map[int64]adminSwitchSession),
 		adminPriceData:     make(map[int64]adminChangePriceSession),
 	}
+	bot.userLimiter = newUserRateLimiter(3, 5, bot.shutdownCh) // 3 req/s, burst 5
 
 	// Rate limiting middleware — защита от спама командами
 	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {

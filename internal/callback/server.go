@@ -27,15 +27,18 @@ type Server struct {
 	httpServer *http.Server
 	mux        *http.ServeMux
 	limiter    *ipRateLimiter
+	done       chan struct{} // закрывается при Shutdown для остановки фоновых горутин
 }
 
 // NewServer создаёт callback-сервер. port=0 означает автовыбор ОС (для тестов).
 func NewServer(port int, merchantID, secret string, handler PaymentHandler) *Server {
+	done := make(chan struct{})
 	s := &Server{
 		merchantID: merchantID,
 		secret:     secret,
 		handler:    handler,
-		limiter:    newIPRateLimiter(10, 20), // 10 req/s, burst 20
+		done:       done,
+		limiter:    newIPRateLimiter(10, 20, done), // 10 req/s, burst 20
 	}
 
 	mux := http.NewServeMux()
@@ -65,8 +68,9 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
 }
 
-// Shutdown останавливает сервер
+// Shutdown останавливает сервер и фоновые горутины
 func (s *Server) Shutdown(ctx context.Context) error {
+	close(s.done)
 	return s.httpServer.Shutdown(ctx)
 }
 

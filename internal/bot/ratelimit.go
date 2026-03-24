@@ -12,6 +12,7 @@ type userRateLimiter struct {
 	buckets map[int64]*userBucket
 	rate    float64 // токенов в секунду
 	burst   int     // максимальный burst
+	done    chan struct{}
 }
 
 // userBucket — token bucket для одного пользователя (по telegram_id).
@@ -21,11 +22,13 @@ type userBucket struct {
 }
 
 // newUserRateLimiter создаёт rate limiter для пользователей бота.
-func newUserRateLimiter(rate float64, burst int) *userRateLimiter {
+// done — канал, при закрытии которого cleanup-горутина завершается.
+func newUserRateLimiter(rate float64, burst int, done chan struct{}) *userRateLimiter {
 	rl := &userRateLimiter{
 		buckets: make(map[int64]*userBucket),
 		rate:    rate,
 		burst:   burst,
+		done:    done,
 	}
 	go rl.cleanupLoop()
 	return rl
@@ -66,14 +69,19 @@ func (rl *userRateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		rl.mu.Lock()
-		now := time.Now()
-		for id, b := range rl.buckets {
-			if now.Sub(b.lastTime) > 10*time.Minute {
-				delete(rl.buckets, id)
+	for {
+		select {
+		case <-rl.done:
+			return
+		case <-ticker.C:
+			rl.mu.Lock()
+			now := time.Now()
+			for id, b := range rl.buckets {
+				if now.Sub(b.lastTime) > 10*time.Minute {
+					delete(rl.buckets, id)
+				}
 			}
+			rl.mu.Unlock()
 		}
-		rl.mu.Unlock()
 	}
 }

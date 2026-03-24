@@ -364,7 +364,7 @@ func (db *DB) CountFirstPaymentsByMonth(year int, month int) (int, error) {
 		`SELECT COUNT(*) FROM (
 		    SELECT telegram_id, MIN(confirmed_at) as first_payment
 		    FROM payments
-		    WHERE confirmed_at IS NOT NULL
+		    WHERE confirmed_at IS NOT NULL AND status NOT IN ('chargebacked')
 		    GROUP BY telegram_id
 		    HAVING first_payment >= ? AND first_payment < ?
 		)`, start, end,
