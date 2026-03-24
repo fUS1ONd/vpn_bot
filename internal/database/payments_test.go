@@ -467,6 +467,37 @@ func TestCountTrialsByMonthKeepsHistoricalTrialAfterSwitchToUnlimited(t *testing
 	assert.Equal(t, 1, count, "исторический trial не должен исчезать из статистики после перевода на бессрочный тариф")
 }
 
+func TestUpdatePaymentStatusIfNot(t *testing.T) {
+	dbFile := "test_payments_status_if_not.db"
+	db, err := New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	// Создаём платёж со статусом "confirmed"
+	p := &Payment{
+		TelegramID:    12345,
+		Amount:        500,
+		PaymentMethod: "sbp",
+		Status:        "pending",
+	}
+	id, err := db.CreatePayment(p)
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(id))
+
+	// Первый вызов: статус не "chargebacked" → должен обновить
+	updated, err := db.UpdatePaymentStatusIfNot(id, "chargebacked", "chargebacked")
+	require.NoError(t, err)
+	assert.True(t, updated, "должен обновить, т.к. статус был не chargebacked")
+
+	// Второй вызов: статус уже "chargebacked" → не должен обновлять
+	updated, err = db.UpdatePaymentStatusIfNot(id, "chargebacked", "chargebacked")
+	require.NoError(t, err)
+	assert.False(t, updated, "не должен обновлять повторно")
+}
+
 func TestExpireOldPendingPayments(t *testing.T) {
 	dbFile := "test_payments_expire.db"
 	db, err := New(dbFile)

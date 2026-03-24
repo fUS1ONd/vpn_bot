@@ -166,6 +166,24 @@ func (db *DB) UpdatePaymentStatus(id int64, status string) error {
 	return err
 }
 
+// UpdatePaymentStatusIfNot обновляет статус платежа только если текущий статус не равен excludedStatus.
+// Возвращает true если обновление произошло (строк изменено > 0), false если статус уже excludedStatus.
+// Используется для атомарной idempotency при обработке chargeback.
+func (db *DB) UpdatePaymentStatusIfNot(id int64, newStatus, excludedStatus string) (bool, error) {
+	res, err := db.conn.Exec(
+		`UPDATE payments SET status = ? WHERE id = ? AND status != ?`,
+		newStatus, id, excludedStatus,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 // ConfirmPayment помечает платёж как confirmed с датой подтверждения
 func (db *DB) ConfirmPayment(id int64) error {
 	_, err := db.conn.Exec(
