@@ -123,16 +123,11 @@ func main() {
 	if cfg.PlategaMerchantID != "" && cfg.PlategaSecret != "" {
 		callbackServer := callback.NewServer(cfg.CallbackPort, cfg.PlategaMerchantID, cfg.PlategaSecret, telegramBot.PaymentCallbackHandler())
 
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("goroutine panicked", "goroutine", "callback-server", "recover", r)
-				}
-			}()
+		go runWithRestart(ctx, "callback-server", func() {
 			if err := callbackServer.Start(); err != nil && err != http.ErrServerClosed {
 				slog.Error("Callback server error", "error", err)
 			}
-		}()
+		})
 
 		go func() {
 			<-ctx.Done()
