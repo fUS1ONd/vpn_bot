@@ -36,8 +36,12 @@ func runWithRestart(ctx context.Context, name string, fn func()) {
 		}()
 
 		if !panicked {
-			// fn вернулась штатно (ctx отменён внутри)
-			return
+			// fn вернулась штатно — проверяем, был ли это штатный shutdown
+			if ctx.Err() != nil {
+				return
+			}
+			// fn завершилась без паники и без отмены ctx — неожиданный выход, перезапускаем
+			slog.Warn("goroutine exited unexpectedly, will restart", "goroutine", name, "backoff", backoff)
 		}
 
 		select {
