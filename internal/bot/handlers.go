@@ -365,6 +365,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		if b.isModerator(telegramID) {
 			return b.processModeratorDeleteInvite(c, text)
 		}
+		b.userStates.Delete(telegramID) // права модератора отозваны — сбрасываем состояние
 
 	case StateWaitModInvitePrice:
 		if text == BtnCancel {
@@ -374,6 +375,7 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		if b.isModerator(telegramID) {
 			return b.processModeratorInvitePrice(c, text)
 		}
+		b.userStates.Delete(telegramID) // права модератора отозваны — сбрасываем состояние
 
 	case StateWaitModChangePriceID:
 		if text == BtnCancel {
@@ -384,6 +386,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		if b.isModerator(telegramID) {
 			return b.processModChangePriceID(c, text)
 		}
+		b.userStates.Delete(telegramID)          // права модератора отозваны — сбрасываем состояние
+		b.clearModChangePriceSession(telegramID) // очищаем сессионные данные смены цены
 
 	case StateWaitModChangePriceValue:
 		if text == BtnCancel {
@@ -394,6 +398,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		if b.isModerator(telegramID) {
 			return b.processModChangePriceValue(c, text)
 		}
+		b.userStates.Delete(telegramID)          // права модератора отозваны — сбрасываем состояние
+		b.clearModChangePriceSession(telegramID) // очищаем сессионные данные смены цены
 
 	case StateWaitAddModerator:
 		if text == BtnCancel {
