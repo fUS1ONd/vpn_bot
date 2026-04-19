@@ -79,4 +79,46 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("REMNAWAVE_URL", "https://panel.example.com")
 	t.Setenv("REMNAWAVE_API_TOKEN", "test-api-token")
 	t.Setenv("DB_PATH", "/tmp/test.db")
+	t.Setenv("PRIVACY_POLICY_URL", "https://example.com/privacy")
+	t.Setenv("TERMS_OF_SERVICE_URL", "https://example.com/terms")
+	t.Setenv("SUPPORT_CONTACT", "@support_user")
+}
+
+func TestLoadInfoEnvRequired(t *testing.T) {
+	// Проверяем, что каждая из трёх новых переменных обязательна
+	// и её отсутствие приводит к понятной ошибке при старте.
+	cases := []struct {
+		name    string
+		envKey  string
+		wantErr string
+	}{
+		{"без PRIVACY_POLICY_URL", "PRIVACY_POLICY_URL", "PRIVACY_POLICY_URL is required"},
+		{"без TERMS_OF_SERVICE_URL", "TERMS_OF_SERVICE_URL", "TERMS_OF_SERVICE_URL is required"},
+		{"без SUPPORT_CONTACT", "SUPPORT_CONTACT", "SUPPORT_CONTACT is required"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv(tc.envKey, "")
+
+			_, err := Load()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestLoadInfoEnvRead(t *testing.T) {
+	// Проверяем, что значения читаются из окружения без изменений.
+	setRequiredEnv(t)
+	t.Setenv("PRIVACY_POLICY_URL", "https://legal.example.com/privacy")
+	t.Setenv("TERMS_OF_SERVICE_URL", "https://legal.example.com/terms")
+	t.Setenv("SUPPORT_CONTACT", "@fus1ond")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "https://legal.example.com/privacy", cfg.PrivacyPolicyURL)
+	require.Equal(t, "https://legal.example.com/terms", cfg.TermsOfServiceURL)
+	require.Equal(t, "@fus1ond", cfg.SupportContact)
 }
