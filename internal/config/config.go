@@ -26,6 +26,12 @@ type Config struct {
 	// Донат
 	DonateText string
 
+	// Юридические страницы и контакт поддержки (показываются в кнопке «Информация»).
+	// Все три поля обязательны — значения подставляются в HTML-шаблон MsgInfo.
+	PrivacyPolicyURL  string // URL страницы политики конфиденциальности
+	TermsOfServiceURL string // URL страницы пользовательского соглашения
+	SupportContact    string // Контакт поддержки (@username, t.me/..., email и т. п.)
+
 	// Мониторинг
 	SDConfigsPath      string // Путь к папке sd_configs для targets.json
 	VictoriaMetricsURL string // URL VictoriaMetrics API
@@ -73,6 +79,9 @@ func Load() (*Config, error) {
 		PlategaFeeCrypto:     getEnvOrDefaultInt("PLATEGA_FEE_CRYPTO", 5),
 		PlategaFeeWithdrawal: getEnvOrDefaultInt("PLATEGA_FEE_WITHDRAWAL", 2),
 		CallbackPort:         getEnvOrDefaultInt("CALLBACK_PORT", 8080),
+		PrivacyPolicyURL:     os.Getenv("PRIVACY_POLICY_URL"),
+		TermsOfServiceURL:    os.Getenv("TERMS_OF_SERVICE_URL"),
+		SupportContact:       os.Getenv("SUPPORT_CONTACT"),
 	}
 
 	// Парсинг AdminID
@@ -91,6 +100,15 @@ func Load() (*Config, error) {
 	}
 	if cfg.RemnawaveAPIToken == "" {
 		return nil, fmt.Errorf("REMNAWAVE_API_TOKEN is required")
+	}
+	if cfg.PrivacyPolicyURL == "" {
+		return nil, fmt.Errorf("PRIVACY_POLICY_URL is required")
+	}
+	if cfg.TermsOfServiceURL == "" {
+		return nil, fmt.Errorf("TERMS_OF_SERVICE_URL is required")
+	}
+	if cfg.SupportContact == "" {
+		return nil, fmt.Errorf("SUPPORT_CONTACT is required")
 	}
 
 	return cfg, nil

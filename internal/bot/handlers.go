@@ -689,7 +689,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 
 // handleInfo показывает помощь, контакты и ссылки на документы сервиса
 func (b *Bot) handleInfo(c tele.Context) error {
-	return c.Send(MsgInfo, &tele.SendOptions{
+	return c.Send(BuildInfoMessage(b.config), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: b.userKeyboard(c.Sender().ID),
 	})

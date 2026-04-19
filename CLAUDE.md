@@ -42,6 +42,11 @@ Telegram-бот управления VPN на базе [Remnawave](https://remna
 BOT_TOKEN=...
 ADMIN_ID=...
 
+# Юридические страницы и контакт поддержки (обязательные, показываются в кнопке «Информация»)
+PRIVACY_POLICY_URL=https://example.com/privacy
+TERMS_OF_SERVICE_URL=https://example.com/terms
+SUPPORT_CONTACT=@your_support_handle  # вставляется как есть, можно HTML (<a href=...>)
+
 # Remnawave
 REMNAWAVE_URL=https://panel.example.com
 REMNAWAVE_API_TOKEN=...

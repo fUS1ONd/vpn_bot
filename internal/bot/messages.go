@@ -2,8 +2,10 @@ package bot
 
 import (
 	"fmt"
+	"html"
 	"time"
 
+	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
@@ -50,13 +52,6 @@ const (
 <code>%s</code>
 
 Скопируйте ссылку и вставьте в приложение VPN-клиента.`
-
-	MsgInfo = `<b>💡 Помощь и контакты</b>
-
-Если есть вопросы — пишите @fus1ond
-
-🔒 Политика конфиденциальности: <a href="https://telegra.ph/Politika-konfidencialnosti-08-15-17">читать</a>
-📜 Пользовательское соглашение: <a href="https://telegra.ph/Polzovatelskoe-soglashenie-08-15-10">читать</a>`
 
 	MsgInstructions = `<b>📚 Инструкции по настройке</b>
 
@@ -163,6 +158,25 @@ const (
 ✅ Успешно: %d
 ❌ Ошибок: %d`
 )
+
+// BuildInfoMessage собирает HTML-текст для кнопки «Информация».
+// URL политики и оферты экранируются (httpa-значения берутся из env и
+// не должны ломать HTML-структуру), контакт поддержки вставляется как
+// есть — это позволяет админу положить туда @username, t.me/..., email
+// или уже готовый тег <a href="...">. Ответственность за корректность
+// значения SUPPORT_CONTACT лежит на админе (аналогично DonateText).
+func BuildInfoMessage(cfg *config.Config) string {
+	return fmt.Sprintf(`<b>💡 Помощь и контакты</b>
+
+Если есть вопросы — пишите %s
+
+🔒 Политика конфиденциальности: <a href="%s">читать</a>
+📜 Пользовательское соглашение: <a href="%s">читать</a>`,
+		cfg.SupportContact,
+		html.EscapeString(cfg.PrivacyPolicyURL),
+		html.EscapeString(cfg.TermsOfServiceURL),
+	)
+}
 
 // determineSubscriptionType определяет тип подписки на основе данных из Remnawave и БД
 func determineSubscriptionType(remUser *remnawave.User, isTrial bool) subscriptionType {

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
@@ -53,10 +54,44 @@ func TestMsgAccountCreatedHasNoTrafficLimitDetails(t *testing.T) {
 	assert.NotContains(t, MsgAccountCreated, "Сброс трафика")
 }
 
-func TestMsgInfoContainsExpectedLinks(t *testing.T) {
-	assert.Contains(t, MsgInfo, "💡 Помощь и контакты")
-	assert.Contains(t, MsgInfo, "@fus1ond")
-	assert.Contains(t, MsgInfo, "https://telegra.ph/Politika-konfidencialnosti-08-15-17")
-	assert.Contains(t, MsgInfo, "https://telegra.ph/Polzovatelskoe-soglashenie-08-15-10")
-	assert.Contains(t, MsgInfo, `>читать</a>`)
+func TestBuildInfoMessageSubstitutesValuesFromConfig(t *testing.T) {
+	cfg := &config.Config{
+		PrivacyPolicyURL:  "https://example.com/privacy",
+		TermsOfServiceURL: "https://example.com/terms",
+		SupportContact:    "@help_bot",
+	}
+
+	msg := BuildInfoMessage(cfg)
+
+	// Заголовок и формат сохранены
+	assert.Contains(t, msg, "💡 Помощь и контакты")
+	assert.Contains(t, msg, "Политика конфиденциальности")
+	assert.Contains(t, msg, "Пользовательское соглашение")
+	assert.Contains(t, msg, `>читать</a>`)
+
+	// Значения подставлены из config
+	assert.Contains(t, msg, "@help_bot")
+	assert.Contains(t, msg, `href="https://example.com/privacy"`)
+	assert.Contains(t, msg, `href="https://example.com/terms"`)
+
+	// Старые протухшие telegra.ph-ссылки не вшиты в код
+	assert.NotContains(t, msg, "telegra.ph/Politika-konfidencialnosti-08-15-17")
+	assert.NotContains(t, msg, "telegra.ph/Polzovatelskoe-soglashenie-08-15-10")
+}
+
+func TestBuildInfoMessageEscapesURLs(t *testing.T) {
+	// URL-поля должны проходить через html.EscapeString, чтобы
+	// кавычки внутри значения не ломали структуру HTML-атрибута href.
+	cfg := &config.Config{
+		PrivacyPolicyURL:  `https://example.com/p?q="bad"`,
+		TermsOfServiceURL: "https://example.com/terms",
+		SupportContact:    "@help_bot",
+	}
+
+	msg := BuildInfoMessage(cfg)
+
+	// Сырая кавычка внутри значения атрибута — недопустимо
+	assert.NotContains(t, msg, `q="bad"`)
+	// Ожидаем экранирование
+	assert.Contains(t, msg, "&#34;bad&#34;")
 }

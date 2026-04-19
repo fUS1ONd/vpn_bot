@@ -65,6 +65,9 @@ func setupTestBot(t *testing.T) (*Bot, *database.DB) {
 	cfg := &config.Config{
 		AdminID:             999999,
 		TrialTrafficLimitGB: 1,
+		PrivacyPolicyURL:    "https://example.com/privacy",
+		TermsOfServiceURL:   "https://example.com/terms",
+		SupportContact:      "@test_support",
 	}
 	b := &Bot{
 		db:         db,
@@ -609,7 +612,7 @@ func TestHandleInfoSendsHelpMessage(t *testing.T) {
 
 	msg, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
-	assert.Equal(t, MsgInfo, msg)
+	assert.Equal(t, BuildInfoMessage(b.config), msg)
 }
 
 func TestHandleTextMessage_InfoButtonRoutesToHelpMessage(t *testing.T) {
@@ -624,7 +627,7 @@ func TestHandleTextMessage_InfoButtonRoutesToHelpMessage(t *testing.T) {
 
 	msg, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
-	assert.Equal(t, MsgInfo, msg)
+	assert.Equal(t, BuildInfoMessage(b.config), msg)
 }
 
 func TestHandleTextMessage_ModeratorStateClearedWhenRightsRevoked(t *testing.T) {
@@ -678,6 +681,6 @@ func TestHandleTextMessage_PaymentFlowResetsOnMainMenuButtons(t *testing.T) {
 
 	msg, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
-	assert.Equal(t, MsgInfo, msg)
+	assert.Equal(t, BuildInfoMessage(b.config), msg)
 	assert.Equal(t, StateNone, b.userStates.Get(userID), "при выходе в главное меню state оплаты должен сбрасываться")
 }
