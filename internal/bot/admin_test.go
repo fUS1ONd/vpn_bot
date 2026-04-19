@@ -941,7 +941,10 @@ func TestAdminChangePriceFlow_PromptsForLegacyPaidMigration(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv.Code, targetID))
 
-	expireAt := time.Date(2026, time.April, 15, 0, 0, 0, 0, time.UTC)
+	// Берём дату в будущем относительно now — иначе guard
+	// shouldPromptAdminChangePriceMigration (expireAt.After(now)) не
+	// сработает и тест начнёт падать просто от смены даты сборки.
+	expireAt := time.Now().UTC().AddDate(0, 0, 10)
 	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -979,7 +982,7 @@ func TestAdminChangePriceFlow_PromptsForLegacyPaidMigration(t *testing.T) {
 	msgValue, ok := ctxValue.sentMsg.(string)
 	require.True(t, ok)
 	assert.Contains(t, msgValue, "Текущий период уже оплачен вручную")
-	assert.Contains(t, msgValue, "15.04.2026")
+	assert.Contains(t, msgValue, expireAt.Format("02.01.2006"))
 	assert.Equal(t, StateWaitAdminChangePriceMigrationConfirm, b.userStates.Get(adminID))
 
 	updatedUser, err := db.GetUserByTelegramID(targetID)
@@ -1080,7 +1083,7 @@ func TestAdminChangePriceFlow_MigrationNoLeavesTrial(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv.Code, targetID))
 
-	expireAt := time.Date(2026, time.April, 20, 0, 0, 0, 0, time.UTC)
+	expireAt := time.Now().UTC().AddDate(0, 0, 10)
 	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1157,7 +1160,7 @@ func TestAdminChangePriceFlow_MigrationCancelClearsSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv.Code, targetID))
 
-	expireAt := time.Date(2026, time.April, 25, 0, 0, 0, 0, time.UTC)
+	expireAt := time.Now().UTC().AddDate(0, 0, 10)
 	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1233,7 +1236,7 @@ func TestAdminChangePriceFlow_DoesNotPromptForFreshTrial(t *testing.T) {
 	require.NotNil(t, initialUser.SubscriptionPrice)
 	assert.Equal(t, invitePrice, *initialUser.SubscriptionPrice)
 
-	expireAt := time.Date(2026, time.April, 15, 0, 0, 0, 0, time.UTC)
+	expireAt := time.Now().UTC().AddDate(0, 0, 10)
 	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
