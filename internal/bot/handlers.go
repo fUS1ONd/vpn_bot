@@ -131,6 +131,20 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(tele.OnVoice, bot.handleVoiceMessage)
 	b.Handle(tele.OnVideoNote, bot.handleVideoNoteMessage)
 
+	// Inline-кнопки управления устройствами (роутинг по Unique)
+	devMenu := &tele.ReplyMarkup{}
+	btnDevManage := devMenu.Data("", cbDevicesManage)
+	btnDevDelete := devMenu.Data("", cbDeviceDelete)
+	btnDevResetAll := devMenu.Data("", cbDevicesResetAll)
+	btnDevResetAllOK := devMenu.Data("", cbDevicesResetAllConfirm)
+	btnDevClose := devMenu.Data("", cbDevicesClose)
+
+	b.Handle(&btnDevManage, bot.handleDevicesManage)
+	b.Handle(&btnDevDelete, bot.handleDeviceDelete)
+	b.Handle(&btnDevResetAll, bot.handleDevicesResetAll)
+	b.Handle(&btnDevResetAllOK, bot.handleDevicesResetAllConfirm)
+	b.Handle(&btnDevClose, bot.handleDevicesClose)
+
 	return bot, nil
 }
 
@@ -520,6 +534,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	switch text {
 	case BtnStatus:
 		return b.handleStatus(c)
+	case BtnDevices:
+		return b.handleDevicesManage(c)
 	case BtnPay, BtnRenew:
 		return b.handlePayButton(c)
 	case BtnCheckPayment:
@@ -681,9 +697,10 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	}
 
 	msg := FormatUserStatus(remnawaveUser, user, b.isTrialUser(telegramID), devicesCount)
+	// Переходим в подменю подписки: отсюда доступно управление устройствами и возврат.
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: b.userKeyboard(telegramID),
+		ReplyMarkup: SubscriptionMenuKeyboard(),
 	})
 }
 

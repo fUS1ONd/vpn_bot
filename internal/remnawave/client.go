@@ -255,6 +255,72 @@ func (c *Client) GetUserHwidDevicesCount(uuid string) (int, error) {
 	return result.Response.Total, nil
 }
 
+// HwidDevice — устройство пользователя из Remnawave HWID API.
+type HwidDevice struct {
+	Hwid        string `json:"hwid"`
+	Platform    string `json:"platform"`
+	OsVersion   string `json:"osVersion"`
+	DeviceModel string `json:"deviceModel"`
+}
+
+// GetUserHwidDevices возвращает список HWID-устройств пользователя.
+func (c *Client) GetUserHwidDevices(uuid string) ([]HwidDevice, error) {
+	resp, err := c.doRequest("GET", "/api/hwid/devices/"+uuid, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Response struct {
+			Devices []HwidDevice `json:"devices"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal hwid devices response: %w", err)
+	}
+
+	return result.Response.Devices, nil
+}
+
+// DeleteUserHwidDevice удаляет одно HWID-устройство пользователя и
+// возвращает обновлённый список оставшихся устройств.
+func (c *Client) DeleteUserHwidDevice(uuid, hwid string) ([]HwidDevice, error) {
+	body, err := json.Marshal(map[string]string{
+		"userUuid": uuid,
+		"hwid":     hwid,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal delete device request: %w", err)
+	}
+
+	resp, err := c.doRequest("POST", "/api/hwid/devices/delete", body)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Response struct {
+			Devices []HwidDevice `json:"devices"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal delete device response: %w", err)
+	}
+
+	return result.Response.Devices, nil
+}
+
+// DeleteAllUserHwidDevices сбрасывает все HWID-устройства пользователя одним запросом.
+func (c *Client) DeleteAllUserHwidDevices(uuid string) error {
+	body, err := json.Marshal(map[string]string{"userUuid": uuid})
+	if err != nil {
+		return fmt.Errorf("failed to marshal delete-all request: %w", err)
+	}
+
+	_, err = c.doRequest("POST", "/api/hwid/devices/delete-all", body)
+	return err
+}
+
 // UpdateUsername обновляет username пользователя в панели Remnawave
 func (c *Client) UpdateUsername(uuid string, username string) error {
 	req := UpdateUserRequest{

@@ -422,7 +422,10 @@ func TestHandleModeratorEarnings(t *testing.T) {
 	b.remnawave.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.Query().Get("size") == "1000" {
-				payload := `{"response":{"users":[{"uuid":"uuid-300","telegramId":300,"username":"paid","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}],"total":1}}`
+				// Дата окончания должна быть в будущем, иначе пользователь
+				// учитывается как истёкший, а не как платящий.
+				expireAt := time.Now().UTC().AddDate(0, 0, 10).Format(time.RFC3339)
+				payload := fmt.Sprintf(`{"response":{"users":[{"uuid":"uuid-300","telegramId":300,"username":"paid","status":"ACTIVE","expireAt":%q}],"total":1}}`, expireAt)
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(payload)),

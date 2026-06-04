@@ -272,3 +272,79 @@ func TestGetUserHwidDevicesCount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, count)
 }
+
+func TestGetUserHwidDevices(t *testing.T) {
+	client := NewClient("https://panel.example.com", "test-token", nil)
+	client.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			require.Equal(t, http.MethodGet, r.Method)
+			require.Equal(t, "/api/hwid/devices/uuid-1", r.URL.Path)
+
+			payload := `{"response":{"total":2,"devices":[` +
+				`{"hwid":"hw-a","platform":"iOS","deviceModel":"iPhone 14","createdAt":"2026-01-01T00:00:00Z"},` +
+				`{"hwid":"hw-b","platform":"Android","deviceModel":"Pixel 7","createdAt":"2026-01-02T00:00:00Z"}]}}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(payload)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	devices, err := client.GetUserHwidDevices("uuid-1")
+	require.NoError(t, err)
+	require.Len(t, devices, 2)
+	require.Equal(t, "hw-a", devices[0].Hwid)
+	require.Equal(t, "iOS", devices[0].Platform)
+	require.Equal(t, "iPhone 14", devices[0].DeviceModel)
+	require.Equal(t, "hw-b", devices[1].Hwid)
+}
+
+func TestDeleteUserHwidDevice(t *testing.T) {
+	client := NewClient("https://panel.example.com", "test-token", nil)
+	client.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			require.Equal(t, http.MethodPost, r.Method)
+			require.Equal(t, "/api/hwid/devices/delete", r.URL.Path)
+
+			body, _ := io.ReadAll(r.Body)
+			require.JSONEq(t, `{"userUuid":"uuid-1","hwid":"hw-a"}`, string(body))
+
+			// API возвращает обновлённый список (осталось одно устройство)
+			payload := `{"response":{"total":1,"devices":[{"hwid":"hw-b","platform":"Android","deviceModel":"Pixel 7"}]}}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(payload)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	devices, err := client.DeleteUserHwidDevice("uuid-1", "hw-a")
+	require.NoError(t, err)
+	require.Len(t, devices, 1)
+	require.Equal(t, "hw-b", devices[0].Hwid)
+}
+
+func TestDeleteAllUserHwidDevices(t *testing.T) {
+	client := NewClient("https://panel.example.com", "test-token", nil)
+	client.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			require.Equal(t, http.MethodPost, r.Method)
+			require.Equal(t, "/api/hwid/devices/delete-all", r.URL.Path)
+
+			body, _ := io.ReadAll(r.Body)
+			require.JSONEq(t, `{"userUuid":"uuid-1"}`, string(body))
+
+			payload := `{"response":{"total":0,"devices":[]}}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(payload)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	err := client.DeleteAllUserHwidDevices("uuid-1")
+	require.NoError(t, err)
+}
