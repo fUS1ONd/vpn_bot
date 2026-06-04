@@ -7,6 +7,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBugReportButtonIsNavigation(t *testing.T) {
+	// Кнопка багрепорта должна распознаваться как навигационная,
+	// чтобы её нажатие сбрасывало незавершённый payment/bug-флоу.
+	require.True(t, isMenuNavigationButton(BtnBugReport))
+	// «Пропустить» — НЕ навигационная: это валидный ввод на шаге комментария.
+	require.False(t, isMenuNavigationButton(BtnBugSkip))
+}
+
 func TestBuildBugReportMessage(t *testing.T) {
 	r := bugReport{
 		telegramID:   12345,

@@ -303,6 +303,14 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		state = StateNone
 	}
 
+	// В шаге ввода комментария багрепорта навигационная кнопка меню должна
+	// сбросить флоу (иначе текст кнопки уйдёт в комментарий), кроме «Пропустить».
+	if state == StateWaitBugComment && text != BtnBugSkip && isMenuNavigationButton(text) {
+		b.clearBugReportSession(telegramID)
+		b.userStates.Delete(telegramID)
+		state = StateNone
+	}
+
 	// Обработка состояний
 	switch state {
 	case StateWaitInvite:
@@ -929,6 +937,7 @@ func isMenuNavigationButton(text string) bool {
 		BtnPay,
 		BtnRenew,
 		BtnInfo,
+		BtnBugReport,
 		BtnServers,
 		BtnInstructions,
 		BtnBack,
