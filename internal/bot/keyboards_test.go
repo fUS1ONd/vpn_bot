@@ -258,6 +258,17 @@ func TestBugCategoryLabel(t *testing.T) {
 	require.Equal(t, "Другое", bugCategoryLabel("unknown"))
 }
 
+func TestUserMenuHasBugReport(t *testing.T) {
+	kb := UserMenuKeyboardDynamic("", false, false)
+	var labels []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			labels = append(labels, btn.Text)
+		}
+	}
+	require.Contains(t, labels, BtnBugReport)
+}
+
 func TestPaymentKeyboardsContainExpectedButtons(t *testing.T) {
 	methods := PaymentMethodKeyboard()
 	wait := PaymentWaitKeyboard()

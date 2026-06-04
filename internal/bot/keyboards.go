@@ -112,6 +112,7 @@ func UserMenuKeyboardDynamic(payButtonText string, showPayButton bool, isModerat
 		rows = append(rows, menu.Row(menu.Text(BtnServers)))
 	}
 	rows = append(rows, menu.Row(menu.Text(BtnInstructions), menu.Text(BtnInfo)))
+	rows = append(rows, menu.Row(menu.Text(BtnBugReport)))
 	if isModerator {
 		rows = append(rows, menu.Row(menu.Text(BtnModInvites)))
 	}
