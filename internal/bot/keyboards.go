@@ -21,6 +21,7 @@ const (
 const (
 	// Кнопки пользователя
 	BtnStatus       = "👤 Моя подписка"
+	BtnDevices      = "📱 Управление устройствами"
 	BtnInfo         = "ℹ️ Информация"
 	BtnInstructions = "📚 Инструкции"
 	BtnBack         = "🔙 Назад"
@@ -247,12 +248,14 @@ func PaymentWaitKeyboard() *tele.ReplyMarkup {
 	return menu
 }
 
-// DevicesStatusInlineKeyboard — inline-кнопка под сообщением статуса, открывающая
-// управление устройствами.
-func DevicesStatusInlineKeyboard() *tele.ReplyMarkup {
-	menu := &tele.ReplyMarkup{}
-	btn := menu.Data("📱 Управлять устройствами", cbDevicesManage)
-	menu.Inline(menu.Row(btn))
+// SubscriptionMenuKeyboard — reply-подменю, в которое попадает пользователь после
+// «Моя подписка»: управление устройствами и возврат в главное меню.
+func SubscriptionMenuKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnDevices)),
+		menu.Row(menu.Text(BtnBack)),
+	)
 	return menu
 }
 

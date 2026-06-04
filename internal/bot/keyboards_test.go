@@ -9,12 +9,18 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
 
-func TestDevicesStatusInlineKeyboard(t *testing.T) {
-	kb := DevicesStatusInlineKeyboard()
+func TestSubscriptionMenuKeyboard(t *testing.T) {
+	kb := SubscriptionMenuKeyboard()
 	require.NotNil(t, kb)
-	require.Len(t, kb.InlineKeyboard, 1)
-	require.Len(t, kb.InlineKeyboard[0], 1)
-	require.Equal(t, "dev_manage", kb.InlineKeyboard[0][0].Unique)
+
+	var buttons []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+	require.Contains(t, buttons, BtnDevices)
+	require.Contains(t, buttons, BtnBack)
 }
 
 func TestDevicesManagementKeyboard(t *testing.T) {
