@@ -1,13 +1,26 @@
 package bot
 
 import (
+	"fmt"
+
 	tele "gopkg.in/telebot.v3"
+
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
+)
+
+// Unique-идентификаторы inline-кнопок управления устройствами
+const (
+	cbDevicesManage          = "dev_manage"
+	cbDeviceDelete           = "dev_del"
+	cbDevicesResetAll        = "dev_reset_all"
+	cbDevicesResetAllConfirm = "dev_reset_all_ok"
+	cbDevicesClose           = "dev_close"
 )
 
 // Текстовые константы кнопок
 const (
 	// Кнопки пользователя
-	BtnStatus       = "👤 Мой статус"
+	BtnStatus       = "👤 Моя подписка"
 	BtnInfo         = "ℹ️ Информация"
 	BtnInstructions = "📚 Инструкции"
 	BtnBack         = "🔙 Назад"
@@ -231,5 +244,69 @@ func PaymentWaitKeyboard() *tele.ReplyMarkup {
 	menu.Reply(
 		menu.Row(menu.Text(BtnCheckPayment), menu.Text(BtnCancel)),
 	)
+	return menu
+}
+
+// DevicesStatusInlineKeyboard — inline-кнопка под сообщением статуса, открывающая
+// управление устройствами.
+func DevicesStatusInlineKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	btn := menu.Data("📱 Управлять устройствами", cbDevicesManage)
+	menu.Inline(menu.Row(btn))
+	return menu
+}
+
+// truncateDeviceLabel обрезает подпись устройства до разумной длины для кнопки.
+func truncateDeviceLabel(s string) string {
+	const max = 25
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max-1]) + "…"
+}
+
+// deviceLabel формирует читаемую подпись устройства для кнопки.
+func deviceLabel(d remnawave.HwidDevice) string {
+	platform := d.Platform
+	if platform == "" {
+		platform = "Устройство"
+	}
+	label := platform
+	if d.DeviceModel != "" {
+		label = platform + " · " + d.DeviceModel
+	}
+	return truncateDeviceLabel(label)
+}
+
+// DevicesManagementKeyboard — список устройств как inline-кнопки (нажатие = удаление),
+// плюс «Сбросить все» (если есть устройства) и «Закрыть».
+func DevicesManagementKeyboard(devices []remnawave.HwidDevice) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+
+	for i, d := range devices {
+		btn := menu.Data("🔄 "+deviceLabel(d), cbDeviceDelete, fmt.Sprintf("%d", i))
+		rows = append(rows, menu.Row(btn))
+	}
+
+	if len(devices) > 0 {
+		resetAll := menu.Data("🗑 Сбросить все устройства", cbDevicesResetAll)
+		rows = append(rows, menu.Row(resetAll))
+	}
+
+	closeBtn := menu.Data("🔙 Закрыть", cbDevicesClose)
+	rows = append(rows, menu.Row(closeBtn))
+
+	menu.Inline(rows...)
+	return menu
+}
+
+// DevicesResetAllConfirmKeyboard — подтверждение сброса всех устройств.
+func DevicesResetAllConfirmKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	yes := menu.Data("✅ Да, сбросить все", cbDevicesResetAllConfirm)
+	no := menu.Data("🔙 Отмена", cbDevicesManage)
+	menu.Inline(menu.Row(yes), menu.Row(no))
 	return menu
 }

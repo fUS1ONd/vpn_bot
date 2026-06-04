@@ -4,7 +4,42 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
+
+func TestDevicesStatusInlineKeyboard(t *testing.T) {
+	kb := DevicesStatusInlineKeyboard()
+	require.NotNil(t, kb)
+	require.Len(t, kb.InlineKeyboard, 1)
+	require.Len(t, kb.InlineKeyboard[0], 1)
+	require.Equal(t, "dev_manage", kb.InlineKeyboard[0][0].Unique)
+}
+
+func TestDevicesManagementKeyboard(t *testing.T) {
+	devices := []remnawave.HwidDevice{
+		{Hwid: "hw-a", Platform: "iOS", DeviceModel: "iPhone 14"},
+		{Hwid: "hw-b", Platform: "Android", DeviceModel: "Pixel 7"},
+	}
+	kb := DevicesManagementKeyboard(devices)
+	require.NotNil(t, kb)
+	// 2 устройства + строка "сбросить все" + строка "закрыть" = 4 ряда
+	require.Len(t, kb.InlineKeyboard, 4)
+	require.Equal(t, "dev_del", kb.InlineKeyboard[0][0].Unique)
+	require.Equal(t, "0", kb.InlineKeyboard[0][0].Data)
+	require.Equal(t, "dev_del", kb.InlineKeyboard[1][0].Unique)
+	require.Equal(t, "1", kb.InlineKeyboard[1][0].Data)
+	require.Equal(t, "dev_reset_all", kb.InlineKeyboard[2][0].Unique)
+	require.Equal(t, "dev_close", kb.InlineKeyboard[3][0].Unique)
+}
+
+func TestDevicesManagementKeyboardEmpty(t *testing.T) {
+	kb := DevicesManagementKeyboard(nil)
+	// нет устройств -> только кнопка "закрыть", без "сбросить все"
+	require.Len(t, kb.InlineKeyboard, 1)
+	require.Equal(t, "dev_close", kb.InlineKeyboard[0][0].Unique)
+}
 
 func TestAdminManageKeyboardDoesNotContainAddTrafficButton(t *testing.T) {
 	keyboard := AdminManageKeyboard()
