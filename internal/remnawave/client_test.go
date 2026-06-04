@@ -272,3 +272,30 @@ func TestGetUserHwidDevicesCount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, count)
 }
+
+func TestGetUserHwidDevices(t *testing.T) {
+	client := NewClient("https://panel.example.com", "test-token", nil)
+	client.http = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			require.Equal(t, http.MethodGet, r.Method)
+			require.Equal(t, "/api/hwid/devices/uuid-1", r.URL.Path)
+
+			payload := `{"response":{"total":2,"devices":[` +
+				`{"hwid":"hw-a","platform":"iOS","deviceModel":"iPhone 14","createdAt":"2026-01-01T00:00:00Z"},` +
+				`{"hwid":"hw-b","platform":"Android","deviceModel":"Pixel 7","createdAt":"2026-01-02T00:00:00Z"}]}}`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(payload)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	devices, err := client.GetUserHwidDevices("uuid-1")
+	require.NoError(t, err)
+	require.Len(t, devices, 2)
+	require.Equal(t, "hw-a", devices[0].Hwid)
+	require.Equal(t, "iOS", devices[0].Platform)
+	require.Equal(t, "iPhone 14", devices[0].DeviceModel)
+	require.Equal(t, "hw-b", devices[1].Hwid)
+}
