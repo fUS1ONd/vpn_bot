@@ -220,6 +220,8 @@ func (b *Bot) subscriptionStatusString(telegramID int64) string {
 		return "триал"
 	case subTypeGrace:
 		return "grace (истекла, ещё доступна)"
+	case subTypeInfinite:
+		return "безлимит (бессрочная)"
 	default:
 		return "оплачена до " + remUser.ExpireAt.Format("02.01.06")
 	}
