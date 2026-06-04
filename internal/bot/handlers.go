@@ -23,6 +23,7 @@ const (
 	StateNone                = ""
 	StateWaitInvite          = "wait_invite"           // Ожидание инвайт-кода
 	StateWaitBroadcastActive = "wait_broadcast_active" // Ожидание сообщения для рассылки активным
+	StateWaitBugComment      = "wait_bug_comment"      // Ожидание текста багрепорта
 )
 
 // Bot представляет Telegram бота
@@ -48,6 +49,9 @@ type Bot struct {
 	adminSwitchData      map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
 	adminPriceMu         sync.RWMutex
 	adminPriceData       map[int64]adminChangePriceSession // pending-данные изменения цены для админа
+	bugReportMu          sync.RWMutex
+	bugReportData        map[int64]bugReportSession // pending-данные багрепорта
+	bugReportCooldown    sync.Map                   // telegram_id -> time.Time последней отправки
 }
 
 // buildBotSettings собирает настройки telebot.
@@ -87,6 +91,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		modChangePriceData: make(map[int64]modChangePriceSession),
 		adminSwitchData:    make(map[int64]adminSwitchSession),
 		adminPriceData:     make(map[int64]adminChangePriceSession),
+		bugReportData:      make(map[int64]bugReportSession),
 	}
 	bot.userLimiter = newUserRateLimiter(3, 5, bot.shutdownCh) // 3 req/s, burst 5
 
@@ -156,6 +161,16 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnDevResetAll, bot.handleDevicesResetAll)
 	b.Handle(&btnDevResetAllOK, bot.handleDevicesResetAllConfirm)
 	b.Handle(&btnDevClose, bot.handleDevicesClose)
+
+	// Inline-кнопки багрепорта (роутинг по Unique)
+	bugMenu := &tele.ReplyMarkup{}
+	btnBugServer := bugMenu.Data("", cbBugServer)
+	btnBugCategory := bugMenu.Data("", cbBugCategory)
+	btnBugCancel := bugMenu.Data("", cbBugCancel)
+
+	b.Handle(&btnBugServer, bot.handleBugServerSelected)
+	b.Handle(&btnBugCategory, bot.handleBugCategorySelected)
+	b.Handle(&btnBugCancel, bot.handleBugCancel)
 
 	return bot, nil
 }
@@ -288,6 +303,14 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		state = StateNone
 	}
 
+	// В шаге ввода комментария багрепорта навигационная кнопка меню должна
+	// сбросить флоу (иначе текст кнопки уйдёт в комментарий), кроме «Пропустить».
+	if state == StateWaitBugComment && text != BtnBugSkip && isMenuNavigationButton(text) {
+		b.clearBugReportSession(telegramID)
+		b.userStates.Delete(telegramID)
+		state = StateNone
+	}
+
 	// Обработка состояний
 	switch state {
 	case StateWaitInvite:
@@ -296,6 +319,18 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return c.Send("Отменено. Для начала отправьте /start")
 		}
 		return b.processInviteCode(c, text)
+
+	case StateWaitBugComment:
+		if text == BtnCancel {
+			b.clearBugReportSession(telegramID)
+			b.userStates.Delete(telegramID)
+			return c.Send("Отменено.", &tele.SendOptions{ReplyMarkup: b.userKeyboard(telegramID)})
+		}
+		comment := text
+		if text == BtnBugSkip {
+			comment = ""
+		}
+		return b.finishBugReport(c, comment)
 
 	case StateWaitBroadcastActive:
 		if text == BtnCancel {
@@ -554,6 +589,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		return b.handleCheckPayment(c)
 	case BtnInfo:
 		return b.handleInfo(c)
+	case BtnBugReport:
+		return b.handleBugReportStart(c)
 	case BtnServers:
 		return b.handleDashboard(c)
 	case BtnInstructions:
@@ -900,6 +937,7 @@ func isMenuNavigationButton(text string) bool {
 		BtnPay,
 		BtnRenew,
 		BtnInfo,
+		BtnBugReport,
 		BtnServers,
 		BtnInstructions,
 		BtnBack,

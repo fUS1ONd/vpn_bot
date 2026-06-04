@@ -17,6 +17,13 @@ const (
 	cbDevicesClose           = "dev_close"
 )
 
+// Unique-идентификаторы inline-кнопок багрепорта
+const (
+	cbBugServer   = "bug_server"   // выбор сервера (Data = индекс хоста или "none")
+	cbBugCategory = "bug_category" // выбор категории (Data = код категории)
+	cbBugCancel   = "bug_cancel"
+)
+
 // Текстовые константы кнопок
 const (
 	// Кнопки пользователя
@@ -26,6 +33,11 @@ const (
 	BtnInstructions = "📚 Инструкции"
 	BtnBack         = "🔙 Назад"
 	BtnCancel       = "🚫 Отмена"
+
+	// Кнопки багрепорта
+	BtnBugReport   = "🛠 Сообщить о проблеме"
+	BtnBugSkip     = "⏭ Пропустить"
+	BtnBugNoServer = "🤷 Не знаю / все сразу"
 
 	// Кнопки оплаты
 	BtnPay          = "💳 Оплатить подписку"
@@ -100,6 +112,7 @@ func UserMenuKeyboardDynamic(payButtonText string, showPayButton bool, isModerat
 		rows = append(rows, menu.Row(menu.Text(BtnServers)))
 	}
 	rows = append(rows, menu.Row(menu.Text(BtnInstructions), menu.Text(BtnInfo)))
+	rows = append(rows, menu.Row(menu.Text(BtnBugReport)))
 	if isModerator {
 		rows = append(rows, menu.Row(menu.Text(BtnModInvites)))
 	}
@@ -302,6 +315,57 @@ func DevicesManagementKeyboard(devices []remnawave.HwidDevice) *tele.ReplyMarkup
 	rows = append(rows, menu.Row(closeBtn))
 
 	menu.Inline(rows...)
+	return menu
+}
+
+// bugCategories — фиксированный список категорий проблем (код callback → подпись).
+var bugCategories = []struct{ Code, Label string }{
+	{"conn", "🔌 Не подключается"},
+	{"slow", "🐢 Медленно работает"},
+	{"site", "🌍 Не грузит сайт/сервис"},
+	{"other", "✍️ Другое"},
+}
+
+// bugCategoryLabel возвращает подпись категории по коду.
+func bugCategoryLabel(code string) string {
+	for _, c := range bugCategories {
+		if c.Code == code {
+			return c.Label
+		}
+	}
+	return "Другое"
+}
+
+// BugServersKeyboard — inline-список серверов для выбора в багрепорте.
+func BugServersKeyboard(hosts []remnawave.Host) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+	for i, h := range hosts {
+		btn := menu.Data(h.Remark, cbBugServer, fmt.Sprintf("%d", i))
+		rows = append(rows, menu.Row(btn))
+	}
+	rows = append(rows, menu.Row(menu.Data(BtnBugNoServer, cbBugServer, "none")))
+	rows = append(rows, menu.Row(menu.Data("🚫 Отмена", cbBugCancel)))
+	menu.Inline(rows...)
+	return menu
+}
+
+// BugCategoriesKeyboard — inline-список категорий проблемы.
+func BugCategoriesKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+	for _, c := range bugCategories {
+		rows = append(rows, menu.Row(menu.Data(c.Label, cbBugCategory, c.Code)))
+	}
+	rows = append(rows, menu.Row(menu.Data("🚫 Отмена", cbBugCancel)))
+	menu.Inline(rows...)
+	return menu
+}
+
+// BugCommentKeyboard — reply-клавиатура шага ввода комментария.
+func BugCommentKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(menu.Row(menu.Text(BtnBugSkip), menu.Text(BtnCancel)))
 	return menu
 }
 
