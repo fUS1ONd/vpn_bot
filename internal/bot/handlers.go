@@ -23,6 +23,7 @@ const (
 	StateNone                = ""
 	StateWaitInvite          = "wait_invite"           // Ожидание инвайт-кода
 	StateWaitBroadcastActive = "wait_broadcast_active" // Ожидание сообщения для рассылки активным
+	StateWaitBugComment      = "wait_bug_comment"      // Ожидание текста багрепорта
 )
 
 // Bot представляет Telegram бота
@@ -160,6 +161,16 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnDevResetAll, bot.handleDevicesResetAll)
 	b.Handle(&btnDevResetAllOK, bot.handleDevicesResetAllConfirm)
 	b.Handle(&btnDevClose, bot.handleDevicesClose)
+
+	// Inline-кнопки багрепорта (роутинг по Unique)
+	bugMenu := &tele.ReplyMarkup{}
+	btnBugServer := bugMenu.Data("", cbBugServer)
+	btnBugCategory := bugMenu.Data("", cbBugCategory)
+	btnBugCancel := bugMenu.Data("", cbBugCancel)
+
+	b.Handle(&btnBugServer, bot.handleBugServerSelected)
+	b.Handle(&btnBugCategory, bot.handleBugCategorySelected)
+	b.Handle(&btnBugCancel, bot.handleBugCancel)
 
 	return bot, nil
 }
@@ -300,6 +311,18 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return c.Send("Отменено. Для начала отправьте /start")
 		}
 		return b.processInviteCode(c, text)
+
+	case StateWaitBugComment:
+		if text == BtnCancel {
+			b.clearBugReportSession(telegramID)
+			b.userStates.Delete(telegramID)
+			return c.Send("Отменено.", &tele.SendOptions{ReplyMarkup: b.userKeyboard(telegramID)})
+		}
+		comment := text
+		if text == BtnBugSkip {
+			comment = ""
+		}
+		return b.finishBugReport(c, comment)
 
 	case StateWaitBroadcastActive:
 		if text == BtnCancel {
@@ -558,6 +581,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		return b.handleCheckPayment(c)
 	case BtnInfo:
 		return b.handleInfo(c)
+	case BtnBugReport:
+		return b.handleBugReportStart(c)
 	case BtnServers:
 		return b.handleDashboard(c)
 	case BtnInstructions:
