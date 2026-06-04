@@ -50,12 +50,24 @@ type Bot struct {
 	adminPriceData       map[int64]adminChangePriceSession // pending-данные изменения цены для админа
 }
 
+// buildBotSettings собирает настройки telebot.
+//
+// LongPoller обязательно подписываем на полный список типов апдейтов
+// (tele.AllowedUpdates включает callback_query). Без явного AllowedUpdates
+// Telegram использует дефолтный набор getUpdates, который НЕ содержит
+// callback_query, — тогда нажатия inline-кнопок боту не приходят вовсе.
+func buildBotSettings(token string) tele.Settings {
+	return tele.Settings{
+		Token: token,
+		Poller: &tele.LongPoller{
+			AllowedUpdates: tele.AllowedUpdates,
+		},
+	}
+}
+
 // New создаёт нового Telegram бота
 func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client) (*Bot, error) {
-	pref := tele.Settings{
-		Token:  cfg.BotToken,
-		Poller: &tele.LongPoller{},
-	}
+	pref := buildBotSettings(cfg.BotToken)
 
 	b, err := tele.NewBot(pref)
 	if err != nil {
