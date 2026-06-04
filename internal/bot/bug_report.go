@@ -47,3 +47,13 @@ func buildBugReportMessage(r bugReport) string {
 	}
 	return b.String()
 }
+
+// truncateComment обрезает комментарий пользователя до разумной длины.
+func truncateComment(s string) string {
+	const max = 1000
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}

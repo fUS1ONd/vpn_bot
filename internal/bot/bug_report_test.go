@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,4 +33,12 @@ func TestBuildBugReportMessage_NoServerNoComment(t *testing.T) {
 	msg := buildBugReportMessage(r)
 	require.Contains(t, msg, "не указан")
 	require.NotContains(t, msg, "💬")
+}
+
+func TestTruncateComment(t *testing.T) {
+	require.Equal(t, "abc", truncateComment("abc"))
+	long := strings.Repeat("я", 2000)
+	got := truncateComment(long)
+	require.LessOrEqual(t, len([]rune(got)), 1001)
+	require.True(t, strings.HasSuffix(got, "…"))
 }
