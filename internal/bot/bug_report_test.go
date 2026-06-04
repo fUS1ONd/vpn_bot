@@ -42,3 +42,11 @@ func TestTruncateComment(t *testing.T) {
 	require.LessOrEqual(t, len([]rune(got)), 1001)
 	require.True(t, strings.HasSuffix(got, "…"))
 }
+
+func TestBugReportCooldown(t *testing.T) {
+	b := &Bot{}
+	require.False(t, b.bugReportOnCooldown(42))
+	b.markBugReportSent(42)
+	require.True(t, b.bugReportOnCooldown(42))
+	require.False(t, b.bugReportOnCooldown(99))
+}

@@ -57,3 +57,30 @@ func truncateComment(s string) string {
 	}
 	return string(r[:max]) + "…"
 }
+
+// bugReportSession — pending-выбор пользователя в процессе багрепорта.
+type bugReportSession struct {
+	server   string // Remark выбранного хоста или "" = не указан
+	category string
+}
+
+// bugReportCooldownDur — интервал между багрепортами одного пользователя.
+const bugReportCooldownDur = 10 * time.Minute
+
+// bugReportOnCooldown сообщает, отправлял ли пользователь репорт недавно.
+func (b *Bot) bugReportOnCooldown(telegramID int64) bool {
+	v, ok := b.bugReportCooldown.Load(telegramID)
+	if !ok {
+		return false
+	}
+	last, ok := v.(time.Time)
+	if !ok {
+		return false
+	}
+	return time.Since(last) < bugReportCooldownDur
+}
+
+// markBugReportSent фиксирует время отправки для кулдауна.
+func (b *Bot) markBugReportSent(telegramID int64) {
+	b.bugReportCooldown.Store(telegramID, time.Now())
+}

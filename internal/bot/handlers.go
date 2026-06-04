@@ -48,6 +48,9 @@ type Bot struct {
 	adminSwitchData      map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
 	adminPriceMu         sync.RWMutex
 	adminPriceData       map[int64]adminChangePriceSession // pending-данные изменения цены для админа
+	bugReportMu          sync.RWMutex
+	bugReportData        map[int64]bugReportSession // pending-данные багрепорта
+	bugReportCooldown    sync.Map                   // telegram_id -> time.Time последней отправки
 }
 
 // buildBotSettings собирает настройки telebot.
@@ -87,6 +90,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		modChangePriceData: make(map[int64]modChangePriceSession),
 		adminSwitchData:    make(map[int64]adminSwitchSession),
 		adminPriceData:     make(map[int64]adminChangePriceSession),
+		bugReportData:      make(map[int64]bugReportSession),
 	}
 	bot.userLimiter = newUserRateLimiter(3, 5, bot.shutdownCh) // 3 req/s, burst 5
 
