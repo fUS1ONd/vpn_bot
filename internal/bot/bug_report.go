@@ -84,3 +84,36 @@ func (b *Bot) bugReportOnCooldown(telegramID int64) bool {
 func (b *Bot) markBugReportSent(telegramID int64) {
 	b.bugReportCooldown.Store(telegramID, time.Now())
 }
+
+// setBugReportServer сохраняет выбранный сервер в pending-сессию багрепорта.
+func (b *Bot) setBugReportServer(telegramID int64, server string) {
+	b.bugReportMu.Lock()
+	defer b.bugReportMu.Unlock()
+	s := b.bugReportData[telegramID]
+	s.server = server
+	b.bugReportData[telegramID] = s
+}
+
+// setBugReportCategory сохраняет выбранную категорию в pending-сессию багрепорта.
+func (b *Bot) setBugReportCategory(telegramID int64, category string) {
+	b.bugReportMu.Lock()
+	defer b.bugReportMu.Unlock()
+	s := b.bugReportData[telegramID]
+	s.category = category
+	b.bugReportData[telegramID] = s
+}
+
+// getBugReportSession возвращает pending-сессию багрепорта пользователя.
+func (b *Bot) getBugReportSession(telegramID int64) (bugReportSession, bool) {
+	b.bugReportMu.RLock()
+	defer b.bugReportMu.RUnlock()
+	s, ok := b.bugReportData[telegramID]
+	return s, ok
+}
+
+// clearBugReportSession удаляет pending-сессию багрепорта пользователя.
+func (b *Bot) clearBugReportSession(telegramID int64) {
+	b.bugReportMu.Lock()
+	defer b.bugReportMu.Unlock()
+	delete(b.bugReportData, telegramID)
+}

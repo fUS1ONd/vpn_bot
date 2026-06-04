@@ -50,3 +50,18 @@ func TestBugReportCooldown(t *testing.T) {
 	require.True(t, b.bugReportOnCooldown(42))
 	require.False(t, b.bugReportOnCooldown(99))
 }
+
+func TestBugReportSession(t *testing.T) {
+	b := &Bot{bugReportData: make(map[int64]bugReportSession)}
+	b.setBugReportServer(7, "🇩🇪 Германия")
+	s, ok := b.getBugReportSession(7)
+	require.True(t, ok)
+	require.Equal(t, "🇩🇪 Германия", s.server)
+	b.setBugReportCategory(7, "🐢 Медленно")
+	s, _ = b.getBugReportSession(7)
+	require.Equal(t, "🐢 Медленно", s.category)
+	require.Equal(t, "🇩🇪 Германия", s.server)
+	b.clearBugReportSession(7)
+	_, ok = b.getBugReportSession(7)
+	require.False(t, ok)
+}
