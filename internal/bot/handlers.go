@@ -165,10 +165,12 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	// Inline-кнопки багрепорта (роутинг по Unique)
 	bugMenu := &tele.ReplyMarkup{}
 	btnBugServer := bugMenu.Data("", cbBugServer)
+	btnBugServerDone := bugMenu.Data("", cbBugServerDone)
 	btnBugCategory := bugMenu.Data("", cbBugCategory)
 	btnBugCancel := bugMenu.Data("", cbBugCancel)
 
-	b.Handle(&btnBugServer, bot.handleBugServerSelected)
+	b.Handle(&btnBugServer, bot.handleBugServerToggle)
+	b.Handle(&btnBugServerDone, bot.handleBugServersDone)
 	b.Handle(&btnBugCategory, bot.handleBugCategorySelected)
 	b.Handle(&btnBugCancel, bot.handleBugCancel)
 

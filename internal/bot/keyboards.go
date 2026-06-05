@@ -19,9 +19,10 @@ const (
 
 // Unique-идентификаторы inline-кнопок багрепорта
 const (
-	cbBugServer   = "bug_server"   // выбор сервера (Data = индекс хоста или "none")
-	cbBugCategory = "bug_category" // выбор категории (Data = код категории)
-	cbBugCancel   = "bug_cancel"
+	cbBugServer     = "bug_server"      // переключение выбора сервера (Data = индекс хоста)
+	cbBugServerDone = "bug_server_done" // завершить выбор серверов (Data="" — готово, "none" — все/не знаю)
+	cbBugCategory   = "bug_category"    // выбор категории (Data = код категории)
+	cbBugCancel     = "bug_cancel"
 )
 
 // Текстовые константы кнопок
@@ -336,15 +337,24 @@ func bugCategoryLabel(code string) string {
 	return "Другое"
 }
 
-// BugServersKeyboard — inline-список серверов для выбора в багрепорте.
-func BugServersKeyboard(hosts []remnawave.Host) *tele.ReplyMarkup {
+// BugServersKeyboard — inline-список серверов с мультивыбором (тогглы с галочками).
+// selected — множество выбранных Remark'ов (может быть nil). Выбранные помечаются «✅».
+func BugServersKeyboard(hosts []remnawave.Host, selected map[string]bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
 	for i, h := range hosts {
-		btn := menu.Data(h.Remark, cbBugServer, fmt.Sprintf("%d", i))
+		label := h.Remark
+		if selected[h.Remark] {
+			label = "✅ " + label
+		}
+		btn := menu.Data(label, cbBugServer, fmt.Sprintf("%d", i))
 		rows = append(rows, menu.Row(btn))
 	}
-	rows = append(rows, menu.Row(menu.Data(BtnBugNoServer, cbBugServer, "none")))
+	// «Готово» показываем, только если что-то выбрано.
+	if len(selected) > 0 {
+		rows = append(rows, menu.Row(menu.Data("✅ Готово", cbBugServerDone)))
+	}
+	rows = append(rows, menu.Row(menu.Data(BtnBugNoServer, cbBugServerDone, "none")))
 	rows = append(rows, menu.Row(menu.Data("🚫 Отмена", cbBugCancel)))
 	menu.Inline(rows...)
 	return menu
