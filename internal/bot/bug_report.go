@@ -9,6 +9,8 @@ import (
 	"time"
 
 	tele "gopkg.in/telebot.v3"
+
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
 
 // bugReport — собранные данные одного багрепорта для отправки админу.
@@ -16,7 +18,7 @@ type bugReport struct {
 	telegramID   int64
 	username     string
 	firstName    string
-	server       string // Remark хоста или "" если не указан
+	servers      []string // Remark выбранных хостов; пусто = не указан
 	category     string
 	comment      string // "" если пропущен
 	subscription string // человекочитаемый статус подписки
@@ -36,11 +38,15 @@ func buildBugReportMessage(r bugReport) string {
 		fmt.Fprintf(&b, "👤 %s · %s\n", name, userLink)
 	}
 
-	server := r.server
-	if server == "" {
-		server = "не указан"
+	server := "не указан"
+	if len(r.servers) > 0 {
+		escaped := make([]string, len(r.servers))
+		for i, s := range r.servers {
+			escaped[i] = html.EscapeString(s)
+		}
+		server = strings.Join(escaped, ", ")
 	}
-	fmt.Fprintf(&b, "📡 Сервер: %s\n", html.EscapeString(server))
+	fmt.Fprintf(&b, "📡 Сервер: %s\n", server)
 	fmt.Fprintf(&b, "❗ Проблема: %s\n", html.EscapeString(r.category))
 
 	if r.comment != "" {
@@ -64,7 +70,7 @@ func truncateComment(s string) string {
 
 // bugReportSession — pending-выбор пользователя в процессе багрепорта.
 type bugReportSession struct {
-	server   string // Remark выбранного хоста или "" = не указан
+	servers  []string // Remark выбранных хостов; пусто = не указан / все
 	category string
 }
 
@@ -89,13 +95,34 @@ func (b *Bot) markBugReportSent(telegramID int64) {
 	b.bugReportCooldown.Store(telegramID, time.Now())
 }
 
-// setBugReportServer сохраняет выбранный сервер в pending-сессию багрепорта.
-func (b *Bot) setBugReportServer(telegramID int64, server string) {
+// toggleBugReportServer добавляет/убирает сервер из выбора и возвращает признак,
+// выбран ли он теперь (для UX-фидбэка).
+func (b *Bot) toggleBugReportServer(telegramID int64, server string) bool {
 	b.bugReportMu.Lock()
 	defer b.bugReportMu.Unlock()
 	s := b.bugReportData[telegramID]
-	s.server = server
+	for i, v := range s.servers {
+		if v == server {
+			// уже выбран — снимаем
+			s.servers = append(s.servers[:i], s.servers[i+1:]...)
+			b.bugReportData[telegramID] = s
+			return false
+		}
+	}
+	s.servers = append(s.servers, server)
 	b.bugReportData[telegramID] = s
+	return true
+}
+
+// selectedBugReportServers возвращает множество выбранных серверов пользователя.
+func (b *Bot) selectedBugReportServers(telegramID int64) map[string]bool {
+	b.bugReportMu.RLock()
+	defer b.bugReportMu.RUnlock()
+	selected := make(map[string]bool)
+	for _, v := range b.bugReportData[telegramID].servers {
+		selected[v] = true
+	}
+	return selected
 }
 
 // setBugReportCategory сохраняет выбранную категорию в pending-сессию багрепорта.
@@ -122,6 +149,22 @@ func (b *Bot) clearBugReportSession(telegramID int64) {
 	delete(b.bugReportData, telegramID)
 }
 
+// enabledHosts возвращает только включённые хосты (isDisabled=false).
+// Скрытые (isHidden), но включённые хосты остаются в списке.
+func (b *Bot) enabledHosts() ([]remnawave.Host, error) {
+	hosts, err := b.remnawave.GetAllHosts()
+	if err != nil {
+		return nil, err
+	}
+	enabled := make([]remnawave.Host, 0, len(hosts))
+	for _, h := range hosts {
+		if !h.IsDisabled {
+			enabled = append(enabled, h)
+		}
+	}
+	return enabled, nil
+}
+
 // handleBugReportStart запускает флоу багрепорта: проверка регистрации,
 // кулдауна и показ списка серверов (или сразу категорий, если хостов нет).
 func (b *Bot) handleBugReportStart(c tele.Context) error {
@@ -142,7 +185,7 @@ func (b *Bot) handleBugReportStart(c tele.Context) error {
 	b.bugReportData[telegramID] = bugReportSession{}
 	b.bugReportMu.Unlock()
 
-	hosts, err := b.remnawave.GetAllHosts()
+	hosts, err := b.enabledHosts()
 	if err != nil || len(hosts) == 0 {
 		// Хостов нет/ошибка — не блокируем юзера, сразу к выбору категории.
 		slog.Warn("Bug report: hosts unavailable", "error", err)
@@ -151,25 +194,54 @@ func (b *Bot) handleBugReportStart(c tele.Context) error {
 		})
 	}
 
-	return c.Send("На каком сервере проблема?", &tele.SendOptions{
-		ReplyMarkup: BugServersKeyboard(hosts),
+	return c.Send("На каких серверах проблема? Можно выбрать несколько.", &tele.SendOptions{
+		ReplyMarkup: BugServersKeyboard(hosts, nil),
 	})
 }
 
-// handleBugServerSelected сохраняет выбранный сервер и показывает категории.
-func (b *Bot) handleBugServerSelected(c tele.Context) error {
+// handleBugServerToggle переключает выбор сервера и перерисовывает список с галочками.
+func (b *Bot) handleBugServerToggle(c tele.Context) error {
 	telegramID := c.Sender().ID
 	args := c.Args()
-	server := ""
-	if len(args) > 0 && args[0] != "none" {
-		// Ресолвим индекс из свежего списка хостов (список мог измениться).
-		if hosts, err := b.remnawave.GetAllHosts(); err == nil {
-			if idx, err := strconv.Atoi(args[0]); err == nil && idx >= 0 && idx < len(hosts) {
-				server = hosts[idx].Remark
-			}
-		}
+	if len(args) == 0 {
+		return c.RespondAlert("Некорректный запрос")
 	}
-	b.setBugReportServer(telegramID, server)
+
+	hosts, err := b.enabledHosts()
+	if err != nil {
+		return c.RespondAlert("Ошибка получения списка серверов")
+	}
+
+	idx, err := strconv.Atoi(args[0])
+	if err != nil || idx < 0 || idx >= len(hosts) {
+		// Список устарел — перерисуем актуальный с текущими галочками.
+		_ = c.Edit("На каких серверах проблема? Можно выбрать несколько.", &tele.SendOptions{
+			ReplyMarkup: BugServersKeyboard(hosts, b.selectedBugReportServers(telegramID)),
+		})
+		return c.RespondAlert("Список обновлён, попробуйте снова")
+	}
+
+	b.toggleBugReportServer(telegramID, hosts[idx].Remark)
+
+	_ = c.Edit("На каких серверах проблема? Можно выбрать несколько.", &tele.SendOptions{
+		ReplyMarkup: BugServersKeyboard(hosts, b.selectedBugReportServers(telegramID)),
+	})
+	return c.Respond()
+}
+
+// handleBugServersDone завершает выбор серверов и показывает категории.
+// Используется и для кнопки «Готово», и для «Не знаю / все сразу» (data="none" — сброс выбора).
+func (b *Bot) handleBugServersDone(c tele.Context) error {
+	telegramID := c.Sender().ID
+	args := c.Args()
+	if len(args) > 0 && args[0] == "none" {
+		// «Не знаю / все сразу» — очищаем выбор серверов.
+		b.bugReportMu.Lock()
+		s := b.bugReportData[telegramID]
+		s.servers = nil
+		b.bugReportData[telegramID] = s
+		b.bugReportMu.Unlock()
+	}
 
 	if err := c.Edit("Какая проблема?", &tele.SendOptions{
 		ReplyMarkup: BugCategoriesKeyboard(),
@@ -236,7 +308,7 @@ func (b *Bot) finishBugReport(c tele.Context, comment string) error {
 		telegramID:   telegramID,
 		username:     c.Sender().Username,
 		firstName:    c.Sender().FirstName,
-		server:       session.server,
+		servers:      session.servers,
 		category:     session.category,
 		comment:      truncateComment(comment),
 		subscription: b.subscriptionStatusString(telegramID),

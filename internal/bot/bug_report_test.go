@@ -20,7 +20,7 @@ func TestBuildBugReportMessage(t *testing.T) {
 		telegramID:   12345,
 		username:     "ivan",
 		firstName:    "Иван",
-		server:       "🇳🇱 Нидерланды",
+		servers:      []string{"🇳🇱 Нидерланды", "🇩🇪 Германия"},
 		category:     "🔌 Не подключается",
 		comment:      "второй день не коннектится",
 		subscription: "оплачена до 12.06.26",
@@ -31,6 +31,7 @@ func TestBuildBugReportMessage(t *testing.T) {
 	require.Contains(t, msg, "@ivan")
 	require.Contains(t, msg, "tg://user?id=12345")
 	require.Contains(t, msg, "🇳🇱 Нидерланды")
+	require.Contains(t, msg, "🇩🇪 Германия")
 	require.Contains(t, msg, "Не подключается")
 	require.Contains(t, msg, "второй день не коннектится")
 	require.Contains(t, msg, "оплачена до 12.06.26")
@@ -61,14 +62,26 @@ func TestBugReportCooldown(t *testing.T) {
 
 func TestBugReportSession(t *testing.T) {
 	b := &Bot{bugReportData: make(map[int64]bugReportSession)}
-	b.setBugReportServer(7, "🇩🇪 Германия")
+
+	// Первый тоггл — выбираем сервер.
+	require.True(t, b.toggleBugReportServer(7, "🇩🇪 Германия"))
+	require.True(t, b.selectedBugReportServers(7)["🇩🇪 Германия"])
+
+	// Добавляем второй.
+	require.True(t, b.toggleBugReportServer(7, "🇳🇱 Нидерланды"))
+	require.True(t, b.selectedBugReportServers(7)["🇳🇱 Нидерланды"])
+
+	// Повторный тоггл первого — снимаем выбор.
+	require.False(t, b.toggleBugReportServer(7, "🇩🇪 Германия"))
+	require.False(t, b.selectedBugReportServers(7)["🇩🇪 Германия"])
+	require.True(t, b.selectedBugReportServers(7)["🇳🇱 Нидерланды"])
+
+	b.setBugReportCategory(7, "🐢 Медленно")
 	s, ok := b.getBugReportSession(7)
 	require.True(t, ok)
-	require.Equal(t, "🇩🇪 Германия", s.server)
-	b.setBugReportCategory(7, "🐢 Медленно")
-	s, _ = b.getBugReportSession(7)
 	require.Equal(t, "🐢 Медленно", s.category)
-	require.Equal(t, "🇩🇪 Германия", s.server)
+	require.Equal(t, []string{"🇳🇱 Нидерланды"}, s.servers)
+
 	b.clearBugReportSession(7)
 	_, ok = b.getBugReportSession(7)
 	require.False(t, ok)

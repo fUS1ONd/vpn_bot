@@ -228,7 +228,8 @@ func TestBugServersKeyboard(t *testing.T) {
 	hosts := []remnawave.Host{
 		{Remark: "🇳🇱 Нидерланды"}, {Remark: "🇩🇪 Германия"},
 	}
-	kb := BugServersKeyboard(hosts)
+	// Без выбранных серверов: «Готово» не показывается.
+	kb := BugServersKeyboard(hosts, nil)
 	require.NotNil(t, kb.InlineKeyboard)
 	var labels []string
 	for _, row := range kb.InlineKeyboard {
@@ -239,6 +240,18 @@ func TestBugServersKeyboard(t *testing.T) {
 	require.Contains(t, labels, "🇳🇱 Нидерланды")
 	require.Contains(t, labels, "🇩🇪 Германия")
 	require.Contains(t, labels, BtnBugNoServer)
+	require.NotContains(t, labels, "✅ Готово")
+
+	// С выбранным сервером: галочка и кнопка «Готово».
+	kb = BugServersKeyboard(hosts, map[string]bool{"🇩🇪 Германия": true})
+	labels = nil
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			labels = append(labels, btn.Text)
+		}
+	}
+	require.Contains(t, labels, "✅ 🇩🇪 Германия")
+	require.Contains(t, labels, "✅ Готово")
 }
 
 func TestBugCategoriesKeyboard(t *testing.T) {

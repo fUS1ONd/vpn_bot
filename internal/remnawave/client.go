@@ -89,9 +89,10 @@ type Node struct {
 
 // Host — данные хоста из Remnawave (прокси-конфиг, видимый пользователям)
 type Host struct {
-	UUID   string   `json:"uuid"`
-	Remark string   `json:"remark"`
-	Nodes  []string `json:"nodes"`
+	UUID       string   `json:"uuid"`
+	Remark     string   `json:"remark"`
+	Nodes      []string `json:"nodes"`
+	IsDisabled bool     `json:"isDisabled"` // хост отключён в панели
 }
 
 // CreateUserRequest — запрос на создание пользователя
