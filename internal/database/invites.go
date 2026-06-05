@@ -594,13 +594,28 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 // GetSubscribersByModerator возвращает подписчиков, приглашённых модератором.
 // Пользователи без записи в users также возвращаются (LEFT JOIN).
 func (db *DB) GetSubscribersByModerator(moderatorID int64) ([]Subscriber, error) {
+	// Дедуплицируем по used_by: один пользователь может активировать несколько
+	// инвайтов модератора (повторная регистрация, продление новым инвайтом),
+	// но в списке подписчиков должен учитываться один раз — по последнему инвайту.
+	// ROW_NUMBER ранжирует инвайты пользователя и оставляет только последний (rn=1);
+	// тай-брейк по rowid снимает недетерминизм при равных used_at/created_at.
 	rows, err := db.conn.Query(
-		`SELECT i.used_by, u.username, u.first_name, u.remnawave_uuid,
-		        COALESCE(u.subscription_price, i.subscription_price)
-		 FROM invites i
-		 LEFT JOIN users u ON i.used_by = u.telegram_id
-		 WHERE i.created_by = ? AND i.used_by IS NOT NULL
-		 ORDER BY i.used_at DESC, i.created_at DESC`,
+		`WITH ranked AS (
+		     SELECT i.used_by, i.used_at, i.created_at,
+		            i.subscription_price AS inv_price,
+		            ROW_NUMBER() OVER (
+		                PARTITION BY i.used_by
+		                ORDER BY i.used_at DESC, i.created_at DESC, i.rowid DESC
+		            ) AS rn
+		     FROM invites i
+		     WHERE i.created_by = ? AND i.used_by IS NOT NULL
+		 )
+		 SELECT r.used_by, u.username, u.first_name, u.remnawave_uuid,
+		        COALESCE(u.subscription_price, r.inv_price)
+		 FROM ranked r
+		 LEFT JOIN users u ON r.used_by = u.telegram_id
+		 WHERE r.rn = 1
+		 ORDER BY r.used_at DESC, r.created_at DESC`,
 		moderatorID,
 	)
 	if err != nil {
