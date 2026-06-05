@@ -123,6 +123,58 @@ func TestGetSubscribersByModerator(t *testing.T) {
 	assert.Nil(t, deleted.RemnawaveUUID)
 }
 
+// TestGetSubscribersByModerator_Dedup проверяет, что пользователь, активировавший
+// несколько инвайтов одного модератора, считается один раз (без двойного счёта).
+func TestGetSubscribersByModerator_Dedup(t *testing.T) {
+	db := setupTestDBInvites(t)
+
+	// Пользователь без записи о цене в users — цена должна браться из инвайта (COALESCE)
+	_, err := db.CreateUser(300, "doubleuser", "Double", "uuid-300", nil, nil)
+	require.NoError(t, err)
+
+	// Старый инвайт (цена 400, активирован раньше)
+	inv1, err := db.CreateInviteWithExpiry(100, intPtr(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv1.Code, 300))
+	_, err = db.Conn().Exec(`UPDATE invites SET subscription_price = 400, used_at = '2026-04-01 10:00:00' WHERE code = ?`, inv1.Code)
+	require.NoError(t, err)
+
+	// Новый инвайт (цена 500, активирован позже) — именно его данные должны вернуться
+	inv2, err := db.CreateInviteWithExpiry(100, intPtr(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv2.Code, 300))
+	_, err = db.Conn().Exec(`UPDATE invites SET subscription_price = 500, used_at = '2026-05-01 10:00:00' WHERE code = ?`, inv2.Code)
+	require.NoError(t, err)
+
+	// Контрольный пользователь с одним инвайтом — должен остаться отдельной записью
+	_, err = db.CreateUser(301, "single", "Single", "uuid-301", nil, nil)
+	require.NoError(t, err)
+	inv3, err := db.CreateInviteWithExpiry(100, intPtr(30))
+	require.NoError(t, err)
+	require.NoError(t, db.ClaimInvite(inv3.Code, 301))
+
+	subs, err := db.GetSubscribersByModerator(100)
+	require.NoError(t, err)
+
+	// Двойной пользователь учитывается один раз, контрольный — отдельно: всего 2
+	require.Len(t, subs, 2, "пользователь с несколькими инвайтами модератора должен считаться один раз")
+
+	seen := map[int64]Subscriber{}
+	for _, sub := range subs {
+		_, dup := seen[sub.TelegramID]
+		require.False(t, dup, "telegram_id %d не должен дублироваться", sub.TelegramID)
+		seen[sub.TelegramID] = sub
+	}
+
+	require.Contains(t, seen, int64(300))
+	require.NotNil(t, seen[300].Username)
+	assert.Equal(t, "doubleuser", *seen[300].Username)
+	// Данные должны быть взяты из ПОСЛЕДНЕГО инвайта (цена 500, не 400)
+	require.NotNil(t, seen[300].SubscriptionPrice)
+	assert.Equal(t, 500, *seen[300].SubscriptionPrice, "должна вернуться цена последнего инвайта")
+	require.Contains(t, seen, int64(301))
+}
+
 func intPtr(v int) *int {
 	return &v
 }
