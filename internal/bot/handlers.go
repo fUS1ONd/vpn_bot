@@ -52,6 +52,7 @@ type Bot struct {
 	bugReportMu          sync.RWMutex
 	bugReportData        map[int64]bugReportSession // pending-данные багрепорта
 	bugReportCooldown    sync.Map                   // telegram_id -> time.Time последней отправки
+	adminExtendCooldown  sync.Map                   // telegram_id -> time.Time последнего продления (защита от дабл-клика)
 }
 
 // buildBotSettings собирает настройки telebot.
@@ -173,6 +174,16 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnBugServerDone, bot.handleBugServersDone)
 	b.Handle(&btnBugCategory, bot.handleBugCategorySelected)
 	b.Handle(&btnBugCancel, bot.handleBugCancel)
+
+	// Inline-кнопки ручного продления подписки админом (роутинг по Unique)
+	extMenu := &tele.ReplyMarkup{}
+	btnExtMonth := extMenu.Data("", cbAdminExtendMonth)
+	btnExtConfirm := extMenu.Data("", cbAdminExtendConfirm)
+	btnExtCancel := extMenu.Data("", cbAdminExtendCancel)
+
+	b.Handle(&btnExtMonth, bot.handleAdminExtendMonth)
+	b.Handle(&btnExtConfirm, bot.handleAdminExtendConfirm)
+	b.Handle(&btnExtCancel, bot.handleAdminExtendCancel)
 
 	return bot, nil
 }

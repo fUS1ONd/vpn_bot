@@ -302,7 +302,7 @@ func (b *Bot) processAdminUserInfo(c tele.Context, text string) error {
 
 	return c.Send(msg.String(), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminManageKeyboard(),
+		ReplyMarkup: AdminUserInfoKeyboard(targetID, remUser),
 	})
 }
 

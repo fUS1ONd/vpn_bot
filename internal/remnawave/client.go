@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -382,55 +381,6 @@ func strPtr(s string) *string { return &s }
 // int64Ptr возвращает указатель на int64
 func int64Ptr(n int64) *int64 { return &n }
 
-// CalculateExtendedExpireAt рассчитывает новую дату окончания подписки.
-func CalculateExtendedExpireAt(currentExpireAt, now time.Time, days int) (time.Time, error) {
-	current := currentExpireAt.UTC()
-	refNow := now.UTC()
-	limit := refNow.AddDate(0, 0, days)
-
-	if current.After(limit) {
-		return time.Time{}, fmt.Errorf("❌ Подписка уже продлена до %s. Продлить можно не раньше чем за %d дней до истечения.", current.Format("02.01.06"), days)
-	}
-
-	if current.After(refNow) {
-		return current.AddDate(0, 0, days), nil
-	}
-
-	return refNow.AddDate(0, 0, days), nil
-}
-
-// ExtendUserSubscription продлевает подписку пользователя на указанное количество дней.
-func (c *Client) ExtendUserSubscription(uuid string, days int) error {
-	user, err := c.GetUser(uuid)
-	if err != nil {
-		if isNotFoundAPIError(err) {
-			return fmt.Errorf("❌ Пользователь уже удалён из системы.")
-		}
-		return fmt.Errorf("failed to get user before extend: %w", err)
-	}
-
-	newExpireAt, err := CalculateExtendedExpireAt(user.ExpireAt, time.Now().UTC(), days)
-	if err != nil {
-		return err
-	}
-
-	// EnableUser одним вызовом ставит ACTIVE + обновляет ExpireAt + снимает лимит трафика
-	if user.Status == StatusExpired || user.Status == StatusDisabled {
-		return c.EnableUser(uuid, newExpireAt)
-	}
-
-	expireAt := newExpireAt.UTC().Format(time.RFC3339)
-	req := UpdateUserRequest{
-		UUID:     uuid,
-		ExpireAt: &expireAt,
-	}
-	if err := c.UpdateUser(uuid, req); err != nil {
-		return fmt.Errorf("failed to update user expireAt: %w", err)
-	}
-
-	return nil
-}
-
 // GetAllNodes получает список всех нод
 func (c *Client) GetAllNodes() ([]Node, error) {
 	resp, err := c.doRequest("GET", "/api/nodes", nil)
@@ -498,8 +448,4 @@ func (c *Client) doRequest(method, path string, body []byte) ([]byte, error) {
 	}
 
 	return respBody, nil
-}
-
-func isNotFoundAPIError(err error) bool {
-	return strings.Contains(err.Error(), "API error 404")
 }

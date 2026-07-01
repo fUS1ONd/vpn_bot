@@ -25,6 +25,13 @@ const (
 	cbBugCancel     = "bug_cancel"
 )
 
+// Unique-идентификаторы inline-кнопок ручного продления подписки админом
+const (
+	cbAdminExtendMonth   = "adm_ext_month"  // запрос продления (Data = targetID)
+	cbAdminExtendConfirm = "adm_ext_ok"     // подтверждение (Data = targetID)
+	cbAdminExtendCancel  = "adm_ext_cancel" // отмена (Data = targetID)
+)
+
 // Текстовые константы кнопок
 const (
 	// Кнопки пользователя
@@ -376,6 +383,31 @@ func BugCategoriesKeyboard() *tele.ReplyMarkup {
 func BugCommentKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(menu.Row(menu.Text(BtnBugSkip), menu.Text(BtnCancel)))
+	return menu
+}
+
+// AdminUserInfoKeyboard — inline-клавиатура карточки пользователя.
+// Кнопка «Продлить на месяц» скрыта для безлимитных подписок (expireAt год >= 2099).
+func AdminUserInfoKeyboard(targetID int64, remUser *remnawave.User) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+
+	if remUser != nil && remUser.ExpireAt.Year() < 2099 {
+		extend := menu.Data("➕ Продлить на месяц", cbAdminExtendMonth, fmt.Sprintf("%d", targetID))
+		rows = append(rows, menu.Row(extend))
+	}
+
+	menu.Inline(rows...)
+	return menu
+}
+
+// AdminExtendConfirmKeyboard — кнопки подтверждения/отмены продления.
+func AdminExtendConfirmKeyboard(targetID int64) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	idStr := fmt.Sprintf("%d", targetID)
+	ok := menu.Data("✅ Подтвердить", cbAdminExtendConfirm, idStr)
+	cancel := menu.Data("❌ Отмена", cbAdminExtendCancel, idStr)
+	menu.Inline(menu.Row(ok, cancel))
 	return menu
 }
 
