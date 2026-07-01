@@ -69,3 +69,74 @@ func (b *Bot) handleAdminExtendMonth(c tele.Context) error {
 		ReplyMarkup: AdminExtendConfirmKeyboard(targetID),
 	})
 }
+
+// extendedSubscriptionMessage — текст пользователю о ручном продлении.
+func (b *Bot) extendedSubscriptionMessage(telegramID int64) string {
+	remUser, _ := b.remnawave.GetUserByTelegramID(telegramID)
+	if remUser != nil {
+		return fmt.Sprintf(
+			"✅ Ваша подписка продлена до <b>%s</b>.\n\nЛимит трафика снят — пользуйтесь без ограничений.",
+			remUser.ExpireAt.Format("02.01.2006"),
+		)
+	}
+	return "✅ Ваша подписка продлена."
+}
+
+// handleAdminExtendConfirm выполняет продление на месяц.
+func (b *Bot) handleAdminExtendConfirm(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return c.Respond()
+	}
+
+	targetID, ok := parseAdminExtendTargetID(c)
+	if !ok {
+		return c.RespondAlert("Некорректный запрос")
+	}
+
+	// Сериализуем с платёжными операциями по этому юзеру (callback от Platega и т.п.).
+	mu := getPaymentMutex(targetID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	dbUser, err := b.db.GetUserByTelegramID(targetID)
+	if err != nil || dbUser == nil {
+		return c.RespondAlert("Пользователь не найден")
+	}
+
+	// Перечитываем свежего remUser: дата могла измениться (юзер мог сам оплатить).
+	remUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
+	if err != nil {
+		slog.Error("Failed to reload Remnawave user before extend", "error", err, "telegram_id", targetID)
+		return c.RespondAlert("Ошибка получения данных подписки")
+	}
+
+	newExpireAt := nextMonthExpireAt(remUser, time.Now().UTC())
+
+	if err := b.remnawave.EnableUser(dbUser.RemnawaveUUID, newExpireAt); err != nil {
+		slog.Error("Failed to extend subscription", "error", err, "telegram_id", targetID)
+		return c.RespondAlert("❌ Не удалось продлить. Попробуйте ещё раз.")
+	}
+
+	// Очищаем маркеры уведомлений (юзер мог быть в grace period).
+	if err := b.db.ClearNotifications(targetID); err != nil {
+		slog.Error("Failed to clear notifications after manual extend", "error", err, "telegram_id", targetID)
+	}
+
+	// Уведомляем пользователя.
+	_ = b.sendSchedulerMessageWithKeyboard(targetID, b.extendedSubscriptionMessage(targetID), b.userKeyboard(targetID))
+
+	// Убираем кнопки, показываем результат админу.
+	_ = c.Edit(fmt.Sprintf("✅ Подписка продлена до <b>%s</b>.", newExpireAt.Format("02.01.2006")), &tele.SendOptions{
+		ParseMode: tele.ModeHTML,
+	})
+	return c.Respond()
+}
+
+// handleAdminExtendCancel отменяет продление.
+func (b *Bot) handleAdminExtendCancel(c tele.Context) error {
+	if !b.isAdmin(c) {
+		return c.Respond()
+	}
+	_ = c.Edit("Продление отменено.")
+	return c.Respond()
+}
