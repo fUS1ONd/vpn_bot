@@ -21,11 +21,16 @@ import (
 // MockContext реализует интерфейс tele.Context для тестов
 type MockContext struct {
 	tele.Context
-	sender   *tele.User
-	message  *tele.Message
-	sentMsg  any
-	sentMsgs []any
-	opts     []any
+	sender     *tele.User
+	message    *tele.Message
+	sentMsg    any
+	sentMsgs   []any
+	opts       []any
+	args       []string
+	editedMsg  any
+	editedOpts []any
+	responded  bool
+	alertText  string
 }
 
 func (c *MockContext) Sender() *tele.User {
@@ -48,6 +53,31 @@ func (c *MockContext) Text() string {
 		return c.message.Text
 	}
 	return ""
+}
+
+// Args возвращает аргументы callback-данных (после Unique), используется в inline-хендлерах.
+func (c *MockContext) Args() []string {
+	return c.args
+}
+
+// Edit имитирует редактирование сообщения по callback-у.
+func (c *MockContext) Edit(what any, opts ...any) error {
+	c.editedMsg = what
+	c.editedOpts = opts
+	return nil
+}
+
+// Respond имитирует ответ на callback-запрос (закрытие "часиков" в клиенте).
+func (c *MockContext) Respond(resp ...*tele.CallbackResponse) error {
+	c.responded = true
+	return nil
+}
+
+// RespondAlert имитирует alert-ответ на callback-запрос.
+func (c *MockContext) RespondAlert(text string) error {
+	c.responded = true
+	c.alertText = text
+	return nil
 }
 
 // setupTestBot создаёт бота с временной БД для тестов

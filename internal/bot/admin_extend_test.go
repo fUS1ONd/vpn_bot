@@ -52,3 +52,22 @@ func TestNextMonthExpireAt(t *testing.T) {
 		})
 	}
 }
+
+func TestParseAdminExtendTargetID(t *testing.T) {
+	// валидный
+	c := &MockContext{args: []string{"12345"}}
+	id, ok := parseAdminExtendTargetID(c)
+	if !ok || id != 12345 {
+		t.Errorf("ожидали (12345,true), got (%d,%v)", id, ok)
+	}
+	// пустой
+	c2 := &MockContext{args: nil}
+	if _, ok := parseAdminExtendTargetID(c2); ok {
+		t.Error("ожидали ok=false для пустых args")
+	}
+	// невалидный
+	c3 := &MockContext{args: []string{"abc"}}
+	if _, ok := parseAdminExtendTargetID(c3); ok {
+		t.Error("ожидали ok=false для нечислового args")
+	}
+}
