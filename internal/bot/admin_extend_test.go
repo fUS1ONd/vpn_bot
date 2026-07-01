@@ -52,6 +52,18 @@ func TestNextMonthExpireAt(t *testing.T) {
 			expire: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
 			want:   time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		},
+		{
+			name:   "LIMITED (исчерпан трафик триала) в будущем — плюсуем к expireAt, не теряем остаток",
+			status: remnawave.StatusLimited,
+			expire: time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC),
+			want:   time.Date(2026, 4, 12, 12, 0, 0, 0, time.UTC),
+		},
+		{
+			name:   "LIMITED и дата в прошлом — считаем от now",
+			status: remnawave.StatusLimited,
+			expire: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
+			want:   time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		},
 	}
 
 	for _, tt := range tests {
@@ -247,6 +259,70 @@ func TestHandleAdminExtendConfirm_Success(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, editedMsg, "Подписка продлена")
 	assert.True(t, ctx.responded)
+}
+
+// TestHandleAdminExtendConfirm_DoubleClickCooldown проверяет, что повторное
+// подтверждение продления сразу после успешного (дабл-клик/ретрай Telegram) не
+// продлевает подписку второй раз — второй PATCH не должен отправиться.
+func TestHandleAdminExtendConfirm_DoubleClickCooldown(t *testing.T) {
+	dbFile := "test_admin_extend_cooldown.db"
+	db, err := database.New(dbFile)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		os.Remove(dbFile)
+	}()
+
+	adminID := int64(999999)
+	targetID := int64(12345)
+
+	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target", nil, nil)
+	require.NoError(t, err)
+
+	currentExpireAt := time.Now().UTC().AddDate(0, 0, 10)
+
+	var patchCount int
+
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-target":
+				payload := fmt.Sprintf(`{"response":{"uuid":"uuid-target","username":"target","status":"ACTIVE","expireAt":"%s"}}`, currentExpireAt.Format(time.RFC3339))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/users":
+				patchCount++
+				payload := `{"response":{"uuid":"uuid-target"}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	})
+
+	b := &Bot{
+		db:         db,
+		remnawave:  client,
+		config:     &config.Config{AdminID: adminID},
+		userStates: newStateMap(),
+	}
+
+	ctx1 := &MockContext{sender: &tele.User{ID: adminID}, args: []string{strconv.FormatInt(targetID, 10)}}
+	require.NoError(t, b.handleAdminExtendConfirm(ctx1))
+	require.Equal(t, 1, patchCount, "первое подтверждение должно продлить подписку")
+
+	ctx2 := &MockContext{sender: &tele.User{ID: adminID}, args: []string{strconv.FormatInt(targetID, 10)}}
+	require.NoError(t, b.handleAdminExtendConfirm(ctx2))
+	assert.Equal(t, 1, patchCount, "повторное подтверждение в течение кулдауна не должно продлевать ещё раз")
+	assert.Equal(t, "Подписка уже продлена, повторное нажатие проигнорировано", ctx2.alertText)
 }
 
 // TestHandleAdminExtendCancel проверяет отмену продления.

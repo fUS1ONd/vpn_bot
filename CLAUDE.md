@@ -145,13 +145,32 @@ make logs            # Показать логи
     Продление чисто техническое: **не создаёт** запись в `payments` и **не начисляет**
     earnings модератору (осознанное решение — иначе отчёт по выплатам разъедется
     с реальными деньгами Platega). Меняется только Remnawave: `EnableUser` двигает
-    `expireAt` (+1 месяц к текущей дате, если подписка `ACTIVE` и не истекла, иначе
-    от текущего момента), ставит `Status=ACTIVE`, снимает лимит трафика. Кнопка скрыта
-    для безлимитных подписок (`expireAt.Year >= 2099`). Защита от дабл-клика —
-    `getPaymentMutex` + экран подтверждения (`c.Edit` убирает кнопки после нажатия).
-    Логика расчёта даты вынесена в чистую функцию `nextMonthExpireAt`, переиспользуемую
-    обычной оплатой в `activateSubscription`. Реализация — `internal/bot/admin_extend.go`
-    (хендлеры `handleAdminExtendMonth`/`handleAdminExtendConfirm`/`handleAdminExtendCancel`),
+    `expireAt` (+1 месяц к текущей дате, если подписка `ACTIVE` или `LIMITED` и не
+    истекла, иначе от текущего момента), ставит `Status=ACTIVE`, снимает лимит трафика.
+    Статус `LIMITED` (исчерпан лимит трафика триала, но срок ещё не истёк) учитывается
+    наравне с `ACTIVE` — иначе триальный пользователь с исчерпанным трафиком терял бы
+    остаток дней при ручном продлении. Кнопка скрыта для безлимитных подписок
+    (`expireAt.Year >= 2099`). Логика расчёта даты вынесена в чистую функцию
+    `nextMonthExpireAt`, переиспользуемую обычной оплатой в `activateSubscription`.
+    Защита от дабл-клика двухуровневая: `getPaymentMutex` сериализует конкурентные
+    вызовы по telegram_id (общий с платёжным callback), а поле `adminExtendCooldown
+    sync.Map` в `Bot` (telegram_id → время последнего успешного продления) дедуплицирует
+    повторные подтверждения — если confirm-callback приходит повторно в течение
+    `adminExtendCooldownWindow` (10 секунд) после успешного продления, `EnableUser`
+    повторно не вызывается, админ получает алерт «Подписка уже продлена, повторное
+    нажатие проигнорировано». Само продление вынесено в `applyAdminExtend(targetID
+    int64) (time.Time, error)` — критическая секция `getPaymentMutex` держит внутри
+    себя только чтение/запись Remnawave-состояния и кулдаун-проверку; отправка
+    уведомления пользователю и ответ админу (`c.Edit`/`c.Respond`) выполняются уже
+    после разблокировки мьютекса в `handleAdminExtendConfirm`, чтобы не задерживать
+    параллельный платёжный callback на время похода в Telegram Bot API. Типизированные
+    ошибки (`errAdminExtendCooldown`, `errAdminExtendUserNotFound`,
+    `errAdminExtendLoadFailed`, `errAdminExtendEnableFailed`) маппятся в текст алерта
+    функцией `adminExtendErrorAlert`. Текст уведомления пользователю строит чистая
+    функция `extendedSubscriptionMessage(newExpireAt time.Time) string` — без побочных
+    сетевых вызовов, принимает уже посчитанную дату параметром. Реализация —
+    `internal/bot/admin_extend.go` (хендлеры
+    `handleAdminExtendMonth`/`handleAdminExtendConfirm`/`handleAdminExtendCancel`),
     клавиатуры — `internal/bot/keyboards.go` (`AdminUserInfoKeyboard`, `AdminExtendConfirmKeyboard`).
 
 ## Мониторинг нод

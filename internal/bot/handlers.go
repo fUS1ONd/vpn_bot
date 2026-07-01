@@ -52,6 +52,7 @@ type Bot struct {
 	bugReportMu          sync.RWMutex
 	bugReportData        map[int64]bugReportSession // pending-данные багрепорта
 	bugReportCooldown    sync.Map                   // telegram_id -> time.Time последней отправки
+	adminExtendCooldown  sync.Map                   // telegram_id -> time.Time последнего продления (защита от дабл-клика)
 }
 
 // buildBotSettings собирает настройки telebot.
