@@ -314,16 +314,7 @@ func (h *paymentCallbackHandler) activateSubscription(payment *database.Payment)
 		return fmt.Errorf("get remnawave user: %w", err)
 	}
 
-	now := time.Now().UTC()
-	var newExpireAt time.Time
-
-	// Если подписка ещё активна (досрочное продление) — плюсуем к текущему expireAt
-	if remUser.ExpireAt.After(now) && remUser.Status == "ACTIVE" {
-		newExpireAt = remUser.ExpireAt.AddDate(0, 1, 0)
-	} else {
-		// Триал, grace period или истёк — считаем от момента оплаты
-		newExpireAt = now.AddDate(0, 1, 0)
-	}
+	newExpireAt := nextMonthExpireAt(remUser, time.Now().UTC())
 
 	// Реактивируем пользователя: ставит Status=ACTIVE, ExpireAt=newExpireAt, TrafficLimitBytes=0.
 	return h.bot.remnawave.EnableUser(user.RemnawaveUUID, newExpireAt)
