@@ -2,7 +2,7 @@
 
 Telegram-бот управления VPN на базе [Remnawave](https://remnawave.com)
 
-./docs/platega/README.md содержит информацию по взаимодействию с платежной системой
+./docs/platega/README.md содержит информацию по взаимодействию с платежной системой 
 
 ./docs/api-remnawave2.6.4.json содержит актуальную документацию для всего api панели, используй его, чтобы работать с панелью. Используй поиск по файлу, но не читай его целиком (~4k строк кода, быстро забьется контекст)
 
@@ -15,10 +15,19 @@ Telegram-бот управления VPN на базе [Remnawave](https://remna
 ### Основные компоненты
 
 - **`internal/remnawave/client.go`** — HTTP-клиент Remnawave API
-- **`internal/database/users.go`** — таблица users (telegram_id, username, first_name, remnawave_uuid)
-- **`internal/database/invites.go`** — таблица invites (система инвайтов с датой активации)
+- **`internal/platega/client.go`** — HTTP-клиент Platega
+- **`internal/callback/server.go`** — встроенный HTTP-сервер для callback и health-check
+- **`internal/database/users.go`** — таблица users (`telegram_id`, `username`, `first_name`, `remnawave_uuid`, `subscription_price`, `moderator_id`)
+- **`internal/database/invites.go`** — таблица invites (`code`, `created_by`, `used_by`, `expire_days`, `subscription_price`, `kicked_at`)
+- **`internal/database/payments.go`** — таблица payments и логика подтверждения/ретраев платежей
+- **`internal/database/earnings.go`** — таблица `moderator_earnings` и расчёт долей модераторов
+- **`internal/database/bans.go`** — таблица `banned_users` и проверки перманентных банов
+- **`internal/database/notifications.go`** — таблица `notifications_sent` (защита от повторных уведомлений)
 - **`internal/bot/handlers.go`** — обработчики сообщений, команд и синхронизация данных пользователей
-- **`internal/bot/admin.go`** — админ-панель (инвайты, просмотр кодов, бан, уведомления)
+- **`internal/bot/admin.go`** — админ-панель (инвайты, просмотр кодов, бан, уведомления, статистика, режим обслуживания)
+- **`internal/bot/payment_handler.go`** — пользовательский flow оплаты и ручная проверка платежей
+- **`internal/bot/payment.go`** — callback-активация, retry и расчёт earnings
+- **`internal/bot/scheduler.go`** — scheduler подписок и платежей: каждые 30 минут + первый проход при старте
 - **`internal/bot/dashboard.go`** — Session Manager и движок live-дашборда мониторинга
 - **`internal/bot/dashboard_render.go`** — визуализация дашборда (прогресс-бары, флаги, метрики)
 - **`internal/monitoring/`** — пакет мониторинга (MetricsClient, SyncNodes, LoadIndex, Alerter)
@@ -33,6 +42,11 @@ Telegram-бот управления VPN на базе [Remnawave](https://remna
 BOT_TOKEN=...
 ADMIN_ID=...
 
+# Юридические страницы и контакт поддержки (обязательные, показываются в кнопке «Информация»)
+PRIVACY_POLICY_URL=https://example.com/privacy
+TERMS_OF_SERVICE_URL=https://example.com/terms
+SUPPORT_CONTACT=@your_support_handle  # вставляется как есть, можно HTML (<a href=...>)
+
 # Remnawave
 REMNAWAVE_URL=https://panel.example.com
 REMNAWAVE_API_TOKEN=...
@@ -44,6 +58,18 @@ DB_PATH=/app/data/bot.db
 # Мониторинг (опционально, включается автоматически если VM доступна)
 SD_CONFIGS_PATH=/app/sd_configs
 VICTORIA_METRICS_URL=http://victoriametrics:8428
+
+# Платежи Platega (опционально; если не заданы — бот работает как раньше)
+PLATEGA_MERCHANT_ID=...
+PLATEGA_SECRET=...
+PLATEGA_CALLBACK_URL=https://vpn.example.com/platega/callback
+CALLBACK_PORT=8080
+MIN_SUBSCRIPTION_PRICE=400
+TRIAL_TRAFFIC_LIMIT_GB=1
+PLATEGA_FEE_SBP=11
+PLATEGA_FEE_CARD=12
+PLATEGA_FEE_CRYPTO=5
+PLATEGA_FEE_WITHDRAWAL=2
 
 # Render-сервис субтитров (опционально, кнопка скрыта если не задан)
 RENDER_URL=http://render:8080
@@ -85,16 +111,92 @@ make logs            # Показать логи
 - описание на русском, краткое, с глаголом действия
 - без точки в конце
 
+### Тип коммита определяет версию релиза
+
+Версия при `/release` вычисляется автоматически из типов коммитов
+(conventional commits), поэтому тип надо выбирать осознанно:
+
+| Тип коммита | Влияние на версию |
+|---|---|
+| `feat:` | minor (`x.Y.z`) |
+| `fix:` | patch (`x.y.Z`) |
+| `feat!:` / `fix!:` или футер `BREAKING CHANGE:` | major (`X.y.z`) |
+| `chore:` / `docs:` / `refactor:` / `plan:` / `init:` | patch |
+
+- **Breaking change** помечается либо `!` после типа (`feat!: ...`), либо
+  строкой `BREAKING CHANGE: ...` в теле/футере коммита.
+- **Оговорка 0.x:** пока версия ниже `1.0.0`, breaking-коммиты двигают minor,
+  а не major (стандартное поведение для нестабильных версий).
+- Приоритет bump: breaking → feat → иначе patch. Любой релиз получает номер,
+  даже если в диапазоне только `chore`/`docs`.
+
+## Синхронизация CLAUDE.md и AGENTS.md
+
+`CLAUDE.md` и `AGENTS.md` обязаны быть идентичны по содержимому (AGENTS.md читают
+агенты и инструменты, не понимающие CLAUDE.md). При правке одного файла
+синхронизируй второй: `cp CLAUDE.md AGENTS.md`.
+
 ## Важные заметки
 
 1. **Рассылка** отправляется только активным пользователям (status=ACTIVE в Remnawave)
-2. **Бан** удаляет пользователя как из БД бота, так и из Remnawave (отключает доступ к серверам)
-3. **Сброс трафика** — счётчик `usedTrafficBytes` автоматически сбрасывается Remnawave 1-го числа при стратегии `MONTH`
-4. **Сквады** опциональны — если пользователи не видят серверы, создайте internal squads в панели и добавьте UUID в `REMNAWAVE_DEFAULT_SQUAD_UUIDS`
-5. **Трафик** — без лимита (`trafficLimitBytes=0`)
-6. **Актуализация данных** — при каждом /start бот обновляет username и first_name в БД и синхронизирует username с Remnawave
-7. **Удаление кодов** — можно удалять только неиспользованные коды (защита истории активаций)
-8. **Субтитры** — опционально, требует запущенный render-сервис. Голосовое → видео с субтитрами, кружок → кружок с субтитрами
+2. **Типы инвайтов:** админский — бессрочный (`expire_days=NULL`), модераторский — триал на 72 часа с ценой подписки из инвайта
+3. **Платежи Platega опциональны:** без `PLATEGA_MERCHANT_ID` и `PLATEGA_SECRET` бот работает как раньше, callback-сервер не стартует, кнопки оплаты не показываются
+4. **Legacy-пользователи:** при `subscription_price = NULL` кнопка оплаты скрыта; scheduler пропускает старые записи без инвайта и цены
+5. **Платёжный flow:** callback обрабатывается быстро, долгие retry не держат HTTP-запрос открытым; при сбое активации платёж переходит в `confirmed_not_activated`, а scheduler повторяет активацию без перезаписи исходного `confirmed_at`
+6. **Плановый scheduler:** стартует сразу при запуске и далее работает каждые 30 минут; обрабатывает pending/confirmed_not_activated, уведомления, disable и grace kick
+7. **Maintenance mode:** скрывает оплату и блокирует disable/автокики, но остальная функциональность бота продолжает работать
+8. **Бан и автокик различаются:** бан пишет в `banned_users` (перманентно), автокик бан не ставит (пользователь может вернуться по новому инвайту)
+9. **Сброс трафика** — счётчик `usedTrafficBytes` автоматически сбрасывается Remnawave 1-го числа при стратегии `MONTH`
+10. **Сквады** опциональны — если пользователи не видят серверы, создайте internal squads в панели и добавьте UUID в `REMNAWAVE_DEFAULT_SQUAD_UUIDS`
+11. **Трафик** — без лимита для оплаченных и админских пользователей (`trafficLimitBytes=0`); для триала лимит задаётся через `TRIAL_TRAFFIC_LIMIT_GB`
+12. **Актуализация данных** — при каждом /start бот обновляет username и first_name в БД и синхронизирует username с Remnawave
+13. **Удаление кодов** — можно удалять только неиспользованные коды (защита истории активаций)
+14. **Субтитры** — опционально, требует запущенный render-сервис. Голосовое → видео с субтитрами, кружок → кружок с субтитрами
+15. **Управление устройствами** — пользователь с активной подпиской может из бота
+    («👤 Моя подписка» → reply-подменю «📱 Управление устройствами») посмотреть подключённые
+    HWID-устройства, удалить одно или сбросить все. Список устройств реализован на inline-кнопках
+    (см. `internal/bot/devices.go`), API — `GetUserHwidDevices`/`DeleteUserHwidDevice`/`DeleteAllUserHwidDevices`.
+    Кнопка «Моя подписка» переводит пользователя в reply-подменю (управление устройствами + «Назад»),
+    т.к. Telegram не допускает reply- и inline-разметку в одном сообщении.
+16. **Багрепорт** — зарегистрированный пользователь по кнопке «🛠 Сообщить о проблеме»
+    в главном меню выбирает один или несколько серверов (мультивыбор: inline-тогглы с
+    галочками ✅ + кнопка «Готово»; в списке только включённые хосты `isDisabled=false`,
+    в т.ч. скрытые) и категорию проблемы, опционально пишет комментарий. Бот шлёт
+    структурированный репорт админу в личку (TG ID, имя, статус подписки, список серверов,
+    категория, текст). Без таблиц БД: сессия и кулдаун (10 минут на пользователя) хранятся
+    in-memory. Если хостов нет — шаг выбора сервера пропускается. См. `internal/bot/bug_report.go`.
+17. **Ручное продление подписки админом** — в карточке пользователя (админ-панель,
+    «🔍 Инфо о пользователе») доступна inline-кнопка «➕ Продлить на месяц».
+    Продление чисто техническое: **не создаёт** запись в `payments` и **не начисляет**
+    earnings модератору (осознанное решение — иначе отчёт по выплатам разъедется
+    с реальными деньгами Platega). Меняется только Remnawave: `EnableUser` двигает
+    `expireAt` (+1 месяц к текущей дате, если подписка `ACTIVE` или `LIMITED` и не
+    истекла, иначе от текущего момента), ставит `Status=ACTIVE`, снимает лимит трафика.
+    Статус `LIMITED` (исчерпан лимит трафика триала, но срок ещё не истёк) учитывается
+    наравне с `ACTIVE` — иначе триальный пользователь с исчерпанным трафиком терял бы
+    остаток дней при ручном продлении. Кнопка скрыта для безлимитных подписок
+    (`expireAt.Year >= 2099`). Логика расчёта даты вынесена в чистую функцию
+    `nextMonthExpireAt`, переиспользуемую обычной оплатой в `activateSubscription`.
+    Защита от дабл-клика двухуровневая: `getPaymentMutex` сериализует конкурентные
+    вызовы по telegram_id (общий с платёжным callback), а поле `adminExtendCooldown
+    sync.Map` в `Bot` (telegram_id → время последнего успешного продления) дедуплицирует
+    повторные подтверждения — если confirm-callback приходит повторно в течение
+    `adminExtendCooldownWindow` (10 секунд) после успешного продления, `EnableUser`
+    повторно не вызывается, админ получает алерт «Подписка уже продлена, повторное
+    нажатие проигнорировано». Само продление вынесено в `applyAdminExtend(targetID
+    int64) (time.Time, error)` — критическая секция `getPaymentMutex` держит внутри
+    себя только чтение/запись Remnawave-состояния и кулдаун-проверку; отправка
+    уведомления пользователю и ответ админу (`c.Edit`/`c.Respond`) выполняются уже
+    после разблокировки мьютекса в `handleAdminExtendConfirm`, чтобы не задерживать
+    параллельный платёжный callback на время похода в Telegram Bot API. Типизированные
+    ошибки (`errAdminExtendCooldown`, `errAdminExtendUserNotFound`,
+    `errAdminExtendLoadFailed`, `errAdminExtendEnableFailed`) маппятся в текст алерта
+    функцией `adminExtendErrorAlert`. Текст уведомления пользователю строит чистая
+    функция `extendedSubscriptionMessage(newExpireAt time.Time) string` — без побочных
+    сетевых вызовов, принимает уже посчитанную дату параметром. Реализация —
+    `internal/bot/admin_extend.go` (хендлеры
+    `handleAdminExtendMonth`/`handleAdminExtendConfirm`/`handleAdminExtendCancel`),
+    клавиатуры — `internal/bot/keyboards.go` (`AdminUserInfoKeyboard`, `AdminExtendConfirmKeyboard`).
 
 ## Мониторинг нод
 
