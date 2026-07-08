@@ -1,6 +1,7 @@
 services:
   vpn-bot:
-    image: fus1ond/vpn-bot:latest
+    image: ghcr.io/fus1ond/vpn_bot:latest   # прод (дефолт)
+    # image: ghcr.io/fus1ond/vpn_bot:dev    # тест-канал разработки
     container_name: vpn-bot
     restart: unless-stopped
     volumes:
