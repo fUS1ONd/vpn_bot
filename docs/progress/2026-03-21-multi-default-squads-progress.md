@@ -29,7 +29,7 @@
   - добавлен пример списка UUID;
   - задокументирован legacy fallback.
 - ✅ Обновлены `AGENTS.md` и `CLAUDE.md`:
-  - путь к актуальной OpenAPI-документации (`docs/api-remnawave2.6.4.json`);
+  - путь к актуальной OpenAPI-документации (`docs/api-remnawave2.8.1.json`);
   - описание нового env для default squads.
 - ✅ Добавлен этот progress-файл.
 

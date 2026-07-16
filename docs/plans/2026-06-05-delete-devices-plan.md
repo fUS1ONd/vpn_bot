@@ -50,7 +50,7 @@ c.Respond(&tele.CallbackResponse{Text: "Готово"}) // обычный тос
 - Лимит `callback_data` в Telegram — 64 байта. Поэтому в `Data` кладём **индекс** устройства
   (короткий), а не hwid. По индексу заново берём актуальный список и достаём hwid.
 
-### Контракт Remnawave HWID API (проверен по docs/api-remnawave2.6.4.json)
+### Контракт Remnawave HWID API (проверен по docs/api-remnawave2.8.1.json)
 - `GET /api/hwid/devices/{userUuid}` → `{"response":{"total":N,"devices":[{hwid,platform,osVersion,deviceModel,userAgent,createdAt,updatedAt}, ...]}}`. Поля `platform/osVersion/deviceModel/userAgent` могут быть null.
 - `POST /api/hwid/devices/delete` body `{"userUuid":"...","hwid":"..."}` → возвращает обновлённый `{"response":{"total","devices"}}`.
 - `POST /api/hwid/devices/delete-all` body `{"userUuid":"..."}` → возвращает обновлённый `{"response":{"total","devices"}}`.
