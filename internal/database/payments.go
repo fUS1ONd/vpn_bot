@@ -7,21 +7,21 @@ import (
 
 // Payment представляет запись платежа
 type Payment struct {
-	ID                   int64
-	TelegramID           int64
-	ModeratorID          *int64
-	Amount               int
-	PaymentMethod        string // "sbp", "card", "crypto"
-	Status               string // "pending", "confirmed", "expired", "canceled", "chargebacked", "confirmed_not_activated"
-	PlategaTransactionID *string
-	Provider             string
-	ProviderPaymentID    *string
-	ProviderRequestKey   *string
-	ProviderFeePercent   *int
-	RedirectURL          *string
-	ExpiresAt            *time.Time
-	CreatedAt            time.Time
-	ConfirmedAt          *time.Time
+	ID                     int64
+	TelegramID             int64
+	ModeratorID            *int64
+	Amount                 int
+	PaymentMethod          string // "sbp", "card", "crypto"
+	Status                 string // "pending", "confirmed", "expired", "canceled", "chargebacked", "confirmed_not_activated"
+	PlategaTransactionID   *string
+	Provider               string
+	ProviderPaymentID      *string
+	ProviderRequestKey     *string
+	ProviderFeeBasisPoints *int // сотые доли процента, например 350 = 3.5%
+	RedirectURL            *string
+	ExpiresAt              *time.Time
+	CreatedAt              time.Time
+	ConfirmedAt            *time.Time
 }
 
 // MonthlyConfirmedPayment хранит подтверждённый платёж месяца и долю модератора.
@@ -41,7 +41,7 @@ func (db *DB) CreatePayment(p *Payment) (int64, error) {
 	res, err := db.conn.Exec(
 		`INSERT INTO payments (telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, redirect_url, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.TelegramID, p.ModeratorID, p.Amount, p.PaymentMethod, p.Status, p.PlategaTransactionID, p.Provider, p.ProviderPaymentID, p.ProviderRequestKey, p.ProviderFeePercent, p.RedirectURL, p.ExpiresAt,
+		p.TelegramID, p.ModeratorID, p.Amount, p.PaymentMethod, p.Status, p.PlategaTransactionID, p.Provider, p.ProviderPaymentID, p.ProviderRequestKey, p.ProviderFeeBasisPoints, p.RedirectURL, p.ExpiresAt,
 	)
 	if err != nil {
 		return 0, err
@@ -85,7 +85,7 @@ func (db *DB) GetPaymentByID(id int64) (*Payment, error) {
 	}
 	if providerFeePercent.Valid {
 		v := int(providerFeePercent.Int64)
-		p.ProviderFeePercent = &v
+		p.ProviderFeeBasisPoints = &v
 	}
 	if redirectURL.Valid {
 		p.RedirectURL = &redirectURL.String
@@ -137,7 +137,7 @@ func (db *DB) GetPendingPayment(telegramID int64) (*Payment, error) {
 	}
 	if providerFeePercent.Valid {
 		v := int(providerFeePercent.Int64)
-		p.ProviderFeePercent = &v
+		p.ProviderFeeBasisPoints = &v
 	}
 	if redirectURL.Valid {
 		p.RedirectURL = &redirectURL.String

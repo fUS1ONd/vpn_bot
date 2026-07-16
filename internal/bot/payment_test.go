@@ -57,10 +57,10 @@ func TestGetPlategaFeePercent(t *testing.T) {
 	assert.Equal(t, 11, b.getPlategaFeePercent("unknown")) // Fallback на SBP
 }
 
-func TestGetPaymentFeePercentDoesNotApplyPlategaTariffToYooKassa(t *testing.T) {
-	b := &Bot{config: &config.Config{PlategaFeeCard: 12, YooKassaFeePercent: 3}}
-	assert.Equal(t, 3, b.getPaymentFeePercent("yookassa", "card"))
-	assert.Equal(t, 12, b.getPaymentFeePercent("platega", "card"))
+func TestGetPaymentFeeBasisPointsDoesNotApplyPlategaTariffToYooKassa(t *testing.T) {
+	b := &Bot{config: &config.Config{PlategaFeeCard: 12, YooKassaFeeBasisPoints: 350}}
+	assert.Equal(t, 350, b.getPaymentFeeBasisPoints("yookassa", "card"))
+	assert.Equal(t, 1200, b.getPaymentFeeBasisPoints("platega", "card"))
 }
 
 func TestHandleConfirmedIgnoresExpiredAlternativePayment(t *testing.T) {

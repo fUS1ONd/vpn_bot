@@ -45,7 +45,7 @@ make logs
 | `YOOKASSA_SHOP_ID`             | —            | Shop ID ЮKassa; включается только вместе с секретным ключом |
 | `YOOKASSA_SECRET_KEY`          | —            | Секретный ключ ЮKassa                                       |
 | `YOOKASSA_RETURN_URL`          | —            | URL возврата в Telegram после оплаты                        |
-| `YOOKASSA_FEE_PERCENT`         | —            | Фактическая договорная комиссия ЮKassa, % (задайте перед production) |
+| `YOOKASSA_FEE_PERCENT`         | —            | Фактическая договорная комиссия ЮKassa в %, допускается дробная (например, `3.5`) |
 | `RENDER_URL`                   | —            | URL render-сервиса субтитров                                |
 | `RENDER_API_KEY`               | —            | API-ключ render-сервиса                                     |
 

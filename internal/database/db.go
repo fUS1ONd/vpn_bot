@@ -210,6 +210,11 @@ func migrate(conn *sql.DB) error {
 	if _, err := conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_provider_payment_id ON payments(provider, provider_payment_id) WHERE provider_payment_id IS NOT NULL AND provider_payment_id != ''`); err != nil {
 		return fmt.Errorf("failed to create provider payment index: %w", err)
 	}
+	// До поддержки дробных процентов snapshot хранился в целых процентах.
+	// Конвертируем только старые значения <100; уже новые basis points не затрагиваем.
+	if _, err := conn.Exec(`UPDATE payments SET provider_fee_percent = provider_fee_percent * 100 WHERE provider_fee_percent IS NOT NULL AND provider_fee_percent > 0 AND provider_fee_percent < 100`); err != nil {
+		return fmt.Errorf("failed to migrate provider fee snapshots: %w", err)
+	}
 
 	// Бэкофилл для старых записей: всё, что изначально было trial (expire_days IS NOT NULL),
 	// должно остаться trial в исторической статистике даже после последующих изменений expire_days.

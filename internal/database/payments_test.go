@@ -68,13 +68,13 @@ func TestCreatePaymentPreservesProviderFeeSnapshot(t *testing.T) {
 	db, err := New(t.TempDir() + "/payments.db")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
-	fee := 3
-	id, err := db.CreatePayment(&Payment{TelegramID: 1, Amount: 500, PaymentMethod: "yookassa", Status: "pending", Provider: "yookassa", ProviderFeePercent: &fee})
+	fee := 350
+	id, err := db.CreatePayment(&Payment{TelegramID: 1, Amount: 500, PaymentMethod: "yookassa", Status: "pending", Provider: "yookassa", ProviderFeeBasisPoints: &fee})
 	require.NoError(t, err)
 	p, err := db.GetPaymentByID(id)
 	require.NoError(t, err)
-	require.NotNil(t, p.ProviderFeePercent)
-	assert.Equal(t, 3, *p.ProviderFeePercent)
+	require.NotNil(t, p.ProviderFeeBasisPoints)
+	assert.Equal(t, 350, *p.ProviderFeeBasisPoints)
 }
 
 func TestGetPendingPayment(t *testing.T) {

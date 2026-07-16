@@ -376,14 +376,14 @@ func (h *paymentCallbackHandler) createEarningRecord(payment *database.Payment) 
 	sharePercent := calculateSharePercent(payingCount)
 
 	// Определяем комиссию Platega по методу оплаты
-	feePercent := h.bot.getPaymentFeePercent(payment.Provider, payment.PaymentMethod)
-	if payment.ProviderFeePercent != nil {
-		feePercent = *payment.ProviderFeePercent
+	feeBasisPoints := h.bot.getPaymentFeeBasisPoints(payment.Provider, payment.PaymentMethod)
+	if payment.ProviderFeeBasisPoints != nil {
+		feeBasisPoints = *payment.ProviderFeeBasisPoints
 	}
 	withdrawalPercent := h.bot.config.PlategaFeeWithdrawal
 
 	grossAmount := payment.Amount
-	plategaFee := grossAmount * feePercent / 100
+	plategaFee := grossAmount * feeBasisPoints / 10000
 	afterPlatega := grossAmount - plategaFee
 	withdrawalFee := afterPlatega * withdrawalPercent / 100
 	netAmount := afterPlatega - withdrawalFee
@@ -431,11 +431,11 @@ func (b *Bot) getPlategaFeePercent(paymentMethod string) int {
 	}
 }
 
-func (b *Bot) getPaymentFeePercent(provider, paymentMethod string) int {
+func (b *Bot) getPaymentFeeBasisPoints(provider, paymentMethod string) int {
 	if provider == paymentprovider.YooKassa {
-		return b.config.YooKassaFeePercent
+		return b.config.YooKassaFeeBasisPoints
 	}
-	return b.getPlategaFeePercent(paymentMethod)
+	return b.getPlategaFeePercent(paymentMethod) * 100
 }
 
 // handleCanceled обрабатывает отменённый платёж
@@ -581,8 +581,8 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 	if payment == nil {
 		// Сначала создаём локальную запись: её ID передаётся в metadata ЮKassa.
 		payment = &database.Payment{TelegramID: telegramID, ModeratorID: user.ModeratorID, Amount: price, PaymentMethod: paymentMethodStr, Status: "pending", Provider: providerName}
-		feePercent := b.getPaymentFeePercent(providerName, paymentMethodStr)
-		payment.ProviderFeePercent = &feePercent
+		feeBasisPoints := b.getPaymentFeeBasisPoints(providerName, paymentMethodStr)
+		payment.ProviderFeeBasisPoints = &feeBasisPoints
 		if providerName == paymentprovider.YooKassa {
 			key, keyErr := yookassa.NewIdempotenceKey()
 			if keyErr != nil {
