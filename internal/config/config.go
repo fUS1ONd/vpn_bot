@@ -50,7 +50,11 @@ type Config struct {
 	PlategaFeeCard       int    // Комиссия Platega карты (%), по умолчанию 12
 	PlategaFeeCrypto     int    // Комиссия Platega крипта (%), по умолчанию 5
 	PlategaFeeWithdrawal int    // Комиссия вывода (%), по умолчанию 2
-	CallbackPort         int    // Порт для callback-сервера (по умолчанию 8080)
+	YooKassaShopID       string
+	YooKassaSecretKey    string
+	YooKassaReturnURL    string
+	YooKassaFeePercent   int // Договорная комиссия ЮKassa (%); 0 до явной настройки
+	CallbackPort         int // Порт для callback-сервера (по умолчанию 8080)
 }
 
 // Load читает конфигурацию из переменных окружения
@@ -78,6 +82,10 @@ func Load() (*Config, error) {
 		PlategaFeeCard:       getEnvOrDefaultInt("PLATEGA_FEE_CARD", 12),
 		PlategaFeeCrypto:     getEnvOrDefaultInt("PLATEGA_FEE_CRYPTO", 5),
 		PlategaFeeWithdrawal: getEnvOrDefaultInt("PLATEGA_FEE_WITHDRAWAL", 2),
+		YooKassaShopID:       os.Getenv("YOOKASSA_SHOP_ID"),
+		YooKassaSecretKey:    os.Getenv("YOOKASSA_SECRET_KEY"),
+		YooKassaReturnURL:    os.Getenv("YOOKASSA_RETURN_URL"),
+		YooKassaFeePercent:   getEnvOrDefaultInt("YOOKASSA_FEE_PERCENT", 0),
 		CallbackPort:         getEnvOrDefaultInt("CALLBACK_PORT", 8080),
 		PrivacyPolicyURL:     os.Getenv("PRIVACY_POLICY_URL"),
 		TermsOfServiceURL:    os.Getenv("TERMS_OF_SERVICE_URL"),

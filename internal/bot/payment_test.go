@@ -57,6 +57,29 @@ func TestGetPlategaFeePercent(t *testing.T) {
 	assert.Equal(t, 11, b.getPlategaFeePercent("unknown")) // Fallback на SBP
 }
 
+func TestGetPaymentFeePercentDoesNotApplyPlategaTariffToYooKassa(t *testing.T) {
+	b := &Bot{config: &config.Config{PlategaFeeCard: 12, YooKassaFeePercent: 3}}
+	assert.Equal(t, 3, b.getPaymentFeePercent("yookassa", "card"))
+	assert.Equal(t, 12, b.getPaymentFeePercent("platega", "card"))
+}
+
+func TestHandleConfirmedIgnoresExpiredAlternativePayment(t *testing.T) {
+	db, err := database.New(t.TempDir() + "/bot.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	_, err = db.CreateUser(77, "payer", "Payer", "uuid-77", nil, nil)
+	require.NoError(t, err)
+	id, err := db.CreatePayment(&database.Payment{TelegramID: 77, Amount: 500, PaymentMethod: "yookassa", Status: "expired", Provider: "yookassa"})
+	require.NoError(t, err)
+	p, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	h := &paymentCallbackHandler{bot: &Bot{db: db, config: &config.Config{}, userStates: newStateMap()}}
+	require.NoError(t, h.handleConfirmed(p))
+	stored, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	assert.Equal(t, "expired", stored.Status)
+}
+
 func TestHandleConfirmedIdempotency(t *testing.T) {
 	dbFile := "test_payment_idempotency.db"
 	db, err := database.New(dbFile)

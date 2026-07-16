@@ -19,15 +19,20 @@ type PaymentHandler interface {
 	HandlePaymentCallback(payload platega.CallbackPayload) error
 }
 
+// YooKassaHandler verifies a webhook by loading the payment from YooKassa API.
+// The callback server deliberately passes only the external ID from the untrusted body.
+type YooKassaHandler interface{ HandleYooKassaWebhook(paymentID string) error }
+
 // Server — HTTP-сервер для приёма callback от Platega
 type Server struct {
-	merchantID string
-	secret     string
-	handler    PaymentHandler
-	httpServer *http.Server
-	mux        *http.ServeMux
-	limiter    *ipRateLimiter
-	done       chan struct{} // закрывается при Shutdown для остановки фоновых горутин
+	merchantID      string
+	secret          string
+	handler         PaymentHandler
+	yookassaHandler YooKassaHandler
+	httpServer      *http.Server
+	mux             *http.ServeMux
+	limiter         *ipRateLimiter
+	done            chan struct{} // закрывается при Shutdown для остановки фоновых горутин
 }
 
 // NewServer создаёт callback-сервер. port=0 означает автовыбор ОС (для тестов).
@@ -43,6 +48,7 @@ func NewServer(port int, merchantID, secret string, handler PaymentHandler) *Ser
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/platega/callback", s.rateLimitMiddleware(s.handleCallback))
+	mux.HandleFunc("/yookassa/webhook", s.rateLimitMiddleware(s.handleYooKassaWebhook))
 	mux.HandleFunc("/health", s.handleHealth)
 	s.mux = mux
 
@@ -57,9 +63,38 @@ func NewServer(port int, merchantID, secret string, handler PaymentHandler) *Ser
 	return s
 }
 
+func (s *Server) SetYooKassaHandler(handler YooKassaHandler) { s.yookassaHandler = handler }
+
 // Handler возвращает http.Handler для использования в тестах
 func (s *Server) Handler() http.Handler {
 	return s.mux
+}
+
+func (s *Server) handleYooKassaWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.yookassaHandler == nil {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+	var payload struct {
+		Object struct {
+			ID string `json:"id"`
+		} `json:"object"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil || payload.Object.ID == "" {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+	if err := s.yookassaHandler.HandleYooKassaWebhook(payload.Object.ID); err != nil {
+		slog.Error("YooKassa webhook handler error", "error", err, "payment_id", payload.Object.ID)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("OK"))
 }
 
 // Start запускает сервер (блокирующий вызов)

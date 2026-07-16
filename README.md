@@ -42,6 +42,10 @@ make logs
 | `PLATEGA_FEE_CARD`             | —            | Комиссия Platega для оплаты картой                          |
 | `PLATEGA_FEE_CRYPTO`           | —            | Комиссия Platega для крипты                                 |
 | `PLATEGA_FEE_WITHDRAWAL`       | —            | Комиссия вывода средств для расчёта доли модератора         |
+| `YOOKASSA_SHOP_ID`             | —            | Shop ID ЮKassa; включается только вместе с секретным ключом |
+| `YOOKASSA_SECRET_KEY`          | —            | Секретный ключ ЮKassa                                       |
+| `YOOKASSA_RETURN_URL`          | —            | URL возврата в Telegram после оплаты                        |
+| `YOOKASSA_FEE_PERCENT`         | —            | Фактическая договорная комиссия ЮKassa, % (задайте перед production) |
 | `RENDER_URL`                   | —            | URL render-сервиса субтитров                                |
 | `RENDER_API_KEY`               | —            | API-ключ render-сервиса                                     |
 
@@ -53,7 +57,8 @@ REMNAWAVE_DEFAULT_SQUAD_UUIDS=uuid-1,uuid-2,uuid-3
 
 Для обратной совместимости бот также понимает legacy-переменную `REMNAWAVE_DEFAULT_SQUAD_UUID`, если новый список не задан.
 
-Если `PLATEGA_MERCHANT_ID` и `PLATEGA_SECRET` не заданы, бот запускается как раньше: callback-сервер не поднимается, кнопки оплаты не показываются.
+Platega и ЮKassa независимы: можно включить любой один провайдер или оба. При обоих включённых ЮKassa показывает карту/СБП/SberPay, а Platega — криптовалюту. Callback-сервер поднимается, если настроен хотя бы один провайдер.
+Перед production-включением ЮKassa владелец магазина обязан подтвердить фискализацию и выдачу чеков в своём юридическом сценарии (чеки ЮKassa, внешняя касса или отдельный процесс). Эта интеграция не создаёт `receipt` без подтверждённых реквизитов.
 Подробности по интеграции Platega и настройке callback-сервера: [docs/platega/README.md](docs/platega/README.md) и [docs/plans/2026-03-22-deployment-checklist.md](docs/plans/2026-03-22-deployment-checklist.md).
 
 ## Функциональность

@@ -26,8 +26,7 @@ func (b *Bot) handlePayButton(c tele.Context) error {
 		})
 	}
 
-	// Проверка, что Platega настроена
-	if b.platega == nil {
+	if b.platega == nil && b.yookassa == nil {
 		return c.Send("❌ Платёжная система не настроена.", &tele.SendOptions{
 			ReplyMarkup: b.userKeyboard(telegramID),
 		})
@@ -65,15 +64,15 @@ func (b *Bot) handlePayButton(c tele.Context) error {
 	msg := fmt.Sprintf("💳 <b>Подписка на 1 месяц — %d руб.</b>\n\nВыберите способ оплаты:", *user.SubscriptionPrice)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: PaymentMethodKeyboard(),
+		ReplyMarkup: b.paymentMethodKeyboard(),
 	})
 }
 
 // handlePaymentMethodSelected обрабатывает выбор способа оплаты
-func (b *Bot) handlePaymentMethodSelected(c tele.Context, methodInt int) error {
+func (b *Bot) handlePaymentMethodSelected(c tele.Context, provider string) error {
 	telegramID := c.Sender().ID
 
-	payment, redirectURL, err := b.createPaymentForUser(telegramID, methodInt)
+	payment, redirectURL, err := b.createPaymentForProvider(telegramID, provider)
 	if err != nil {
 		slog.Error("Ошибка создания платежа", "error", err, "telegram_id", telegramID)
 
@@ -135,12 +134,12 @@ func (b *Bot) handleCheckPayment(c tele.Context) error {
 		return c.Send("Активных платежей не найдено.", &tele.SendOptions{
 			ReplyMarkup: b.userKeyboard(telegramID),
 		})
-	case platega.StatusCanceled:
+	case "canceled", platega.StatusCanceled:
 		b.userStates.Delete(telegramID)
 		return c.Send("❌ Платёж отменён. Вы можете попробовать снова.", &tele.SendOptions{
 			ReplyMarkup: b.userKeyboard(telegramID),
 		})
-	case platega.StatusChargebacked:
+	case "chargebacked", platega.StatusChargebacked:
 		b.userStates.Delete(telegramID)
 		return c.Send("⚠️ По платежу выполнен возврат средств. Доступ будет отключён или уже отключён. Если это ошибка, обратитесь к администратору.", &tele.SendOptions{
 			ReplyMarkup: b.userKeyboard(telegramID),
@@ -154,15 +153,17 @@ func (b *Bot) handleCheckPayment(c tele.Context) error {
 }
 
 // paymentMethodFromButton определяет метод оплаты по тексту кнопки
-func paymentMethodFromButton(text string) (int, bool) {
+func paymentProviderFromButton(text string) (string, bool) {
 	switch text {
-	case BtnPaySBP:
-		return platega.PaymentMethodSBP, true
-	case BtnPayCard:
-		return platega.PaymentMethodCard, true
+	case BtnPayYooKassa:
+		return "yookassa", true
 	case BtnPayCrypto:
-		return platega.PaymentMethodCrypto, true
+		return "platega", true
 	default:
-		return 0, false
+		return "", false
 	}
+}
+
+func (b *Bot) paymentMethodKeyboard() *tele.ReplyMarkup {
+	return PaymentMethodKeyboard(b.yookassa != nil, b.platega != nil)
 }

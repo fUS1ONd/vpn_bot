@@ -3,14 +3,15 @@ package bot
 import (
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/callback"
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/fus1ond/vpn_bot/internal/platega"
+	"github.com/fus1ond/vpn_bot/internal/yookassa"
 )
 
 // paymentMu — мьютексы по telegram_id для защиты от race condition при обработке callback.
@@ -39,6 +40,37 @@ type paymentCallbackHandler struct {
 // PaymentCallbackHandler возвращает обработчик callback от Platega
 func (b *Bot) PaymentCallbackHandler() callback.PaymentHandler {
 	return &paymentCallbackHandler{bot: b}
+}
+
+// HandleYooKassaWebhook implements callback.YooKassaHandler. The webhook payload is
+// not authoritative: the provider API response is matched to the immutable local record.
+func (b *Bot) HandleYooKassaWebhook(providerPaymentID string) error {
+	payment, err := b.db.GetPaymentByProviderPaymentID(paymentprovider.YooKassa, providerPaymentID)
+	if err != nil {
+		return fmt.Errorf("get YooKassa payment: %w", err)
+	}
+	if payment == nil {
+		return nil
+	} // unknown/stale event is acknowledged without leaking state
+	mu := getPaymentMutex(payment.TelegramID)
+	mu.Lock()
+	defer mu.Unlock()
+	verified, err := b.yookassa.GetPayment(providerPaymentID)
+	if err != nil {
+		return fmt.Errorf("load YooKassa payment: %w", err)
+	}
+	if err := b.verifyYooKassaPayment(payment, verified); err != nil {
+		return err
+	}
+	h := &paymentCallbackHandler{bot: b}
+	switch verified.Status {
+	case paymentprovider.StatusSucceeded:
+		return h.handleConfirmed(payment)
+	case paymentprovider.StatusCanceled:
+		return h.handleCanceled(payment)
+	default:
+		return nil
+	}
 }
 
 // HandlePaymentCallback обрабатывает callback от Platega
@@ -95,6 +127,10 @@ func (h *paymentCallbackHandler) handleConfirmedWithNotification(payment *databa
 	// Идемпотентность: если платёж уже confirmed — пропускаем
 	if payment.Status == "confirmed" {
 		slog.Info("Платёж уже подтверждён, пропускаем", "payment_id", payment.ID)
+		return nil
+	}
+	if payment.Status != "pending" && payment.Status != "confirmed_not_activated" {
+		slog.Warn("Подтверждение неактуального платежа проигнорировано", "payment_id", payment.ID, "status", payment.Status)
 		return nil
 	}
 
@@ -340,7 +376,10 @@ func (h *paymentCallbackHandler) createEarningRecord(payment *database.Payment) 
 	sharePercent := calculateSharePercent(payingCount)
 
 	// Определяем комиссию Platega по методу оплаты
-	feePercent := h.bot.getPlategaFeePercent(payment.PaymentMethod)
+	feePercent := h.bot.getPaymentFeePercent(payment.Provider, payment.PaymentMethod)
+	if payment.ProviderFeePercent != nil {
+		feePercent = *payment.ProviderFeePercent
+	}
 	withdrawalPercent := h.bot.config.PlategaFeeWithdrawal
 
 	grossAmount := payment.Amount
@@ -390,6 +429,13 @@ func (b *Bot) getPlategaFeePercent(paymentMethod string) int {
 	default:
 		return b.config.PlategaFeeSBP // Fallback
 	}
+}
+
+func (b *Bot) getPaymentFeePercent(provider, paymentMethod string) int {
+	if provider == paymentprovider.YooKassa {
+		return b.config.YooKassaFeePercent
+	}
+	return b.getPlategaFeePercent(paymentMethod)
 }
 
 // handleCanceled обрабатывает отменённый платёж
@@ -463,7 +509,11 @@ func (b *Bot) sendAdminAlert(msg string) {
 }
 
 // createPaymentForUser создаёт платёж для пользователя
-func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*database.Payment, string, error) {
+func (b *Bot) createPaymentForUser(telegramID int64, _ int) (*database.Payment, string, error) {
+	return b.createPaymentForProvider(telegramID, paymentprovider.Platega)
+}
+
+func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*database.Payment, string, error) {
 	user, err := b.db.GetUserByTelegramID(telegramID)
 	if err != nil || user == nil {
 		return nil, "", fmt.Errorf("user not found")
@@ -487,7 +537,14 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 		}
 	}
 
-	paymentMethodStr := platega.PaymentMethodString(paymentMethodInt)
+	provider, err := b.paymentProvider(providerName)
+	if err != nil {
+		return nil, "", err
+	}
+	paymentMethodStr := "crypto"
+	if providerName == paymentprovider.YooKassa {
+		paymentMethodStr = paymentprovider.YooKassa
+	}
 
 	// Сериализуем весь create-flow по telegram_id.
 	// Иначе два быстрых нажатия могут одновременно пройти проверку pending
@@ -502,14 +559,18 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 		return nil, "", fmt.Errorf("check pending: %w", err)
 	}
 
+	var payment *database.Payment
 	if pending != nil {
-		if pending.PaymentMethod == paymentMethodStr {
+		if pending.Provider == providerName {
 			// Тот же способ — возвращаем ту же ссылку
 			url := ""
 			if pending.RedirectURL != nil {
 				url = *pending.RedirectURL
 			}
-			return pending, url, nil
+			if url != "" {
+				return pending, url, nil
+			}
+			payment = pending
 		}
 		// Другой способ — помечаем старый как expired
 		if err := b.db.UpdatePaymentStatus(pending.ID, "expired"); err != nil {
@@ -517,50 +578,48 @@ func (b *Bot) createPaymentForUser(telegramID int64, paymentMethodInt int) (*dat
 		}
 	}
 
-	// Создаём платёж в Platega
+	if payment == nil {
+		// Сначала создаём локальную запись: её ID передаётся в metadata ЮKassa.
+		payment = &database.Payment{TelegramID: telegramID, ModeratorID: user.ModeratorID, Amount: price, PaymentMethod: paymentMethodStr, Status: "pending", Provider: providerName}
+		feePercent := b.getPaymentFeePercent(providerName, paymentMethodStr)
+		payment.ProviderFeePercent = &feePercent
+		if providerName == paymentprovider.YooKassa {
+			key, keyErr := yookassa.NewIdempotenceKey()
+			if keyErr != nil {
+				return nil, "", keyErr
+			}
+			payment.ProviderRequestKey = &key
+		}
+		id, err := b.db.CreatePayment(payment)
+		if err != nil {
+			return nil, "", fmt.Errorf("save payment: %w", err)
+		}
+		payment.ID = id
+	}
+	returnURL := b.config.YooKassaReturnURL
+	if returnURL == "" {
+		returnURL = fmt.Sprintf("https://t.me/%s", b.bot.Me.Username)
+	}
 	callbackURL := b.config.PlategaCallbackURL
-	telegramIDStr := strconv.FormatInt(telegramID, 10)
-
-	resp, err := b.platega.CreatePayment(platega.CreateTransactionRequest{
-		PaymentMethod: paymentMethodInt,
-		Amount:        price,
-		Currency:      "RUB",
-		Description:   "VPN подписка на 1 месяц",
-		ReturnURL:     fmt.Sprintf("https://t.me/%s", b.bot.Me.Username),
-		FailedURL:     fmt.Sprintf("https://t.me/%s", b.bot.Me.Username),
-		CallbackURL:   callbackURL,
-		Payload:       telegramIDStr,
-	})
+	requestKey := ""
+	if payment.ProviderRequestKey != nil {
+		requestKey = *payment.ProviderRequestKey
+	}
+	resp, err := provider.CreatePayment(paymentprovider.CreateRequest{Amount: price, Currency: "RUB", Description: "VPN подписка на 1 месяц", ReturnURL: returnURL, CallbackURL: callbackURL, LocalPaymentID: payment.ID, IdempotenceKey: requestKey})
 	if err != nil {
-		return nil, "", fmt.Errorf("platega create payment: %w", err)
+		if providerName != paymentprovider.YooKassa {
+			_ = b.db.UpdatePaymentStatus(payment.ID, "expired")
+		}
+		return nil, "", fmt.Errorf("%s create payment: %w", providerName, err)
 	}
-
-	// Вычисляем время жизни
-	var expiresAt *time.Time
-	if resp.ExpiresIn > 0 {
-		t := time.Now().UTC().Add(resp.ExpiresIn)
-		expiresAt = &t
+	if err := b.db.SetProviderPaymentDetails(payment.ID, resp.ID, resp.ConfirmationURL, resp.ExpiresAt); err != nil {
+		return nil, "", fmt.Errorf("save provider payment details: %w", err)
 	}
-
-	// Сохраняем в БД
-	payment := &database.Payment{
-		TelegramID:           telegramID,
-		ModeratorID:          user.ModeratorID,
-		Amount:               price,
-		PaymentMethod:        paymentMethodStr,
-		Status:               "pending",
-		PlategaTransactionID: &resp.TransactionID,
-		RedirectURL:          &resp.Redirect,
-		ExpiresAt:            expiresAt,
+	payment.ProviderPaymentID, payment.RedirectURL, payment.ExpiresAt = &resp.ID, &resp.ConfirmationURL, resp.ExpiresAt
+	if providerName == paymentprovider.Platega {
+		payment.PlategaTransactionID = &resp.ID
 	}
-
-	id, err := b.db.CreatePayment(payment)
-	if err != nil {
-		return nil, "", fmt.Errorf("save payment: %w", err)
-	}
-	payment.ID = id
-
-	return payment, resp.Redirect, nil
+	return payment, resp.ConfirmationURL, nil
 }
 
 // checkPaymentStatus ручная проверка статуса платежа через Platega API.
@@ -583,16 +642,24 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	if pending == nil {
 		return "not_found", nil
 	}
-	if pending.PlategaTransactionID == nil {
+	if pending.ProviderPaymentID == nil {
 		return "pending", nil
 	}
-
-	status, err := b.platega.GetTransactionStatus(*pending.PlategaTransactionID)
+	provider, err := b.paymentProvider(pending.Provider)
+	if err != nil {
+		return "", err
+	}
+	status, err := provider.GetPayment(*pending.ProviderPaymentID)
 	if err != nil {
 		return "", fmt.Errorf("check status: %w", err)
 	}
+	if pending.Provider == paymentprovider.YooKassa {
+		if err := b.verifyYooKassaPayment(pending, status); err != nil {
+			return "", err
+		}
+	}
 
-	if status.Status == platega.StatusConfirmed {
+	if status.Status == paymentprovider.StatusSucceeded {
 		// Платёж подтверждён — синхронизируем его без отдельного push-уведомления.
 		handler := &paymentCallbackHandler{bot: b}
 		if err := handler.handleConfirmedSilently(pending); err != nil {
@@ -610,38 +677,53 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 		return updated.Status, nil
 	}
 
-	if status.Status == platega.StatusManualConfirmed {
-		handler := &paymentCallbackHandler{bot: b}
-		if err := handler.handleConfirmedSilently(pending); err != nil {
-			return "", err
-		}
-
-		updated, err := b.db.GetPaymentByID(pending.ID)
-		if err != nil {
-			return "", fmt.Errorf("reload payment after manual confirm: %w", err)
-		}
-		if updated == nil {
-			return "confirmed", nil
-		}
-
-		return updated.Status, nil
-	}
-
-	if status.Status == platega.StatusCanceled {
+	if status.Status == paymentprovider.StatusCanceled {
 		handler := &paymentCallbackHandler{bot: b}
 		if err := handler.handleCanceled(pending); err != nil {
 			return "", err
 		}
-		return platega.StatusCanceled, nil
+		if pending.Provider == paymentprovider.Platega {
+			return platega.StatusCanceled, nil
+		}
+		return "canceled", nil
 	}
 
-	if status.Status == platega.StatusChargebacked {
+	if status.Status == paymentprovider.StatusChargebacked {
 		handler := &paymentCallbackHandler{bot: b}
 		if err := handler.handleChargeback(pending); err != nil {
 			return "", err
 		}
-		return platega.StatusChargebacked, nil
+		if pending.Provider == paymentprovider.Platega {
+			return platega.StatusChargebacked, nil
+		}
+		return "chargebacked", nil
 	}
 
 	return status.Status, nil
+}
+
+func (b *Bot) verifyYooKassaPayment(payment *database.Payment, verified *paymentprovider.Payment) error {
+	if payment.ProviderPaymentID == nil || verified.ID != *payment.ProviderPaymentID || verified.Amount != payment.Amount || verified.Currency != "RUB" || verified.RecipientID != b.config.YooKassaShopID {
+		return fmt.Errorf("YooKassa payment verification mismatch: local_payment_id=%d", payment.ID)
+	}
+	if verified.PaymentMethod != "" {
+		if err := b.db.UpdatePaymentMethod(payment.ID, verified.PaymentMethod); err != nil {
+			return fmt.Errorf("update payment method: %w", err)
+		}
+	}
+	return nil
+}
+
+func (b *Bot) paymentProvider(name string) (paymentprovider.Provider, error) {
+	switch name {
+	case paymentprovider.Platega:
+		if b.platega != nil {
+			return platega.NewProvider(b.platega), nil
+		}
+	case paymentprovider.YooKassa:
+		if b.yookassa != nil {
+			return b.yookassa, nil
+		}
+	}
+	return nil, fmt.Errorf("payment provider %q is not configured", name)
 }

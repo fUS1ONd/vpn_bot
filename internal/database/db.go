@@ -131,6 +131,10 @@ func migrate(conn *sql.DB) error {
 			payment_method TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'pending',
 			platega_transaction_id TEXT UNIQUE,
+			provider TEXT NOT NULL DEFAULT 'platega',
+			provider_payment_id TEXT,
+			provider_request_key TEXT,
+			provider_fee_percent INTEGER,
 			redirect_url TEXT,
 			expires_at TIMESTAMP,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -187,11 +191,24 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE invites ADD COLUMN subscription_price INTEGER`,
 		// Миграция: неизменяемый исторический флаг trial-инвайта
 		`ALTER TABLE invites ADD COLUMN is_trial INTEGER NOT NULL DEFAULT 0`,
+		// Нейтральные поля провайдера; старый platega_transaction_id остаётся для rollback-совместимости.
+		`ALTER TABLE payments ADD COLUMN provider TEXT NOT NULL DEFAULT 'platega'`,
+		`ALTER TABLE payments ADD COLUMN provider_payment_id TEXT`,
+		`ALTER TABLE payments ADD COLUMN provider_request_key TEXT`,
+		`ALTER TABLE payments ADD COLUMN provider_fee_percent INTEGER`,
 	}
-
 	for _, m := range alterMigrations {
 		// Игнорируем ошибки ALTER TABLE - колонка может уже существовать
 		conn.Exec(m)
+	}
+	if _, err := conn.Exec(`UPDATE payments SET provider = 'platega' WHERE provider IS NULL OR provider = ''`); err != nil {
+		return fmt.Errorf("failed to backfill payments.provider: %w", err)
+	}
+	if _, err := conn.Exec(`UPDATE payments SET provider_payment_id = platega_transaction_id WHERE provider_payment_id IS NULL AND platega_transaction_id IS NOT NULL`); err != nil {
+		return fmt.Errorf("failed to backfill payments.provider_payment_id: %w", err)
+	}
+	if _, err := conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_provider_payment_id ON payments(provider, provider_payment_id) WHERE provider_payment_id IS NOT NULL AND provider_payment_id != ''`); err != nil {
+		return fmt.Errorf("failed to create provider payment index: %w", err)
 	}
 
 	// Бэкофилл для старых записей: всё, что изначально было trial (expire_days IS NOT NULL),

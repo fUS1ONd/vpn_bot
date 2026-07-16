@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"os"
 	"testing"
 	"time"
@@ -8,6 +9,26 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPaymentProviderMigrationBackfillsLegacyPlategaRows(t *testing.T) {
+	path := t.TempDir() + "/legacy.db"
+	legacy, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = legacy.Exec(`CREATE TABLE payments (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, moderator_id INTEGER, amount INTEGER NOT NULL, payment_method TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', platega_transaction_id TEXT UNIQUE, redirect_url TEXT, expires_at TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, confirmed_at TIMESTAMP)`)
+	require.NoError(t, err)
+	_, err = legacy.Exec(`INSERT INTO payments (telegram_id, amount, payment_method, status, platega_transaction_id) VALUES (1, 500, 'crypto', 'pending', 'legacy-tx')`)
+	require.NoError(t, err)
+	require.NoError(t, legacy.Close())
+	db, err := New(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	p, err := db.GetPaymentByPlategaTxID("legacy-tx")
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	require.Equal(t, "platega", p.Provider)
+	require.NotNil(t, p.ProviderPaymentID)
+	require.Equal(t, "legacy-tx", *p.ProviderPaymentID)
+}
 
 func TestCreatePayment(t *testing.T) {
 	dbFile := "test_payments.db"
@@ -41,6 +62,19 @@ func TestCreatePayment(t *testing.T) {
 	assert.Nil(t, got.ModeratorID)
 	assert.Nil(t, got.PlategaTransactionID)
 	assert.Nil(t, got.ConfirmedAt)
+}
+
+func TestCreatePaymentPreservesProviderFeeSnapshot(t *testing.T) {
+	db, err := New(t.TempDir() + "/payments.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	fee := 3
+	id, err := db.CreatePayment(&Payment{TelegramID: 1, Amount: 500, PaymentMethod: "yookassa", Status: "pending", Provider: "yookassa", ProviderFeePercent: &fee})
+	require.NoError(t, err)
+	p, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, p.ProviderFeePercent)
+	assert.Equal(t, 3, *p.ProviderFeePercent)
 }
 
 func TestGetPendingPayment(t *testing.T) {
