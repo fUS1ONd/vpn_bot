@@ -1,9 +1,15 @@
 package monitoring
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
 
 func TestParseBandwidthTag(t *testing.T) {
@@ -58,5 +64,58 @@ func TestWriteFileAtomicallyReplacesContentAndCleansTempFile(t *testing.T) {
 
 	if _, err := os.Stat(targetFile + ".tmp"); !os.IsNotExist(err) {
 		t.Fatalf("временный файл не должен оставаться после успешной записи")
+	}
+}
+
+func TestSyncNodesUsesTechnicalNodeNameWithoutHostsLookup(t *testing.T) {
+	var hostsRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/nodes":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"response": []map[string]any{{
+					"uuid":        "node-uuid",
+					"name":        "veesp-se",
+					"address":     "203.0.113.10",
+					"isDisabled":  false,
+					"countryCode": "SE",
+					"tags":        []string{"BW:1000"},
+				}},
+			})
+		case "/api/hosts":
+			hostsRequests.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"response": []map[string]any{{
+					"remark": "🇫🇮 Финляндия, Лемпяаля #2 tcp",
+					"nodes":  []string{"node-uuid"},
+				}},
+			})
+		default:
+			http.Error(w, "unexpected API request: "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	count, err := SyncNodes(remnawave.NewClient(server.URL, "token", nil), dir)
+	if err != nil {
+		t.Fatalf("SyncNodes returned error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("SyncNodes count = %d, want 1", count)
+	}
+
+	targets, err := ReadTargets(dir)
+	if err != nil {
+		t.Fatalf("ReadTargets returned error: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("targets count = %d, want 1", len(targets))
+	}
+	if got := targets[0].Labels["hostname"]; got != "veesp-se" {
+		t.Fatalf("hostname label = %q, want technical node name %q", got, "veesp-se")
+	}
+	if got := hostsRequests.Load(); got != 0 {
+		t.Fatalf("hosts API requests = %d, want 0", got)
 	}
 }

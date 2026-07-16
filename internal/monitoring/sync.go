@@ -47,19 +47,6 @@ func SyncNodes(client *remnawave.Client, sdConfigsPath string) (int, error) {
 		return 0, fmt.Errorf("не удалось получить список нод: %w", err)
 	}
 
-	// Получаем хосты для маппинга node UUID → remark (имя видимое пользователям)
-	nodeDisplayName := make(map[string]string)
-	hosts, err := client.GetAllHosts()
-	if err != nil {
-		slog.Warn("Не удалось получить хосты, используем имена нод", "error", err)
-	} else {
-		for _, host := range hosts {
-			for _, nodeUUID := range host.Nodes {
-				nodeDisplayName[nodeUUID] = host.Remark
-			}
-		}
-	}
-
 	var targets []Target
 	for _, node := range nodes {
 		// Пропускаем отключённые ноды
@@ -69,16 +56,13 @@ func SyncNodes(client *remnawave.Client, sdConfigsPath string) (int, error) {
 
 		bw := ParseBandwidthTag(node.Tags)
 
-		// Берём имя хоста (видимое пользователям), иначе имя ноды
-		hostname := node.Name
-		if name, ok := nodeDisplayName[node.UUID]; ok {
-			hostname = name
-		}
-
 		target := Target{
 			Targets: []string{fmt.Sprintf("%s:%d", node.Address, NodeExporterPort)},
 			Labels: map[string]string{
-				"hostname":     hostname,
+				// Используем техническое имя ноды из панели. Host может
+				// содержать несколько нод, а нода — входить в несколько Host,
+				// поэтому Host.remark не даёт однозначного имени для мониторинга.
+				"hostname":     node.Name,
 				"country":      node.CountryCode,
 				"bandwidth_mb": fmt.Sprintf("%d", bw),
 				"node_uuid":    node.UUID,
