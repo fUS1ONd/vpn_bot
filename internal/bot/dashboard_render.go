@@ -22,17 +22,37 @@ func renderLoadBar(percent float64) string {
 	return "[" + strings.Repeat("▓", filled) + strings.Repeat("░", barLen-filled) + "]"
 }
 
+// countryFlagEmoji возвращает флаг ISO 3166-1 alpha-2 страны. Некорректный
+// или отсутствующий код не влияет на отображение имени ноды.
+func countryFlagEmoji(countryCode string) string {
+	code := strings.ToUpper(strings.TrimSpace(countryCode))
+	if len(code) != 2 || code[0] < 'A' || code[0] > 'Z' || code[1] < 'A' || code[1] > 'Z' {
+		return ""
+	}
+
+	return string(rune(0x1F1E6)+rune(code[0]-'A')) + string(rune(0x1F1E6)+rune(code[1]-'A'))
+}
+
+func dashboardNodeName(stats monitoring.NodeStats) string {
+	if flag := countryFlagEmoji(stats.Country); flag != "" {
+		return flag + " " + stats.Hostname
+	}
+	return stats.Hostname
+}
+
 // renderNodeBlock генерирует текстовый блок одной ноды
 func renderNodeBlock(stats monitoring.NodeStats) string {
+	name := dashboardNodeName(stats)
+
 	// Нода offline
 	if !stats.IsUp {
-		return fmt.Sprintf("<b>%s</b> ⚫ Оффлайн", stats.Hostname)
+		return fmt.Sprintf("<b>%s</b> ⚫ Оффлайн", name)
 	}
 
 	var b strings.Builder
 
-	// Заголовок (имя из remark хоста, флаги уже включены в имя)
-	fmt.Fprintf(&b, "<b>%s</b>\n", stats.Hostname)
+	// Заголовок: техническое имя ноды и флаг из countryCode панели.
+	fmt.Fprintf(&b, "<b>%s</b>\n", name)
 
 	// Load bar: [▓▓░░░░░░░░] 18% 🟢
 	bar := renderLoadBar(stats.LoadIndex)
