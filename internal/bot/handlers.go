@@ -865,8 +865,9 @@ func (b *Bot) userKeyboard(telegramID int64) *tele.ReplyMarkup {
 		return UserMenuKeyboardDynamic("", false, isMod)
 	}
 
-	// Нет цены — кнопка оплаты скрыта
-	if user.SubscriptionPrice == nil {
+	// Нет цены — кнопка оплаты скрыта. Для администратора тестовая цена из
+	// окружения заменяет персональную цену и не меняет запись пользователя.
+	if price, ok := b.paymentPrice(telegramID, user); !ok || price <= 0 {
 		return UserMenuKeyboardDynamic("", false, isMod)
 	}
 

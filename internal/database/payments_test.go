@@ -368,14 +368,28 @@ func TestGetConfirmedPaymentsByMonth(t *testing.T) {
 	_, err = db.Conn().Exec(`UPDATE payments SET status = 'chargebacked', confirmed_at = ? WHERE id = ?`, targetChargebackedConfirmedAt, chargebackedPaymentID)
 	require.NoError(t, err)
 
+	testPaymentID, err := db.CreatePayment(&Payment{
+		TelegramID:    205,
+		Amount:        10,
+		PaymentMethod: "crypto",
+		Status:        "pending",
+		IsTest:        true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.ConfirmPayment(testPaymentID))
+	_, err = db.Conn().Exec(`UPDATE payments SET confirmed_at = ? WHERE id = ?`, targetMonth.Add(13*24*time.Hour), testPaymentID)
+	require.NoError(t, err)
+
 	payments, err := db.GetConfirmedPaymentsByMonth(2026, 3)
 	require.NoError(t, err)
-	require.Len(t, payments, 3, "chargebacked платежи не должны попадать в выручку")
+	require.Len(t, payments, 3, "chargebacked и тестовые платежи не должны попадать в выручку")
 
 	byTelegramID := make(map[int64]MonthlyConfirmedPayment, len(payments))
 	for _, payment := range payments {
 		byTelegramID[payment.TelegramID] = payment
 	}
+	_, ok := byTelegramID[205]
+	assert.False(t, ok, "тестовый платёж не должен попадать в выручку")
 
 	adminPayment, ok := byTelegramID[200]
 	require.True(t, ok)

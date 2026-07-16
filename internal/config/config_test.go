@@ -36,6 +36,7 @@ func TestLoadPlategaConfig(t *testing.T) {
 		t.Setenv("PLATEGA_SECRET", "")
 		t.Setenv("PLATEGA_CALLBACK_URL", "")
 		t.Setenv("MIN_SUBSCRIPTION_PRICE", "")
+		t.Setenv("ADMIN_TEST_PAYMENT_PRICE", "")
 		t.Setenv("TRIAL_TRAFFIC_LIMIT_GB", "")
 		t.Setenv("PLATEGA_FEE_SBP", "")
 		t.Setenv("PLATEGA_FEE_CARD", "")
@@ -48,6 +49,7 @@ func TestLoadPlategaConfig(t *testing.T) {
 		require.Equal(t, "", cfg.PlategaSecret)
 		require.Equal(t, "", cfg.PlategaCallbackURL)
 		require.Equal(t, 400, cfg.MinSubscriptionPrice)
+		require.Zero(t, cfg.AdminTestPaymentPrice)
 		require.Equal(t, 1, cfg.TrialTrafficLimitGB)
 		require.Equal(t, 11, cfg.PlategaFeeSBP)
 		require.Equal(t, 12, cfg.PlategaFeeCard)
@@ -60,6 +62,7 @@ func TestLoadPlategaConfig(t *testing.T) {
 		t.Setenv("PLATEGA_SECRET", "secret-abc")
 		t.Setenv("PLATEGA_CALLBACK_URL", "https://example.com/platega/callback")
 		t.Setenv("MIN_SUBSCRIPTION_PRICE", "500")
+		t.Setenv("ADMIN_TEST_PAYMENT_PRICE", "10")
 		t.Setenv("PLATEGA_FEE_SBP", "9")
 
 		cfg, err := Load()
@@ -68,8 +71,22 @@ func TestLoadPlategaConfig(t *testing.T) {
 		require.Equal(t, "secret-abc", cfg.PlategaSecret)
 		require.Equal(t, "https://example.com/platega/callback", cfg.PlategaCallbackURL)
 		require.Equal(t, 500, cfg.MinSubscriptionPrice)
+		require.Equal(t, 10, cfg.AdminTestPaymentPrice)
 		require.Equal(t, 9, cfg.PlategaFeeSBP)
 	})
+}
+
+func TestLoadAdminTestPaymentPriceDisablesInvalidValues(t *testing.T) {
+	for _, value := range []string{"0", "-10", "not-a-number"} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("ADMIN_TEST_PAYMENT_PRICE", value)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			require.Zero(t, cfg.AdminTestPaymentPrice)
+		})
+	}
 }
 
 func TestLoadYooKassaConfig(t *testing.T) {

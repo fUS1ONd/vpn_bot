@@ -196,11 +196,18 @@ func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Paym
 	h.bot.userStates.DeleteIfOneOf(payment.TelegramID, StateWaitPaymentMethod, StateWaitPaymentResult)
 
 	if notifyUser {
-		_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, h.bot.paymentActivatedMessage(payment.TelegramID), h.bot.userKeyboard(payment.TelegramID))
+		_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, h.bot.paymentConfirmationMessage(payment), h.bot.userKeyboard(payment.TelegramID))
 	}
 
 	// Очищаем уведомления (пользователь мог быть в grace period)
 	h.bot.db.ClearNotifications(payment.TelegramID)
+}
+
+func (b *Bot) paymentConfirmationMessage(payment *database.Payment) string {
+	if payment.IsTest {
+		return "✅ Платёжная система работает."
+	}
+	return b.paymentActivatedMessage(payment.TelegramID)
 }
 
 func (b *Bot) paymentActivationRetryDelays() []time.Duration {
@@ -340,6 +347,12 @@ func (b *Bot) retryConfirmedPaymentActivation(paymentID int64, source string) bo
 
 // activateSubscription продлевает подписку в Remnawave
 func (h *paymentCallbackHandler) activateSubscription(payment *database.Payment) error {
+	// Тестовый платёж проверяет кассу и callback, но не должен менять доступ
+	// администратора: в частности, заменять бессрочный expireAt на месячный.
+	if payment.IsTest {
+		return nil
+	}
+
 	user, err := h.bot.db.GetUserByTelegramID(payment.TelegramID)
 	if err != nil || user == nil {
 		return fmt.Errorf("user not found: telegram_id=%d", payment.TelegramID)
@@ -358,7 +371,7 @@ func (h *paymentCallbackHandler) activateSubscription(payment *database.Payment)
 
 // createEarningRecord создаёт запись начисления модератору
 func (h *paymentCallbackHandler) createEarningRecord(payment *database.Payment) {
-	if payment.ModeratorID == nil {
+	if payment.IsTest || payment.ModeratorID == nil {
 		return // Админский пользователь — без начислений
 	}
 
@@ -464,6 +477,13 @@ func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) err
 		// Уже обработан другим параллельным запросом
 		return nil
 	}
+	if payment.IsTest {
+		h.bot.sendAdminAlert(fmt.Sprintf(
+			"⚠️ Chargeback тестового платежа #%d на %d руб. Учётная запись и подписка не изменены.",
+			payment.ID, payment.Amount,
+		))
+		return nil
+	}
 
 	// Банём пользователя — chargeback = мошенничество, повторная регистрация запрещена.
 	// Если BanUser не сработает — возвращаем ошибку, чтобы Platega retry-ла callback.
@@ -519,11 +539,10 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 		return nil, "", fmt.Errorf("user not found")
 	}
 
-	if user.SubscriptionPrice == nil {
+	price, ok := b.paymentPrice(telegramID, user)
+	if !ok {
 		return nil, "", fmt.Errorf("subscription price not set")
 	}
-
-	price := *user.SubscriptionPrice
 	if price <= 0 {
 		return nil, "", fmt.Errorf("некорректная сумма платежа: %d", price)
 	}
@@ -580,7 +599,12 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 
 	if payment == nil {
 		// Сначала создаём локальную запись: её ID передаётся в metadata ЮKassa.
-		payment = &database.Payment{TelegramID: telegramID, ModeratorID: user.ModeratorID, Amount: price, PaymentMethod: paymentMethodStr, Status: "pending", Provider: providerName}
+		isTest := telegramID == b.config.AdminID && b.config.AdminTestPaymentPrice > 0
+		moderatorID := user.ModeratorID
+		if isTest {
+			moderatorID = nil
+		}
+		payment = &database.Payment{TelegramID: telegramID, ModeratorID: moderatorID, Amount: price, PaymentMethod: paymentMethodStr, Status: "pending", Provider: providerName, IsTest: isTest}
 		feeBasisPoints := b.getPaymentFeeBasisPoints(providerName, paymentMethodStr)
 		payment.ProviderFeeBasisPoints = &feeBasisPoints
 		if providerName == paymentprovider.YooKassa {
@@ -620,6 +644,20 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 		payment.PlategaTransactionID = &resp.ID
 	}
 	return payment, resp.ConfirmationURL, nil
+}
+
+// paymentPrice возвращает сумму для нового платежа. Тестовая цена администратора
+// намеренно имеет приоритет над ценой пользователя, чтобы тест не создавал платёж
+// по клиентскому тарифу. Ноль в конфигурации означает, что тестовая оплата
+// отключена; пользовательская нулевая цена возвращается для её валидации.
+func (b *Bot) paymentPrice(telegramID int64, user *database.User) (int, bool) {
+	if b.config != nil && telegramID == b.config.AdminID && b.config.AdminTestPaymentPrice > 0 {
+		return b.config.AdminTestPaymentPrice, true
+	}
+	if user == nil || user.SubscriptionPrice == nil {
+		return 0, false
+	}
+	return *user.SubscriptionPrice, true
 }
 
 // checkPaymentStatus ручная проверка статуса платежа через Platega API.

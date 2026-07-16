@@ -38,8 +38,8 @@ func (b *Bot) handlePayButton(c tele.Context) error {
 		return c.Send(MsgNotRegistered, &tele.SendOptions{ParseMode: tele.ModeHTML})
 	}
 
-	// Проверка наличия цены
-	if user.SubscriptionPrice == nil {
+	price, ok := b.paymentPrice(telegramID, user)
+	if !ok || price <= 0 {
 		return c.Send("❌ Цена подписки не установлена. Обратитесь к администратору.", &tele.SendOptions{
 			ReplyMarkup: b.userKeyboard(telegramID),
 		})
@@ -61,7 +61,7 @@ func (b *Bot) handlePayButton(c tele.Context) error {
 
 	// Показываем экран выбора способа оплаты
 	b.userStates.Set(telegramID, StateWaitPaymentMethod)
-	msg := fmt.Sprintf("💳 <b>Подписка на 1 месяц — %d руб.</b>\n\nВыберите способ оплаты:", *user.SubscriptionPrice)
+	msg := fmt.Sprintf("💳 <b>Подписка на 1 месяц — %d руб.</b>\n\nВыберите способ оплаты:", price)
 	return c.Send(msg, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: b.paymentMethodKeyboard(),

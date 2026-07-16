@@ -135,6 +135,7 @@ func migrate(conn *sql.DB) error {
 			provider_payment_id TEXT,
 			provider_request_key TEXT,
 			provider_fee_percent INTEGER,
+			is_test INTEGER NOT NULL DEFAULT 0,
 			redirect_url TEXT,
 			expires_at TIMESTAMP,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -196,6 +197,8 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE payments ADD COLUMN provider_payment_id TEXT`,
 		`ALTER TABLE payments ADD COLUMN provider_request_key TEXT`,
 		`ALTER TABLE payments ADD COLUMN provider_fee_percent INTEGER`,
+		// Тестовые платежи администратора не влияют на доступ и финансовые отчёты.
+		`ALTER TABLE payments ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, m := range alterMigrations {
 		// Игнорируем ошибки ALTER TABLE - колонка может уже существовать

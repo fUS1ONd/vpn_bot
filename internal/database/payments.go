@@ -18,6 +18,7 @@ type Payment struct {
 	ProviderPaymentID      *string
 	ProviderRequestKey     *string
 	ProviderFeeBasisPoints *int // сотые доли процента, например 350 = 3.5%
+	IsTest                 bool
 	RedirectURL            *string
 	ExpiresAt              *time.Time
 	CreatedAt              time.Time
@@ -39,9 +40,9 @@ func (db *DB) CreatePayment(p *Payment) (int64, error) {
 		p.ProviderPaymentID = p.PlategaTransactionID
 	}
 	res, err := db.conn.Exec(
-		`INSERT INTO payments (telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, redirect_url, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.TelegramID, p.ModeratorID, p.Amount, p.PaymentMethod, p.Status, p.PlategaTransactionID, p.Provider, p.ProviderPaymentID, p.ProviderRequestKey, p.ProviderFeeBasisPoints, p.RedirectURL, p.ExpiresAt,
+		`INSERT INTO payments (telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, redirect_url, expires_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.TelegramID, p.ModeratorID, p.Amount, p.PaymentMethod, p.Status, p.PlategaTransactionID, p.Provider, p.ProviderPaymentID, p.ProviderRequestKey, p.ProviderFeeBasisPoints, p.IsTest, p.RedirectURL, p.ExpiresAt,
 	)
 	if err != nil {
 		return 0, err
@@ -56,13 +57,14 @@ func (db *DB) GetPaymentByID(id int64) (*Payment, error) {
 	var txID sql.NullString
 	var redirectURL, providerPaymentID, providerRequestKey sql.NullString
 	var providerFeePercent sql.NullInt64
+	var isTest bool
 	var expiresAt sql.NullTime
 	var confirmedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, redirect_url, expires_at, created_at, confirmed_at
+		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, redirect_url, expires_at, created_at, confirmed_at
 		 FROM payments WHERE id = ?`, id,
-	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
+	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &isTest, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -87,6 +89,7 @@ func (db *DB) GetPaymentByID(id int64) (*Payment, error) {
 		v := int(providerFeePercent.Int64)
 		p.ProviderFeeBasisPoints = &v
 	}
+	p.IsTest = isTest
 	if redirectURL.Valid {
 		p.RedirectURL = &redirectURL.String
 	}
@@ -107,14 +110,15 @@ func (db *DB) GetPendingPayment(telegramID int64) (*Payment, error) {
 	var txID sql.NullString
 	var redirectURL, providerPaymentID, providerRequestKey sql.NullString
 	var providerFeePercent sql.NullInt64
+	var isTest bool
 	var expiresAt sql.NullTime
 	var confirmedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, redirect_url, expires_at, created_at, confirmed_at
+		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, redirect_url, expires_at, created_at, confirmed_at
 		 FROM payments WHERE telegram_id = ? AND status = 'pending' AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
 		 ORDER BY created_at DESC LIMIT 1`, telegramID,
-	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
+	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &isTest, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -139,6 +143,7 @@ func (db *DB) GetPendingPayment(telegramID int64) (*Payment, error) {
 		v := int(providerFeePercent.Int64)
 		p.ProviderFeeBasisPoints = &v
 	}
+	p.IsTest = isTest
 	if redirectURL.Valid {
 		p.RedirectURL = &redirectURL.String
 	}
@@ -230,7 +235,7 @@ func (db *DB) ExpireOldPendingPayments() (int64, error) {
 // GetConfirmedNotActivated возвращает платежи со статусом confirmed_not_activated
 func (db *DB) GetConfirmedNotActivated() ([]Payment, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, redirect_url, expires_at, created_at, confirmed_at
+		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, is_test, redirect_url, expires_at, created_at, confirmed_at
 		 FROM payments WHERE status = 'confirmed_not_activated'`,
 	)
 	if err != nil {
@@ -246,8 +251,9 @@ func (db *DB) GetConfirmedNotActivated() ([]Payment, error) {
 		var redirectURL, providerPaymentID sql.NullString
 		var expiresAt sql.NullTime
 		var confirmedAt sql.NullTime
+		var isTest bool
 
-		if err := rows.Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &isTest, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt); err != nil {
 			return nil, err
 		}
 
@@ -269,6 +275,7 @@ func (db *DB) GetConfirmedNotActivated() ([]Payment, error) {
 		if confirmedAt.Valid {
 			p.ConfirmedAt = &confirmedAt.Time
 		}
+		p.IsTest = isTest
 
 		payments = append(payments, p)
 	}
@@ -281,7 +288,7 @@ func (db *DB) GetConfirmedNotActivated() ([]Payment, error) {
 func (db *DB) HasConfirmedPayment(telegramID int64) (bool, error) {
 	var exists bool
 	err := db.conn.QueryRow(
-		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND status IN ('confirmed', 'confirmed_not_activated'))`, telegramID,
+		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND status IN ('confirmed', 'confirmed_not_activated') AND is_test = 0)`, telegramID,
 	).Scan(&exists)
 	return exists, err
 }
@@ -293,7 +300,7 @@ func (db *DB) HasConfirmedPayment(telegramID int64) (bool, error) {
 func (db *DB) HasConfirmedPaymentSince(telegramID int64, since time.Time) (bool, error) {
 	var exists bool
 	err := db.conn.QueryRow(
-		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND status IN ('confirmed', 'confirmed_not_activated') AND confirmed_at >= ?)`,
+		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND status IN ('confirmed', 'confirmed_not_activated') AND is_test = 0 AND confirmed_at >= ?)`,
 		telegramID, since,
 	).Scan(&exists)
 	return exists, err
@@ -316,7 +323,7 @@ func (db *DB) GetConfirmedPaymentsByMonth(year int, month int) ([]MonthlyConfirm
 		     GROUP BY payment_id
 		 ) me ON me.payment_id = p.id
 		 WHERE p.confirmed_at >= ? AND p.confirmed_at < ?
-		   AND p.status NOT IN ('chargebacked')
+		   AND p.status NOT IN ('chargebacked') AND p.is_test = 0
 		 ORDER BY p.confirmed_at ASC, p.id ASC`,
 		start, end,
 	)
@@ -369,7 +376,7 @@ func (db *DB) CountConfirmedPaymentsByMonth(year int, month int) (int, error) {
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	err := db.conn.QueryRow(
-		`SELECT COUNT(*) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ? AND status NOT IN ('chargebacked')`,
+		`SELECT COUNT(*) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ? AND status NOT IN ('chargebacked') AND is_test = 0`,
 		start, end,
 	).Scan(&count)
 	return count, err
@@ -381,7 +388,7 @@ func (db *DB) SumConfirmedPaymentsByMonth(year int, month int) (int, error) {
 	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 	err := db.conn.QueryRow(
-		`SELECT COALESCE(SUM(amount), 0) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ? AND status NOT IN ('chargebacked')`,
+		`SELECT COALESCE(SUM(amount), 0) FROM payments WHERE confirmed_at >= ? AND confirmed_at < ? AND status NOT IN ('chargebacked') AND is_test = 0`,
 		start, end,
 	).Scan(&sum)
 	return sum, err
@@ -409,7 +416,7 @@ func (db *DB) CountFirstPaymentsByMonth(year int, month int) (int, error) {
 		`SELECT COUNT(*) FROM (
 		    SELECT telegram_id, MIN(confirmed_at) as first_payment
 		    FROM payments
-		    WHERE confirmed_at IS NOT NULL AND status NOT IN ('chargebacked')
+		    WHERE confirmed_at IS NOT NULL AND status NOT IN ('chargebacked') AND is_test = 0
 		    GROUP BY telegram_id
 		    HAVING first_payment >= ? AND first_payment < ?
 		)`, start, end,
@@ -423,7 +430,7 @@ func (db *DB) CountPayingSubscribersByModerator(moderatorID int64) (int, error) 
 	err := db.conn.QueryRow(
 		`SELECT COUNT(DISTINCT u.telegram_id) FROM users u
 		 JOIN payments p ON p.telegram_id = u.telegram_id
-		 WHERE u.moderator_id = ? AND p.status = 'confirmed'
+		 WHERE u.moderator_id = ? AND p.status = 'confirmed' AND p.is_test = 0
 		 AND p.confirmed_at >= datetime('now', '-60 days')`,
 		moderatorID,
 	).Scan(&count)

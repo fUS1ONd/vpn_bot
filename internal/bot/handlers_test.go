@@ -302,6 +302,51 @@ func TestUserKeyboardHidesPaymentButtonWithoutPlatega(t *testing.T) {
 	assert.NotContains(t, buttons, BtnRenew)
 }
 
+func TestAdminTestPaymentPriceShowsPaymentButtonAndUsesConfiguredAmount(t *testing.T) {
+	b, db := setupTestBot(t)
+	adminID := b.config.AdminID
+	_, err := db.CreateUser(adminID, "admin", "Admin", "uuid-admin", nil, nil)
+	require.NoError(t, err)
+
+	b.config.AdminTestPaymentPrice = 10
+	b.platega = platega.NewClient("merchant", "secret")
+	b.remnawave.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, assert.AnError
+	})})
+
+	kb := b.userKeyboard(adminID)
+	var buttons []string
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+	assert.Contains(t, buttons, BtnPay)
+
+	ctx := &MockContext{sender: &tele.User{ID: adminID}, message: &tele.Message{}}
+	require.NoError(t, b.handlePayButton(ctx))
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, msg, "10 руб")
+	assert.Equal(t, StateWaitPaymentMethod, b.userStates.Get(adminID))
+}
+
+func TestAdminTestPaymentPriceDisabledHidesPaymentButton(t *testing.T) {
+	b, db := setupTestBot(t)
+	adminID := b.config.AdminID
+	_, err := db.CreateUser(adminID, "admin", "Admin", "uuid-admin", nil, nil)
+	require.NoError(t, err)
+	b.platega = platega.NewClient("merchant", "secret")
+
+	kb := b.userKeyboard(adminID)
+	for _, row := range kb.ReplyKeyboard {
+		for _, btn := range row {
+			assert.NotEqual(t, BtnPay, btn.Text)
+			assert.NotEqual(t, BtnRenew, btn.Text)
+		}
+	}
+}
+
 func TestUserKeyboardShowsRenewForLegacyPaidMigratedUser(t *testing.T) {
 	b, db := setupTestBot(t)
 

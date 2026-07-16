@@ -45,6 +45,7 @@ type Config struct {
 	PlategaSecret          string
 	PlategaCallbackURL     string // Полный URL для callback (https://domain.com/platega/callback)
 	MinSubscriptionPrice   int    // Минимальная цена подписки (руб), по умолчанию 400
+	AdminTestPaymentPrice  int    // Тестовая цена для ADMIN_ID (руб); 0 выключает тестовую оплату
 	TrialTrafficLimitGB    int    // Лимит трафика триала (ГБ), по умолчанию 1
 	PlategaFeeSBP          int    // Комиссия Platega СБП (%), по умолчанию 11
 	PlategaFeeCard         int    // Комиссия Platega карты (%), по умолчанию 12
@@ -77,6 +78,7 @@ func Load() (*Config, error) {
 		PlategaSecret:          os.Getenv("PLATEGA_SECRET"),
 		PlategaCallbackURL:     os.Getenv("PLATEGA_CALLBACK_URL"),
 		MinSubscriptionPrice:   getEnvOrDefaultInt("MIN_SUBSCRIPTION_PRICE", 400),
+		AdminTestPaymentPrice:  getOptionalPositiveInt("ADMIN_TEST_PAYMENT_PRICE"),
 		TrialTrafficLimitGB:    getEnvOrDefaultInt("TRIAL_TRAFFIC_LIMIT_GB", 1),
 		PlategaFeeSBP:          getEnvOrDefaultInt("PLATEGA_FEE_SBP", 11),
 		PlategaFeeCard:         getEnvOrDefaultInt("PLATEGA_FEE_CARD", 12),
@@ -142,6 +144,16 @@ func getEnvOrDefaultInt(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+// getOptionalPositiveInt читает необязательную положительную цену. Нулевое,
+// отрицательное и некорректное значения выключают соответствующую функцию.
+func getOptionalPositiveInt(key string) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || value <= 0 {
+		return 0
+	}
+	return value
 }
 
 // getEnvOrDefault возвращает значение переменной окружения или значение по умолчанию

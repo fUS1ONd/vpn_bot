@@ -34,6 +34,7 @@ make logs
 | `VICTORIA_METRICS_URL`         | —            | URL VictoriaMetrics (дефолт: `http://victoriametrics:8428`) |
 | `CALLBACK_PORT`                | —            | Порт встроенного callback-сервера Platega (дефолт: `8080`)  |
 | `MIN_SUBSCRIPTION_PRICE`       | —            | Минимальная цена подписки для модераторов (дефолт: `400`)   |
+| `ADMIN_TEST_PAYMENT_PRICE`     | —            | Тестовая цена для оплаты от `ADMIN_ID`; `0` или отсутствие выключает кнопку |
 | `TRIAL_TRAFFIC_LIMIT_GB`       | —            | Лимит трафика для триала в ГБ (дефолт: `1`)                 |
 | `PLATEGA_MERCHANT_ID`          | —            | Merchant ID Platega для пользовательской оплаты             |
 | `PLATEGA_SECRET`               | —            | Секретный ключ Platega                                      |

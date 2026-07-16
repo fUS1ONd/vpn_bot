@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,96 @@ import (
 	"github.com/stretchr/testify/require"
 	tele "gopkg.in/telebot.v3"
 )
+
+func TestAdminTestPaymentUsesConfiguredPriceAndIsMarked(t *testing.T) {
+	db, err := database.New(t.TempDir() + "/payments.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	const adminID int64 = 99
+	_, err = db.CreateUser(adminID, "admin", "Admin", "uuid-admin", nil, nil)
+	require.NoError(t, err)
+
+	plategaClient := platega.NewClientWithBaseURL("merchant", "secret", "https://platega.test")
+	plategaClient.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/transaction/process", r.URL.Path)
+		var body struct {
+			PaymentDetails struct {
+				Amount int `json:"amount"`
+			} `json:"paymentDetails"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, 10, body.PaymentDetails.Amount)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"transactionId":"test-10","redirect":"https://pay.example/test-10","status":"PENDING","expiresIn":"00:15:00"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})})
+
+	b := &Bot{
+		db:         db,
+		config:     &config.Config{AdminID: adminID, AdminTestPaymentPrice: 10, PlategaCallbackURL: "https://bot.example/callback", YooKassaReturnURL: "https://t.me/testbot"},
+		userStates: newStateMap(),
+		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
+		platega:    plategaClient,
+	}
+	b.remnawave.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, assert.AnError
+	})})
+
+	payment, _, err := b.createPaymentForProvider(adminID, "platega")
+	require.NoError(t, err)
+	assert.Equal(t, 10, payment.Amount)
+	assert.True(t, payment.IsTest)
+	assert.Nil(t, payment.ModeratorID)
+
+	stored, err := db.GetPaymentByID(payment.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, 10, stored.Amount)
+	assert.True(t, stored.IsTest)
+}
+
+func TestAdminTestPaymentCallbackPreservesAccountOnConfirmationAndChargeback(t *testing.T) {
+	db, err := database.New(t.TempDir() + "/payments.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	const adminID int64 = 99
+	_, err = db.CreateUser(adminID, "admin", "Admin", "uuid-admin", nil, nil)
+	require.NoError(t, err)
+	payment := &database.Payment{TelegramID: adminID, Amount: 10, PaymentMethod: "crypto", Status: "pending", IsTest: true}
+	payment.ID, err = db.CreatePayment(payment)
+	require.NoError(t, err)
+
+	b := &Bot{db: db, config: &config.Config{AdminID: adminID}, userStates: newStateMap()}
+	handler := &paymentCallbackHandler{bot: b}
+	require.NoError(t, handler.handleConfirmedSilently(payment))
+
+	stored, err := db.GetPaymentByID(payment.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "confirmed", stored.Status)
+	user, err := db.GetUserByTelegramID(adminID)
+	require.NoError(t, err)
+	assert.NotNil(t, user)
+
+	require.NoError(t, handler.handleChargeback(stored))
+	stored, err = db.GetPaymentByID(payment.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "chargebacked", stored.Status)
+	user, err = db.GetUserByTelegramID(adminID)
+	require.NoError(t, err)
+	assert.NotNil(t, user)
+}
+
+func TestTestPaymentConfirmationMessageDoesNotMentionSubscription(t *testing.T) {
+	message := (&Bot{}).paymentConfirmationMessage(&database.Payment{IsTest: true})
+	assert.Equal(t, "✅ Платёжная система работает.", message)
+	assert.NotContains(t, message, "подписк")
+}
 
 func TestCalculateSharePercent(t *testing.T) {
 	tests := []struct {
