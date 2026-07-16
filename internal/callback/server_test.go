@@ -18,6 +18,13 @@ type mockHandler struct {
 	err     error
 }
 
+type mockYooKassaHandler struct {
+	id  string
+	err error
+}
+
+func (m *mockYooKassaHandler) HandleYooKassaWebhook(id string) error { m.id = id; return m.err }
+
 func (m *mockHandler) HandlePaymentCallback(p platega.CallbackPayload) error {
 	m.called = true
 	m.payload = p
@@ -110,6 +117,21 @@ func TestCallbackHealth(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("ожидали 200, получили %d", w.Code)
+	}
+}
+
+func TestYooKassaWebhookPassesOnlyExternalPaymentID(t *testing.T) {
+	srv := newTestServer(&mockHandler{})
+	h := &mockYooKassaHandler{}
+	srv.SetYooKassaHandler(h)
+	req := httptest.NewRequest(http.MethodPost, "/yookassa/webhook", bytes.NewBufferString(`{"event":"payment.succeeded","object":{"id":"yo-42","status":"succeeded"}}`))
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ожидали 200, получили %d", w.Code)
+	}
+	if h.id != "yo-42" {
+		t.Fatalf("ожидали ID yo-42, получили %q", h.id)
 	}
 }
 

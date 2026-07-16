@@ -41,16 +41,20 @@ type Config struct {
 	RenderAPIKey string // API-ключ для render-сервиса
 
 	// Platega — платёжная система (опционально, отключена если не заданы)
-	PlategaMerchantID    string
-	PlategaSecret        string
-	PlategaCallbackURL   string // Полный URL для callback (https://domain.com/platega/callback)
-	MinSubscriptionPrice int    // Минимальная цена подписки (руб), по умолчанию 400
-	TrialTrafficLimitGB  int    // Лимит трафика триала (ГБ), по умолчанию 1
-	PlategaFeeSBP        int    // Комиссия Platega СБП (%), по умолчанию 11
-	PlategaFeeCard       int    // Комиссия Platega карты (%), по умолчанию 12
-	PlategaFeeCrypto     int    // Комиссия Platega крипта (%), по умолчанию 5
-	PlategaFeeWithdrawal int    // Комиссия вывода (%), по умолчанию 2
-	CallbackPort         int    // Порт для callback-сервера (по умолчанию 8080)
+	PlategaMerchantID      string
+	PlategaSecret          string
+	PlategaCallbackURL     string // Полный URL для callback (https://domain.com/platega/callback)
+	MinSubscriptionPrice   int    // Минимальная цена подписки (руб), по умолчанию 400
+	TrialTrafficLimitGB    int    // Лимит трафика триала (ГБ), по умолчанию 1
+	PlategaFeeSBP          int    // Комиссия Platega СБП (%), по умолчанию 11
+	PlategaFeeCard         int    // Комиссия Platega карты (%), по умолчанию 12
+	PlategaFeeCrypto       int    // Комиссия Platega крипта (%), по умолчанию 5
+	PlategaFeeWithdrawal   int    // Комиссия вывода (%), по умолчанию 2
+	YooKassaShopID         string
+	YooKassaSecretKey      string
+	YooKassaReturnURL      string
+	YooKassaFeeBasisPoints int // Договорная комиссия ЮKassa в сотых долях процента: 3.5% = 350
+	CallbackPort           int // Порт для callback-сервера (по умолчанию 8080)
 }
 
 // Load читает конфигурацию из переменных окружения
@@ -59,29 +63,33 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		BotToken:             os.Getenv("BOT_TOKEN"),
-		RemnawaveURL:         os.Getenv("REMNAWAVE_URL"),
-		RemnawaveAPIToken:    os.Getenv("REMNAWAVE_API_TOKEN"),
-		RemnawaveSquadUUIDs:  getRemnawaveSquadUUIDs(),
-		DBPath:               getEnvOrDefault("DB_PATH", "/app/data/bot.db"),
-		DonateText:           os.Getenv("DONATE_TEXT"),
-		SDConfigsPath:        getEnvOrDefault("SD_CONFIGS_PATH", "/app/sd_configs"),
-		VictoriaMetricsURL:   getEnvOrDefault("VICTORIA_METRICS_URL", "http://victoriametrics:8428"),
-		RenderURL:            os.Getenv("RENDER_URL"),
-		RenderAPIKey:         os.Getenv("RENDER_API_KEY"),
-		PlategaMerchantID:    os.Getenv("PLATEGA_MERCHANT_ID"),
-		PlategaSecret:        os.Getenv("PLATEGA_SECRET"),
-		PlategaCallbackURL:   os.Getenv("PLATEGA_CALLBACK_URL"),
-		MinSubscriptionPrice: getEnvOrDefaultInt("MIN_SUBSCRIPTION_PRICE", 400),
-		TrialTrafficLimitGB:  getEnvOrDefaultInt("TRIAL_TRAFFIC_LIMIT_GB", 1),
-		PlategaFeeSBP:        getEnvOrDefaultInt("PLATEGA_FEE_SBP", 11),
-		PlategaFeeCard:       getEnvOrDefaultInt("PLATEGA_FEE_CARD", 12),
-		PlategaFeeCrypto:     getEnvOrDefaultInt("PLATEGA_FEE_CRYPTO", 5),
-		PlategaFeeWithdrawal: getEnvOrDefaultInt("PLATEGA_FEE_WITHDRAWAL", 2),
-		CallbackPort:         getEnvOrDefaultInt("CALLBACK_PORT", 8080),
-		PrivacyPolicyURL:     os.Getenv("PRIVACY_POLICY_URL"),
-		TermsOfServiceURL:    os.Getenv("TERMS_OF_SERVICE_URL"),
-		SupportContact:       os.Getenv("SUPPORT_CONTACT"),
+		BotToken:               os.Getenv("BOT_TOKEN"),
+		RemnawaveURL:           os.Getenv("REMNAWAVE_URL"),
+		RemnawaveAPIToken:      os.Getenv("REMNAWAVE_API_TOKEN"),
+		RemnawaveSquadUUIDs:    getRemnawaveSquadUUIDs(),
+		DBPath:                 getEnvOrDefault("DB_PATH", "/app/data/bot.db"),
+		DonateText:             os.Getenv("DONATE_TEXT"),
+		SDConfigsPath:          getEnvOrDefault("SD_CONFIGS_PATH", "/app/sd_configs"),
+		VictoriaMetricsURL:     getEnvOrDefault("VICTORIA_METRICS_URL", "http://victoriametrics:8428"),
+		RenderURL:              os.Getenv("RENDER_URL"),
+		RenderAPIKey:           os.Getenv("RENDER_API_KEY"),
+		PlategaMerchantID:      os.Getenv("PLATEGA_MERCHANT_ID"),
+		PlategaSecret:          os.Getenv("PLATEGA_SECRET"),
+		PlategaCallbackURL:     os.Getenv("PLATEGA_CALLBACK_URL"),
+		MinSubscriptionPrice:   getEnvOrDefaultInt("MIN_SUBSCRIPTION_PRICE", 400),
+		TrialTrafficLimitGB:    getEnvOrDefaultInt("TRIAL_TRAFFIC_LIMIT_GB", 1),
+		PlategaFeeSBP:          getEnvOrDefaultInt("PLATEGA_FEE_SBP", 11),
+		PlategaFeeCard:         getEnvOrDefaultInt("PLATEGA_FEE_CARD", 12),
+		PlategaFeeCrypto:       getEnvOrDefaultInt("PLATEGA_FEE_CRYPTO", 5),
+		PlategaFeeWithdrawal:   getEnvOrDefaultInt("PLATEGA_FEE_WITHDRAWAL", 2),
+		YooKassaShopID:         os.Getenv("YOOKASSA_SHOP_ID"),
+		YooKassaSecretKey:      os.Getenv("YOOKASSA_SECRET_KEY"),
+		YooKassaReturnURL:      os.Getenv("YOOKASSA_RETURN_URL"),
+		YooKassaFeeBasisPoints: getEnvPercentBasisPoints("YOOKASSA_FEE_PERCENT", 0),
+		CallbackPort:           getEnvOrDefaultInt("CALLBACK_PORT", 8080),
+		PrivacyPolicyURL:       os.Getenv("PRIVACY_POLICY_URL"),
+		TermsOfServiceURL:      os.Getenv("TERMS_OF_SERVICE_URL"),
+		SupportContact:         os.Getenv("SUPPORT_CONTACT"),
 	}
 
 	// Парсинг AdminID
@@ -112,6 +120,18 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func getEnvPercentBasisPoints(key string, defaultValue int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value < 0 {
+		return defaultValue
+	}
+	return int(value*100 + 0.5)
 }
 
 // getEnvOrDefaultInt возвращает int-значение переменной окружения или значение по умолчанию

@@ -283,7 +283,7 @@ func TestUserMenuHasBugReport(t *testing.T) {
 }
 
 func TestPaymentKeyboardsContainExpectedButtons(t *testing.T) {
-	methods := PaymentMethodKeyboard()
+	methods := PaymentMethodKeyboard(true, true)
 	wait := PaymentWaitKeyboard()
 
 	var methodButtons []string
@@ -300,10 +300,32 @@ func TestPaymentKeyboardsContainExpectedButtons(t *testing.T) {
 		}
 	}
 
-	assert.Contains(t, methodButtons, BtnPaySBP)
-	assert.Contains(t, methodButtons, BtnPayCard)
+	assert.Contains(t, methodButtons, BtnPayYooKassa)
 	assert.Contains(t, methodButtons, BtnPayCrypto)
 	assert.Contains(t, methodButtons, BtnCancel)
 	assert.Contains(t, waitButtons, BtnCheckPayment)
 	assert.Contains(t, waitButtons, BtnCancel)
+}
+
+func TestPaymentMethodKeyboardHidesUnavailableProviders(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		yoo, platega bool
+		want, absent string
+	}{
+		{"only YooKassa", true, false, BtnPayYooKassa, BtnPayCrypto},
+		{"only Platega", false, true, BtnPayCrypto, BtnPayYooKassa},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keyboard := PaymentMethodKeyboard(tc.yoo, tc.platega)
+			var labels []string
+			for _, row := range keyboard.ReplyKeyboard {
+				for _, button := range row {
+					labels = append(labels, button.Text)
+				}
+			}
+			assert.Contains(t, labels, tc.want)
+			assert.NotContains(t, labels, tc.absent)
+		})
+	}
 }

@@ -119,9 +119,12 @@ func main() {
 		telegramBot.Stop()
 	}()
 
-	// Запуск callback-сервера (если Platega настроена)
-	if cfg.PlategaMerchantID != "" && cfg.PlategaSecret != "" {
+	// Запуск callback-сервера, если настроен хотя бы один провайдер.
+	if (cfg.PlategaMerchantID != "" && cfg.PlategaSecret != "") || (cfg.YooKassaShopID != "" && cfg.YooKassaSecretKey != "") {
 		callbackServer := callback.NewServer(cfg.CallbackPort, cfg.PlategaMerchantID, cfg.PlategaSecret, telegramBot.PaymentCallbackHandler())
+		if cfg.YooKassaShopID != "" && cfg.YooKassaSecretKey != "" {
+			callbackServer.SetYooKassaHandler(telegramBot)
+		}
 
 		go runWithRestart(ctx, "callback-server", func() {
 			if err := callbackServer.Start(); err != nil && err != http.ErrServerClosed {

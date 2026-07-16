@@ -15,6 +15,7 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/platega"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/fus1ond/vpn_bot/internal/render"
+	"github.com/fus1ond/vpn_bot/internal/yookassa"
 	tele "gopkg.in/telebot.v3"
 )
 
@@ -38,6 +39,7 @@ type Bot struct {
 	sdConfigsPath        string                    // путь к sd_configs (для чтения targets)
 	render               *render.Client            // клиент render-сервиса (nil если не настроен)
 	platega              *platega.Client           // Platega API клиент (nil если не настроен)
+	yookassa             *yookassa.Client          // ЮKassa API клиент (nil если не настроен)
 	maintenanceMode      atomic.Bool               // Режим обслуживания (сбрасывается при перезапуске)
 	paymentRetryDelays   []time.Duration           // Тестовые override-задержки для короткого background retry активации
 	paymentRetryInFlight sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
@@ -138,6 +140,10 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	if cfg.PlategaMerchantID != "" && cfg.PlategaSecret != "" {
 		bot.platega = platega.NewClient(cfg.PlategaMerchantID, cfg.PlategaSecret)
 		slog.Info("Platega client initialized")
+	}
+	if cfg.YooKassaShopID != "" && cfg.YooKassaSecretKey != "" {
+		bot.yookassa = yookassa.NewClient(cfg.YooKassaShopID, cfg.YooKassaSecretKey)
+		slog.Info("YooKassa client initialized")
 	}
 
 	// Регистрация обработчиков
@@ -498,10 +504,10 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			b.userStates.Delete(telegramID)
 			return c.Send("Отменено.", &tele.SendOptions{ReplyMarkup: b.userKeyboard(telegramID)})
 		}
-		if method, ok := paymentMethodFromButton(text); ok {
-			return b.handlePaymentMethodSelected(c, method)
+		if provider, ok := paymentProviderFromButton(text); ok {
+			return b.handlePaymentMethodSelected(c, provider)
 		}
-		return c.Send("Выберите способ оплаты из меню:", &tele.SendOptions{ReplyMarkup: PaymentMethodKeyboard()})
+		return c.Send("Выберите способ оплаты из меню:", &tele.SendOptions{ReplyMarkup: b.paymentMethodKeyboard()})
 
 	case StateWaitPaymentResult:
 		if text == BtnCancel {
@@ -864,8 +870,8 @@ func (b *Bot) userKeyboard(telegramID int64) *tele.ReplyMarkup {
 		return UserMenuKeyboardDynamic("", false, isMod)
 	}
 
-	// Нет Platega — кнопка оплаты скрыта
-	if b.platega == nil {
+	// Нет ни одного провайдера — кнопка оплаты скрыта
+	if b.platega == nil && b.yookassa == nil {
 		return UserMenuKeyboardDynamic("", false, isMod)
 	}
 

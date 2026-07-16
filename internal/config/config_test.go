@@ -72,6 +72,28 @@ func TestLoadPlategaConfig(t *testing.T) {
 	})
 }
 
+func TestLoadYooKassaConfig(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("YOOKASSA_SHOP_ID", "shop-42")
+	t.Setenv("YOOKASSA_SECRET_KEY", "secret-key")
+	t.Setenv("YOOKASSA_RETURN_URL", "https://t.me/example_bot")
+	t.Setenv("YOOKASSA_FEE_PERCENT", "3.5")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "shop-42", cfg.YooKassaShopID)
+	require.Equal(t, "secret-key", cfg.YooKassaSecretKey)
+	require.Equal(t, "https://t.me/example_bot", cfg.YooKassaReturnURL)
+	require.Equal(t, 350, cfg.YooKassaFeeBasisPoints)
+}
+
+func TestLoadYooKassaFeeRejectsInvalidValue(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("YOOKASSA_FEE_PERCENT", "not-a-number")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 0, cfg.YooKassaFeeBasisPoints)
+}
+
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("BOT_TOKEN", "test-token")

@@ -50,8 +50,7 @@ const (
 	// Кнопки оплаты
 	BtnPay          = "💳 Оплатить подписку"
 	BtnRenew        = "💳 Продлить подписку"
-	BtnPaySBP       = "🏦 СБП"
-	BtnPayCard      = "💳 Карта"
+	BtnPayYooKassa  = "⚡ Карта / СБП / SberPay"
 	BtnPayCrypto    = "🪙 Крипта"
 	BtnCheckPayment = "🔄 Проверить оплату"
 
@@ -251,12 +250,17 @@ func ConfirmKeyboard() *tele.ReplyMarkup {
 }
 
 // PaymentMethodKeyboard возвращает меню выбора способа оплаты
-func PaymentMethodKeyboard() *tele.ReplyMarkup {
+func PaymentMethodKeyboard(hasYooKassa, hasPlatega bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
-		menu.Row(menu.Text(BtnPaySBP), menu.Text(BtnPayCard)),
-		menu.Row(menu.Text(BtnPayCrypto), menu.Text(BtnCancel)),
-	)
+	var rows []tele.Row
+	if hasYooKassa {
+		rows = append(rows, menu.Row(menu.Text(BtnPayYooKassa)))
+	}
+	if hasPlatega {
+		rows = append(rows, menu.Row(menu.Text(BtnPayCrypto)))
+	}
+	rows = append(rows, menu.Row(menu.Text(BtnCancel)))
+	menu.Reply(rows...)
 	return menu
 }
 

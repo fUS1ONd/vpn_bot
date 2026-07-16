@@ -7,17 +7,21 @@ import (
 
 // Payment представляет запись платежа
 type Payment struct {
-	ID                   int64
-	TelegramID           int64
-	ModeratorID          *int64
-	Amount               int
-	PaymentMethod        string // "sbp", "card", "crypto"
-	Status               string // "pending", "confirmed", "expired", "canceled", "chargebacked", "confirmed_not_activated"
-	PlategaTransactionID *string
-	RedirectURL          *string
-	ExpiresAt            *time.Time
-	CreatedAt            time.Time
-	ConfirmedAt          *time.Time
+	ID                     int64
+	TelegramID             int64
+	ModeratorID            *int64
+	Amount                 int
+	PaymentMethod          string // "sbp", "card", "crypto"
+	Status                 string // "pending", "confirmed", "expired", "canceled", "chargebacked", "confirmed_not_activated"
+	PlategaTransactionID   *string
+	Provider               string
+	ProviderPaymentID      *string
+	ProviderRequestKey     *string
+	ProviderFeeBasisPoints *int // сотые доли процента, например 350 = 3.5%
+	RedirectURL            *string
+	ExpiresAt              *time.Time
+	CreatedAt              time.Time
+	ConfirmedAt            *time.Time
 }
 
 // MonthlyConfirmedPayment хранит подтверждённый платёж месяца и долю модератора.
@@ -28,10 +32,16 @@ type MonthlyConfirmedPayment struct {
 
 // CreatePayment создаёт новый платёж
 func (db *DB) CreatePayment(p *Payment) (int64, error) {
+	if p.Provider == "" {
+		p.Provider = "platega"
+	}
+	if p.ProviderPaymentID == nil && p.PlategaTransactionID != nil {
+		p.ProviderPaymentID = p.PlategaTransactionID
+	}
 	res, err := db.conn.Exec(
-		`INSERT INTO payments (telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, redirect_url, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.TelegramID, p.ModeratorID, p.Amount, p.PaymentMethod, p.Status, p.PlategaTransactionID, p.RedirectURL, p.ExpiresAt,
+		`INSERT INTO payments (telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, redirect_url, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.TelegramID, p.ModeratorID, p.Amount, p.PaymentMethod, p.Status, p.PlategaTransactionID, p.Provider, p.ProviderPaymentID, p.ProviderRequestKey, p.ProviderFeeBasisPoints, p.RedirectURL, p.ExpiresAt,
 	)
 	if err != nil {
 		return 0, err
@@ -44,14 +54,15 @@ func (db *DB) GetPaymentByID(id int64) (*Payment, error) {
 	p := &Payment{}
 	var modID sql.NullInt64
 	var txID sql.NullString
-	var redirectURL sql.NullString
+	var redirectURL, providerPaymentID, providerRequestKey sql.NullString
+	var providerFeePercent sql.NullInt64
 	var expiresAt sql.NullTime
 	var confirmedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, redirect_url, expires_at, created_at, confirmed_at
+		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, redirect_url, expires_at, created_at, confirmed_at
 		 FROM payments WHERE id = ?`, id,
-	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
+	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -65,6 +76,16 @@ func (db *DB) GetPaymentByID(id int64) (*Payment, error) {
 	}
 	if txID.Valid {
 		p.PlategaTransactionID = &txID.String
+	}
+	if providerPaymentID.Valid {
+		p.ProviderPaymentID = &providerPaymentID.String
+	}
+	if providerRequestKey.Valid {
+		p.ProviderRequestKey = &providerRequestKey.String
+	}
+	if providerFeePercent.Valid {
+		v := int(providerFeePercent.Int64)
+		p.ProviderFeeBasisPoints = &v
 	}
 	if redirectURL.Valid {
 		p.RedirectURL = &redirectURL.String
@@ -84,15 +105,16 @@ func (db *DB) GetPendingPayment(telegramID int64) (*Payment, error) {
 	p := &Payment{}
 	var modID sql.NullInt64
 	var txID sql.NullString
-	var redirectURL sql.NullString
+	var redirectURL, providerPaymentID, providerRequestKey sql.NullString
+	var providerFeePercent sql.NullInt64
 	var expiresAt sql.NullTime
 	var confirmedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, redirect_url, expires_at, created_at, confirmed_at
+		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, redirect_url, expires_at, created_at, confirmed_at
 		 FROM payments WHERE telegram_id = ? AND status = 'pending' AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
 		 ORDER BY created_at DESC LIMIT 1`, telegramID,
-	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
+	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -106,6 +128,16 @@ func (db *DB) GetPendingPayment(telegramID int64) (*Payment, error) {
 	}
 	if txID.Valid {
 		p.PlategaTransactionID = &txID.String
+	}
+	if providerPaymentID.Valid {
+		p.ProviderPaymentID = &providerPaymentID.String
+	}
+	if providerRequestKey.Valid {
+		p.ProviderRequestKey = &providerRequestKey.String
+	}
+	if providerFeePercent.Valid {
+		v := int(providerFeePercent.Int64)
+		p.ProviderFeeBasisPoints = &v
 	}
 	if redirectURL.Valid {
 		p.RedirectURL = &redirectURL.String
@@ -122,42 +154,31 @@ func (db *DB) GetPendingPayment(telegramID int64) (*Payment, error) {
 
 // GetPaymentByPlategaTxID возвращает платёж по ID транзакции Platega
 func (db *DB) GetPaymentByPlategaTxID(txID string) (*Payment, error) {
-	p := &Payment{}
-	var modID sql.NullInt64
-	var txIDNull sql.NullString
-	var redirectURL sql.NullString
-	var expiresAt sql.NullTime
-	var confirmedAt sql.NullTime
+	return db.GetPaymentByProviderPaymentID("platega", txID)
+}
 
-	err := db.conn.QueryRow(
-		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, redirect_url, expires_at, created_at, confirmed_at
-		 FROM payments WHERE platega_transaction_id = ?`, txID,
-	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txIDNull, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
-
+// GetPaymentByProviderPaymentID retrieves a payment by its provider-owned immutable ID.
+func (db *DB) GetPaymentByProviderPaymentID(provider, providerPaymentID string) (*Payment, error) {
+	var id int64
+	err := db.conn.QueryRow(`SELECT id FROM payments WHERE provider = ? AND provider_payment_id = ?`, provider, providerPaymentID).Scan(&id)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	return db.GetPaymentByID(id)
+}
 
-	if modID.Valid {
-		p.ModeratorID = &modID.Int64
-	}
-	if txIDNull.Valid {
-		p.PlategaTransactionID = &txIDNull.String
-	}
-	if redirectURL.Valid {
-		p.RedirectURL = &redirectURL.String
-	}
-	if expiresAt.Valid {
-		p.ExpiresAt = &expiresAt.Time
-	}
-	if confirmedAt.Valid {
-		p.ConfirmedAt = &confirmedAt.Time
-	}
+// SetProviderPaymentDetails stores the external ID and redirect details after provider creation.
+func (db *DB) SetProviderPaymentDetails(id int64, providerPaymentID, redirectURL string, expiresAt *time.Time) error {
+	_, err := db.conn.Exec(`UPDATE payments SET provider_payment_id = ?, redirect_url = ?, expires_at = ? WHERE id = ?`, providerPaymentID, redirectURL, expiresAt, id)
+	return err
+}
 
-	return p, nil
+func (db *DB) UpdatePaymentMethod(id int64, paymentMethod string) error {
+	_, err := db.conn.Exec(`UPDATE payments SET payment_method = ? WHERE id = ?`, paymentMethod, id)
+	return err
 }
 
 // UpdatePaymentStatus обновляет статус платежа
@@ -209,7 +230,7 @@ func (db *DB) ExpireOldPendingPayments() (int64, error) {
 // GetConfirmedNotActivated возвращает платежи со статусом confirmed_not_activated
 func (db *DB) GetConfirmedNotActivated() ([]Payment, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, redirect_url, expires_at, created_at, confirmed_at
+		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, redirect_url, expires_at, created_at, confirmed_at
 		 FROM payments WHERE status = 'confirmed_not_activated'`,
 	)
 	if err != nil {
@@ -222,11 +243,11 @@ func (db *DB) GetConfirmedNotActivated() ([]Payment, error) {
 		var p Payment
 		var modID sql.NullInt64
 		var txID sql.NullString
-		var redirectURL sql.NullString
+		var redirectURL, providerPaymentID sql.NullString
 		var expiresAt sql.NullTime
 		var confirmedAt sql.NullTime
 
-		if err := rows.Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt); err != nil {
 			return nil, err
 		}
 
@@ -235,6 +256,9 @@ func (db *DB) GetConfirmedNotActivated() ([]Payment, error) {
 		}
 		if txID.Valid {
 			p.PlategaTransactionID = &txID.String
+		}
+		if providerPaymentID.Valid {
+			p.ProviderPaymentID = &providerPaymentID.String
 		}
 		if redirectURL.Valid {
 			p.RedirectURL = &redirectURL.String
@@ -283,7 +307,7 @@ func (db *DB) GetConfirmedPaymentsByMonth(year int, month int) ([]MonthlyConfirm
 
 	rows, err := db.conn.Query(
 		`SELECT p.id, p.telegram_id, p.moderator_id, p.amount, p.payment_method, p.status,
-		        p.platega_transaction_id, p.redirect_url, p.expires_at, p.created_at, p.confirmed_at,
+		        p.platega_transaction_id, p.provider, p.provider_payment_id, p.redirect_url, p.expires_at, p.created_at, p.confirmed_at,
 		        COALESCE(me.share_amount, 0)
 		 FROM payments p
 		 LEFT JOIN (
@@ -306,11 +330,11 @@ func (db *DB) GetConfirmedPaymentsByMonth(year int, month int) ([]MonthlyConfirm
 		var p MonthlyConfirmedPayment
 		var modID sql.NullInt64
 		var txID sql.NullString
-		var redirectURL sql.NullString
+		var redirectURL, providerPaymentID sql.NullString
 		var expiresAt sql.NullTime
 		var confirmedAt sql.NullTime
 
-		if err := rows.Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt, &p.ShareAmount); err != nil {
+		if err := rows.Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &redirectURL, &expiresAt, &p.CreatedAt, &p.ConfirmedAt, &p.ShareAmount); err != nil {
 			return nil, err
 		}
 
@@ -319,6 +343,9 @@ func (db *DB) GetConfirmedPaymentsByMonth(year int, month int) ([]MonthlyConfirm
 		}
 		if txID.Valid {
 			p.PlategaTransactionID = &txID.String
+		}
+		if providerPaymentID.Valid {
+			p.ProviderPaymentID = &providerPaymentID.String
 		}
 		if redirectURL.Valid {
 			p.RedirectURL = &redirectURL.String
