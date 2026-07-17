@@ -3,7 +3,9 @@
 План: [2026-07-17-universal-invites-design.md](../plans/2026-07-17-universal-invites-design.md)
 
 Дата начала: 2026-07-17
-Статус: реализация завершена, финальная публикация в работе
+Статус: завершено
+
+Pull request: [#69](https://github.com/fUS1ONd/vpn_bot/pull/69)
 
 ## Этапы
 
