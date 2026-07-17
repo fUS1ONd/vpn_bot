@@ -4,8 +4,20 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
+)
+
+var (
+	ErrInviteNotFound    = errors.New("invite not found")
+	ErrInviteUsed        = errors.New("invite already used")
+	ErrInviteExpired     = errors.New("invite expired")
+	ErrInviteRevoked     = errors.New("invite revoked")
+	ErrInviteNotOwned    = errors.New("invite not owned")
+	ErrInviteNotActive   = errors.New("invite not active")
+	ErrActiveInviteLimit = errors.New("active invite limit reached")
+	ErrDailyInviteLimit  = errors.New("daily invite limit reached")
 )
 
 // InviteWithUser содержит информацию об инвайте вместе с данными пользователя, который его активировал
@@ -44,9 +56,16 @@ func (db *DB) CreateInviteWithExpiry(createdBy int64, expireDays *int) (*Invite,
 		return nil, fmt.Errorf("failed to generate invite code: %w", err)
 	}
 
+	kind := InviteKindAdmin
+	var expiresAt *time.Time
+	if expireDays != nil {
+		kind = InviteKindReferral
+		v := time.Now().UTC().Add(30 * 24 * time.Hour)
+		expiresAt = &v
+	}
 	_, err = db.conn.Exec(
-		`INSERT INTO invites (code, created_by, expire_days, is_trial) VALUES (?, ?, ?, ?)`,
-		code, createdBy, expireDays, boolToSQLiteInt(expireDays != nil),
+		`INSERT INTO invites (code, created_by, expire_days, is_trial, kind, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		code, createdBy, expireDays, boolToSQLiteInt(expireDays != nil), kind, expiresAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create invite: %w", err)
@@ -63,11 +82,19 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	var expireDays sql.NullInt64
 	var subscriptionPrice sql.NullInt64
 	var kickedAt sql.NullTime
+	var kind sql.NullString
+	var isTrial int
+	var expiresAt sql.NullTime
+	var revokedAt sql.NullTime
+	var revokedBy sql.NullInt64
 
 	err := db.conn.QueryRow(
-		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, kicked_at, created_at FROM invites WHERE code = ?`,
+		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, kicked_at,
+		        kind, is_trial, expires_at, revoked_at, revoked_by, created_at
+		 FROM invites WHERE code = ?`,
 		code,
-	).Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &subscriptionPrice, &kickedAt, &invite.CreatedAt)
+	).Scan(&invite.Code, &invite.CreatedBy, &usedBy, &usedAt, &expireDays, &subscriptionPrice, &kickedAt,
+		&kind, &isTrial, &expiresAt, &revokedAt, &revokedBy, &invite.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -93,6 +120,19 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 	if kickedAt.Valid {
 		invite.KickedAt = &kickedAt.Time
 	}
+	if kind.Valid {
+		invite.Kind = kind.String
+	}
+	invite.IsTrial = isTrial != 0
+	if expiresAt.Valid {
+		invite.ExpiresAt = &expiresAt.Time
+	}
+	if revokedAt.Valid {
+		invite.RevokedAt = &revokedAt.Time
+	}
+	if revokedBy.Valid {
+		invite.RevokedBy = &revokedBy.Int64
+	}
 
 	return &invite, nil
 }
@@ -102,7 +142,8 @@ func (db *DB) GetInviteByCode(code string) (*Invite, error) {
 func (db *DB) ClaimInvite(code string, usedBy int64) error {
 	result, err := db.conn.Exec(
 		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP
-		 WHERE code = ? AND used_by IS NULL AND kicked_at IS NULL`,
+		 WHERE code = ? AND used_by IS NULL AND kicked_at IS NULL AND revoked_at IS NULL
+		   AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)`,
 		usedBy, code,
 	)
 	if err != nil {
@@ -114,16 +155,31 @@ func (db *DB) ClaimInvite(code string, usedBy int64) error {
 		return fmt.Errorf("failed to get affected rows: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("invite not found or already used")
+		invite, loadErr := db.GetInviteByCode(code)
+		if loadErr != nil {
+			return loadErr
+		}
+		if invite == nil {
+			return ErrInviteNotFound
+		}
+		if invite.UsedBy != nil || invite.KickedAt != nil {
+			return ErrInviteUsed
+		}
+		if invite.RevokedAt != nil {
+			return ErrInviteRevoked
+		}
+		if invite.ExpiresAt != nil && !invite.ExpiresAt.After(time.Now().UTC()) {
+			return ErrInviteExpired
+		}
+		return ErrInviteNotActive
 	}
 
 	return nil
 }
 
-// ReconcileOrphanedInvites откатывает инвайты, застрявшие в состоянии "в процессе регистрации":
-// claimed недавно (< 1 часа) но без соответствующего пользователя в users.
-// Это защита от краша между ClaimInvite и CreateUser.
-// Старые claimed-инвайты без пользователя не трогаются — они могут относиться к забаненным пользователям.
+// ReconcileOrphanedInvites откатывает инвайты, застрявшие в состоянии регистрации.
+// История автокиков и банов исключается явными durable-признаками, поэтому partial
+// rollback можно безопасно восстановить при любом следующем перезапуске.
 // Возвращает количество откаченных инвайтов.
 func (db *DB) ReconcileOrphanedInvites() (int, error) {
 	result, err := db.conn.Exec(`
@@ -131,7 +187,8 @@ func (db *DB) ReconcileOrphanedInvites() (int, error) {
 		SET used_by = NULL, used_at = NULL
 		WHERE used_by IS NOT NULL
 		  AND used_by NOT IN (SELECT telegram_id FROM users)
-		  AND used_at >= datetime('now', '-1 hour')
+		  AND kicked_at IS NULL
+		  AND used_by NOT IN (SELECT telegram_id FROM banned_users)
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to reconcile orphaned invites: %w", err)
@@ -145,15 +202,16 @@ func (db *DB) ReconcileOrphanedInvites() (int, error) {
 	return int(rows), nil
 }
 
-// GetRecentOrphanedInvites возвращает свежие claimed-инвайты без локального пользователя.
+// GetOrphanedInvites возвращает незавершённые claimed-инвайты без локального пользователя.
 // Используется startup-reconcile, который дополнительно сверяет состояние с Remnawave.
-func (db *DB) GetRecentOrphanedInvites() ([]Invite, error) {
+func (db *DB) GetOrphanedInvites() ([]Invite, error) {
 	rows, err := db.conn.Query(`
 		SELECT code, created_by, used_by, used_at, expire_days, subscription_price, kicked_at, created_at
 		FROM invites
 		WHERE used_by IS NOT NULL
 		  AND used_by NOT IN (SELECT telegram_id FROM users)
-		  AND used_at >= datetime('now', '-1 hour')
+		  AND kicked_at IS NULL
+		  AND used_by NOT IN (SELECT telegram_id FROM banned_users)
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query orphaned invites: %w", err)
@@ -202,10 +260,10 @@ func (db *DB) GetRecentOrphanedInvites() ([]Invite, error) {
 }
 
 // UnclaimInvite откатывает claim инвайта (если создание пользователя не удалось)
-func (db *DB) UnclaimInvite(code string) error {
+func (db *DB) UnclaimInvite(code string, usedBy int64) error {
 	_, err := db.conn.Exec(
-		`UPDATE invites SET used_by = NULL, used_at = NULL WHERE code = ?`,
-		code,
+		`UPDATE invites SET used_by = NULL, used_at = NULL WHERE code = ? AND used_by = ?`,
+		code, usedBy,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to unclaim invite: %w", err)
@@ -237,34 +295,13 @@ func (db *DB) UpdateInviteExpireDays(usedBy int64, expireDays *int) error {
 	return nil
 }
 
-// UpdateInviteSubscriptionPrice обновляет цену подписки в инвайте пользователя.
-func (db *DB) UpdateInviteSubscriptionPrice(usedBy int64, price int) error {
-	result, err := db.conn.Exec(
-		`UPDATE invites
-		 SET subscription_price = ?
-		 WHERE used_by = ? AND kicked_at IS NULL`,
-		price, usedBy,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update invite subscription price: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get affected rows: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("invite not found")
-	}
-
-	return nil
-}
-
 // UseInvite помечает инвайт как использованный с временем активации
 // Deprecated: используй ClaimInvite для атомарной операции
 func (db *DB) UseInvite(code string, usedBy int64) error {
 	result, err := db.conn.Exec(
-		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL`,
+		`UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP
+		 WHERE code = ? AND used_by IS NULL AND kicked_at IS NULL AND revoked_at IS NULL
+		   AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)`,
 		usedBy, code,
 	)
 	if err != nil {
@@ -286,7 +323,9 @@ func (db *DB) UseInvite(code string, usedBy int64) error {
 func (db *DB) IsInviteValid(code string) (bool, error) {
 	var exists bool
 	err := db.conn.QueryRow(
-		`SELECT EXISTS(SELECT 1 FROM invites WHERE code = ? AND used_by IS NULL)`,
+		`SELECT EXISTS(SELECT 1 FROM invites WHERE code = ? AND used_by IS NULL
+		 AND kicked_at IS NULL AND revoked_at IS NULL
+		 AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP))`,
 		code,
 	).Scan(&exists)
 	if err != nil {
@@ -345,7 +384,10 @@ func (db *DB) GetAllInvites() ([]Invite, error) {
 // GetUnusedInvites получает неиспользованные инвайты
 func (db *DB) GetUnusedInvites() ([]Invite, error) {
 	rows, err := db.conn.Query(
-		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, created_at FROM invites WHERE used_by IS NULL ORDER BY created_at DESC`,
+		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, created_at
+		 FROM invites WHERE used_by IS NULL AND kicked_at IS NULL AND revoked_at IS NULL
+		 AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+		 ORDER BY created_at DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query invites: %w", err)
@@ -397,7 +439,9 @@ func (db *DB) DeleteInvite(code string) error {
 // CountUnusedInvites возвращает количество неиспользованных инвайтов
 func (db *DB) CountUnusedInvites() (int, error) {
 	var count int
-	err := db.conn.QueryRow(`SELECT COUNT(*) FROM invites WHERE used_by IS NULL`).Scan(&count)
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM invites WHERE used_by IS NULL
+		AND kicked_at IS NULL AND revoked_at IS NULL
+		AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)`).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count invites: %w", err)
 	}
@@ -472,7 +516,8 @@ func (db *DB) GetAllInvitesWithUsers() ([]InviteWithUser, error) {
 // DeleteUnusedInvite удаляет только неиспользованный инвайт
 func (db *DB) DeleteUnusedInvite(code string) error {
 	result, err := db.conn.Exec(
-		`DELETE FROM invites WHERE code = ? AND used_by IS NULL`,
+		`UPDATE invites SET revoked_at = CURRENT_TIMESTAMP, revoked_by = created_by
+		 WHERE code = ? AND used_by IS NULL AND revoked_at IS NULL`,
 		code,
 	)
 	if err != nil {
@@ -554,15 +599,22 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 	var expireDays sql.NullInt64
 	var subscriptionPrice sql.NullInt64
 	var kickedAt sql.NullTime
+	var kind sql.NullString
+	var isTrial int
+	var expiresAt sql.NullTime
+	var revokedAt sql.NullTime
+	var revokedBy sql.NullInt64
 
 	err := db.conn.QueryRow(
-		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, kicked_at, created_at
+		`SELECT code, created_by, used_by, used_at, expire_days, subscription_price, kicked_at,
+		        kind, is_trial, expires_at, revoked_at, revoked_by, created_at
 		 FROM invites
 		 WHERE used_by = ? AND kicked_at IS NULL
 		 ORDER BY used_at DESC
 		 LIMIT 1`,
 		usedBy,
-	).Scan(&invite.Code, &invite.CreatedBy, &usedByNullable, &usedAt, &expireDays, &subscriptionPrice, &kickedAt, &invite.CreatedAt)
+	).Scan(&invite.Code, &invite.CreatedBy, &usedByNullable, &usedAt, &expireDays, &subscriptionPrice, &kickedAt,
+		&kind, &isTrial, &expiresAt, &revokedAt, &revokedBy, &invite.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -586,6 +638,19 @@ func (db *DB) GetInviteByUsedBy(usedBy int64) (*Invite, error) {
 	}
 	if kickedAt.Valid {
 		invite.KickedAt = &kickedAt.Time
+	}
+	if kind.Valid {
+		invite.Kind = kind.String
+	}
+	invite.IsTrial = isTrial != 0
+	if expiresAt.Valid {
+		invite.ExpiresAt = &expiresAt.Time
+	}
+	if revokedAt.Valid {
+		invite.RevokedAt = &revokedAt.Time
+	}
+	if revokedBy.Valid {
+		invite.RevokedBy = &revokedBy.Int64
 	}
 
 	return &invite, nil
@@ -713,8 +778,9 @@ func (db *DB) ResetInviteUsageByTelegramID(telegramID int64) error {
 // DeleteUnusedInviteByOwner удаляет только свой неиспользованный инвайт
 func (db *DB) DeleteUnusedInviteByOwner(code string, createdBy int64) error {
 	result, err := db.conn.Exec(
-		`DELETE FROM invites WHERE code = ? AND used_by IS NULL AND created_by = ?`,
-		code, createdBy,
+		`UPDATE invites SET revoked_at = CURRENT_TIMESTAMP, revoked_by = ?
+		 WHERE code = ? AND used_by IS NULL AND created_by = ? AND revoked_at IS NULL`,
+		createdBy, code, createdBy,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to delete invite: %w", err)
@@ -734,8 +800,9 @@ func (db *DB) DeleteUnusedInviteByOwner(code string, createdBy int64) error {
 // DeleteUnusedInvitesByCreator удаляет все неиспользованные инвайты конкретного автора
 func (db *DB) DeleteUnusedInvitesByCreator(createdBy int64) (int64, error) {
 	result, err := db.conn.Exec(
-		`DELETE FROM invites WHERE created_by = ? AND used_by IS NULL`,
-		createdBy,
+		`UPDATE invites SET revoked_at = CURRENT_TIMESTAMP, revoked_by = ?
+		 WHERE created_by = ? AND used_by IS NULL AND revoked_at IS NULL`,
+		createdBy, createdBy,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to delete invites: %w", err)
@@ -757,8 +824,8 @@ func (db *DB) CreateInviteWithPrice(createdBy int64, expireDays int, price int) 
 		return "", fmt.Errorf("failed to generate invite code: %w", err)
 	}
 	_, err = db.conn.Exec(
-		`INSERT INTO invites (code, created_by, expire_days, subscription_price, is_trial) VALUES (?, ?, ?, ?, 1)`,
-		code, createdBy, expireDays, price,
+		`INSERT INTO invites (code, created_by, expire_days, subscription_price, is_trial, kind, expires_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		code, createdBy, expireDays, price, InviteKindReferral, time.Now().UTC().Add(30*24*time.Hour),
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to create invite with price: %w", err)
@@ -768,7 +835,7 @@ func (db *DB) CreateInviteWithPrice(createdBy int64, expireDays int, price int) 
 
 // generateInviteCode генерирует случайный 8-символьный код
 func generateInviteCode() (string, error) {
-	bytes := make([]byte, 4)
+	bytes := make([]byte, 8)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}

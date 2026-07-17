@@ -17,16 +17,16 @@ Telegram-бот управления VPN на базе [Remnawave](https://remna
 - **`internal/remnawave/client.go`** — HTTP-клиент Remnawave API
 - **`internal/platega/client.go`** — HTTP-клиент Platega
 - **`internal/callback/server.go`** — встроенный HTTP-сервер для callback и health-check
-- **`internal/database/users.go`** — таблица users (`telegram_id`, `username`, `first_name`, `remnawave_uuid`, `subscription_price`, `moderator_id`)
-- **`internal/database/invites.go`** — таблица invites (`code`, `created_by`, `used_by`, `expire_days`, `subscription_price`, `kicked_at`)
+- **`internal/database/users.go`** — таблица users (`telegram_id`, `username`, `first_name`, `remnawave_uuid`, `subscription_price`, `invited_by`; `moderator_id` архивное)
+- **`internal/database/invites.go`** / **`referrals.go`** — служебные и referral-инвайты, лимиты, отзыв, first-touch и статистика
 - **`internal/database/payments.go`** — таблица payments и логика подтверждения/ретраев платежей
-- **`internal/database/earnings.go`** — таблица `moderator_earnings` и расчёт долей модераторов
+- **`internal/database/earnings.go`** — архивное чтение старых `moderator_earnings`; новые начисления не создаются
 - **`internal/database/bans.go`** — таблица `banned_users` и проверки перманентных банов
 - **`internal/database/notifications.go`** — таблица `notifications_sent` (защита от повторных уведомлений)
 - **`internal/bot/handlers.go`** — обработчики сообщений, команд и синхронизация данных пользователей
 - **`internal/bot/admin.go`** — админ-панель (инвайты, просмотр кодов, бан, уведомления, статистика, режим обслуживания)
 - **`internal/bot/payment_handler.go`** — пользовательский flow оплаты и ручная проверка платежей
-- **`internal/bot/payment.go`** — callback-активация, retry и расчёт earnings
+- **`internal/bot/payment.go`** — callback-активация и retry платежей
 - **`internal/bot/scheduler.go`** — scheduler подписок и платежей: каждые 30 минут + первый проход при старте
 - **`internal/bot/dashboard.go`** — Session Manager и движок live-дашборда мониторинга
 - **`internal/bot/dashboard_render.go`** — визуализация дашборда (прогресс-бары, флаги, метрики)
@@ -65,6 +65,7 @@ PLATEGA_SECRET=...
 PLATEGA_CALLBACK_URL=https://vpn.example.com/platega/callback
 CALLBACK_PORT=8080
 MIN_SUBSCRIPTION_PRICE=400
+DEFAULT_SUBSCRIPTION_PRICE=400
 TRIAL_TRAFFIC_LIMIT_GB=1
 PLATEGA_FEE_SBP=11
 PLATEGA_FEE_CARD=12
@@ -139,7 +140,7 @@ make logs            # Показать логи
 ## Важные заметки
 
 1. **Рассылка** отправляется только активным пользователям (status=ACTIVE в Remnawave)
-2. **Типы инвайтов:** админский — бессрочный (`expire_days=NULL`), модераторский — триал на 72 часа с ценой подписки из инвайта
+2. **Типы инвайтов:** служебный админский — бессрочный и бесплатный; referral — ссылка на 30 суток, trial на 72 часа и snapshot цены из `DEFAULT_SUBSCRIPTION_PRICE`
 3. **Платежи Platega опциональны:** без `PLATEGA_MERCHANT_ID` и `PLATEGA_SECRET` бот работает как раньше, callback-сервер не стартует, кнопки оплаты не показываются
 4. **Legacy-пользователи:** при `subscription_price = NULL` кнопка оплаты скрыта; scheduler пропускает старые записи без инвайта и цены
 5. **Платёжный flow:** callback обрабатывается быстро, долгие retry не держат HTTP-запрос открытым; при сбое активации платёж переходит в `confirmed_not_activated`, а scheduler повторяет активацию без перезаписи исходного `confirmed_at`
@@ -150,7 +151,7 @@ make logs            # Показать логи
 10. **Сквады** опциональны — если пользователи не видят серверы, создайте internal squads в панели и добавьте UUID в `REMNAWAVE_DEFAULT_SQUAD_UUIDS`
 11. **Трафик** — без лимита для оплаченных и админских пользователей (`trafficLimitBytes=0`); для триала лимит задаётся через `TRIAL_TRAFFIC_LIMIT_GB`
 12. **Актуализация данных** — при каждом /start бот обновляет username и first_name в БД и синхронизирует username с Remnawave
-13. **Удаление кодов** — можно удалять только неиспользованные коды (защита истории активаций)
+13. **Отзыв кодов** — автор или админ может мягко отозвать только активный неиспользованный referral-код; строки и история не удаляются
 14. **Субтитры** — опционально, требует запущенный render-сервис. Голосовое → видео с субтитрами, кружок → кружок с субтитрами
 15. **Управление устройствами** — пользователь с активной подпиской может из бота
     («👤 Моя подписка» → reply-подменю «📱 Управление устройствами») посмотреть подключённые
@@ -167,9 +168,8 @@ make logs            # Показать логи
     in-memory. Если хостов нет — шаг выбора сервера пропускается. См. `internal/bot/bug_report.go`.
 17. **Ручное продление подписки админом** — в карточке пользователя (админ-панель,
     «🔍 Инфо о пользователе») доступна inline-кнопка «➕ Продлить на месяц».
-    Продление чисто техническое: **не создаёт** запись в `payments` и **не начисляет**
-    earnings модератору (осознанное решение — иначе отчёт по выплатам разъедется
-    с реальными деньгами Platega). Меняется только Remnawave: `EnableUser` двигает
+    Продление чисто техническое: **не создаёт** запись в `payments`. Меняется только
+    Remnawave: `EnableUser` двигает
     `expireAt` (+1 месяц к текущей дате, если подписка `ACTIVE` или `LIMITED` и не
     истекла, иначе от текущего момента), ставит `Status=ACTIVE`, снимает лимит трафика.
     Статус `LIMITED` (исчерпан лимит трафика триала, но срок ещё не истёк) учитывается
@@ -197,6 +197,13 @@ make logs            # Показать логи
     `internal/bot/admin_extend.go` (хендлеры
     `handleAdminExtendMonth`/`handleAdminExtendConfirm`/`handleAdminExtendCancel`),
     клавиатуры — `internal/bot/keyboards.go` (`AdminUserInfoKeyboard`, `AdminExtendConfirmKeyboard`).
+18. **Общие приглашения** — раздел доступен всем зарегистрированным пользователям,
+    но новые referral-ссылки создают только пользователи с действующей оплаченной,
+    `legacy_paid_migrated` или бессрочной подпиской. Лимиты: 3 активных и 15 созданий
+    за скользящие 24 часа. Ссылка живёт 30 суток, даёт trial на 72 часа и сохраняет
+    snapshot `DEFAULT_SUBSCRIPTION_PRICE`. Автор и админ могут мягко отозвать только
+    активную неиспользованную ссылку. `users.invited_by` хранит первого пригласившего;
+    moderator-поля и `moderator_earnings` остаются архивом, новые выплаты не начисляются.
 
 ## Мониторинг нод
 

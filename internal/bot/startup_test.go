@@ -52,8 +52,9 @@ func TestReconcileOrphanedRegistrationsRestoresLocalUserFromRemnawave(t *testing
 	assert.Equal(t, "restored_user", user.Username)
 	require.NotNil(t, user.SubscriptionPrice)
 	assert.Equal(t, price, *user.SubscriptionPrice)
-	require.NotNil(t, user.ModeratorID)
-	assert.Equal(t, moderatorID, *user.ModeratorID)
+	assert.Nil(t, user.ModeratorID)
+	require.NotNil(t, user.InvitedBy)
+	assert.Equal(t, moderatorID, *user.InvitedBy)
 
 	invite, err := db.GetInviteByCode(code)
 	require.NoError(t, err)

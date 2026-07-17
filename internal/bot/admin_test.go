@@ -50,27 +50,6 @@ func TestHandleCreateInvite_AdminInviteIsUnlimited(t *testing.T) {
 	assert.Nil(t, invites[0].ExpireDays)
 }
 
-// TestFormatInvitesListChunking проверяет разбиение длинного списка инвайтов на части
-func TestFormatInvitesListChunking(t *testing.T) {
-	// Создаём много инвайтов чтобы превысить лимит Telegram (4096 символов)
-	var invites []database.InviteWithUser
-	for i := 0; i < 100; i++ {
-		inv := database.InviteWithUser{
-			Code:      "abcdef" + strconv.Itoa(i),
-			CreatedBy: 999,
-			CreatedAt: time.Now(),
-		}
-		invites = append(invites, inv)
-	}
-
-	chunks := FormatInvitesListChunked(invites, 4000)
-	assert.Greater(t, len(chunks), 1, "Длинный список должен быть разбит на несколько частей")
-
-	for _, chunk := range chunks {
-		assert.LessOrEqual(t, len(chunk), 4000+200, "Каждая часть не должна сильно превышать лимит")
-	}
-}
-
 // TestProcessBanUserRejectsSelfBan проверяет, что админ не может забанить самого себя
 func TestProcessBanUserRejectsSelfBan(t *testing.T) {
 	dbFile := "test_admin_selfban.db"
@@ -164,7 +143,7 @@ func TestProcessBanUser_PersistsBanAndKeepsInviteHistory(t *testing.T) {
 	assert.False(t, sent)
 }
 
-func TestHandleAdminModStats(t *testing.T) {
+func TestHandleAdminReferralLeaderboardMigratesModeratorHistory(t *testing.T) {
 	dbFile := "test_admin_mod_stats.db"
 	db, err := database.New(dbFile)
 	require.NoError(t, err)
@@ -215,6 +194,12 @@ func TestHandleAdminModStats(t *testing.T) {
 
 	prevMonth := time.Now().UTC().AddDate(0, -1, 0)
 	_, err = rawDB.Exec(
+		`UPDATE invites SET used_at = ? WHERE code = ?`,
+		time.Date(prevMonth.Year(), prevMonth.Month(), 1, 12, 0, 0, 0, time.UTC),
+		inv.Code,
+	)
+	require.NoError(t, err)
+	_, err = rawDB.Exec(
 		`UPDATE payments SET confirmed_at = ? WHERE id = ?`,
 		time.Date(prevMonth.Year(), prevMonth.Month(), 15, 12, 0, 0, 0, time.UTC),
 		paymentID,
@@ -261,26 +246,17 @@ func TestHandleAdminModStats(t *testing.T) {
 		message: &tele.Message{},
 	}
 
-	err = b.handleAdminModStats(ctx)
+	err = b.showAdminReferralLeaderboard(ctx, "all", 0, false)
 	require.NoError(t, err)
 
-	require.Len(t, ctx.sentMsgs, 2)
+	require.Len(t, ctx.sentMsgs, 1)
 
 	msg, ok := ctx.sentMsgs[0].(string)
 	require.True(t, ok)
-	assert.Contains(t, msg, "Статистика:")
+	assert.Contains(t, msg, "Кто приглашает")
 	assert.Contains(t, msg, "@moderator")
-	assert.Contains(t, msg, "Финансы за")
-	assert.Contains(t, msg, "За всё время")
-	assert.Contains(t, msg, "Текущее состояние клиентов")
-	assert.Contains(t, msg, "Платящих: 1")
-	assert.Contains(t, msg, "Платежи: 500 руб")
-	assert.Contains(t, msg, "Доля модератора (15%)")
-
-	summary, ok := ctx.sentMsgs[1].(string)
-	require.True(t, ok)
-	assert.Contains(t, summary, "Итого")
-	assert.Contains(t, summary, "66 руб")
+	assert.Contains(t, msg, "Пригласил: 1")
+	assert.Contains(t, msg, "Оплатили: 1")
 }
 
 // TestFormatAdminSwitchTargetLabel_HTMLEscaping проверяет экранирование HTML в имени пользователя
@@ -595,12 +571,11 @@ func TestHandleAdminStats_ShowsFinanceAndConversion(t *testing.T) {
 	assert.Contains(t, msg, "Платежей за месяц: 1")
 	assert.Contains(t, msg, "Сумма платежей (грязная): 500 руб")
 	// Комиссии считаются через calculateMonthlyPaymentFinance (целочисленное деление):
-	// 500 card(10%): platega=50, afterPlatega=450, withdrawal=450*2/100=9, net=441, share=66 (из earnings), owner=375
-	assert.Contains(t, msg, "Комиссии Platega: -50 руб")
+	// 500 card(10%): provider=50, withdrawal=9, owner net=441.
+	assert.Contains(t, msg, "Комиссии провайдеров: -50 руб")
 	assert.Contains(t, msg, "Комиссия вывода (2%): -9 руб")
-	assert.Contains(t, msg, "Чистый доход: 441 руб")
-	assert.Contains(t, msg, "Выплаты модераторам: -66 руб")
-	assert.Contains(t, msg, "Доход владельца: 375 руб")
+	assert.Contains(t, msg, "Чистый доход владельца: 441 руб")
+	assert.NotContains(t, msg, "Выплаты модераторам")
 	assert.Contains(t, msg, "Всего в системе: 4")
 	assert.Contains(t, msg, "💳 Платящих: 1")
 	assert.Contains(t, msg, "⏳ Триал: 1")
@@ -763,14 +738,13 @@ func TestHandleAdminStats_IncludesAdminPaymentsAndModeratorPayouts(t *testing.T)
 	// moderatorPayment (500, card 12%): platega=60, withdrawal=8, net=432, share=66
 	// adminPayment (1000, sbp 10%): platega=100, withdrawal=18, net=882, share=0 (нет earnings)
 	// notActivatedPayment (800, sbp 10%): platega=80, withdrawal=14, net=706, share=105
-	// Итого: gross=2300, platega=240, withdrawal=40, net=2020, share=171, owner=1849
+	// Итого: gross=2300, provider fees=240, withdrawal=40, owner net=2020.
 	assert.Contains(t, msg, "Платежей за месяц: 3")
 	assert.Contains(t, msg, "Сумма платежей (грязная): 2300 руб")
-	assert.Contains(t, msg, "Комиссии Platega: -240 руб")
+	assert.Contains(t, msg, "Комиссии провайдеров: -240 руб")
 	assert.Contains(t, msg, "Комиссия вывода (2%): -40 руб")
-	assert.Contains(t, msg, "Чистый доход: 2020 руб")
-	assert.Contains(t, msg, "Выплаты модераторам: -171 руб")
-	assert.Contains(t, msg, "Доход владельца: 1849 руб")
+	assert.Contains(t, msg, "Чистый доход владельца: 2020 руб")
+	assert.NotContains(t, msg, "Выплаты модераторам")
 }
 
 func TestProcessAdminUserInfo_ShowsFullCard(t *testing.T) {
@@ -907,8 +881,7 @@ func TestAdminChangePriceFlow_UpdatesPaidUser(t *testing.T) {
 
 	updatedInvite, err := db.GetInviteByUsedBy(targetID)
 	require.NoError(t, err)
-	require.NotNil(t, updatedInvite.SubscriptionPrice)
-	assert.Equal(t, 650, *updatedInvite.SubscriptionPrice)
+	assert.Nil(t, updatedInvite.SubscriptionPrice, "snapshot приглашения не меняется")
 
 	msgValue, ok := ctxValue.sentMsg.(string)
 	require.True(t, ok)
@@ -1000,8 +973,7 @@ func TestAdminChangePriceFlow_PromptsForLegacyPaidMigration(t *testing.T) {
 
 	updatedInvite, err := db.GetInviteByUsedBy(targetID)
 	require.NoError(t, err)
-	require.NotNil(t, updatedInvite.SubscriptionPrice)
-	assert.Equal(t, 650, *updatedInvite.SubscriptionPrice)
+	assert.Nil(t, updatedInvite.SubscriptionPrice, "legacy snapshot приглашения не меняется")
 
 	assert.Empty(t, b.userStates.Get(adminID))
 }

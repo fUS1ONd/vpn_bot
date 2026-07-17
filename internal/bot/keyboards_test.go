@@ -59,8 +59,6 @@ func TestAdminManageKeyboardDoesNotContainAddTrafficButton(t *testing.T) {
 
 	assert.NotContains(t, buttons, "📊 Добавить трафик")
 	assert.Contains(t, buttons, BtnAdminCreateInvite)
-	assert.Contains(t, buttons, BtnAdminViewInvites)
-	assert.Contains(t, buttons, BtnAdminDeleteInvite)
 	assert.Contains(t, buttons, BtnAdminBanUser)
 	assert.Contains(t, buttons, BtnAdminSwitchSubscription)
 	assert.Contains(t, buttons, BtnAdminUserInfo)
@@ -114,8 +112,8 @@ func TestAdminSwitchSubmenuContainsExpectedButtons(t *testing.T) {
 	assert.Contains(t, buttons, BtnAdminBack)
 }
 
-func TestModeratorMenuKeyboardContainsNewButtons(t *testing.T) {
-	keyboard := ModeratorMenuKeyboard()
+func TestInvitesMenuKeyboardContainsExpectedButtons(t *testing.T) {
+	keyboard := InvitesMenuKeyboard()
 
 	var buttons []string
 	for _, row := range keyboard.ReplyKeyboard {
@@ -124,13 +122,14 @@ func TestModeratorMenuKeyboardContainsNewButtons(t *testing.T) {
 		}
 	}
 
-	assert.Contains(t, buttons, BtnModSubscribers)
-	assert.Contains(t, buttons, BtnModEarnings)
-	assert.NotContains(t, buttons, "⏳ Продлить подписку")
+	assert.Contains(t, buttons, BtnInviteCreate)
+	assert.Contains(t, buttons, BtnInviteList)
+	assert.Contains(t, buttons, BtnInviteBack)
+	assert.NotContains(t, buttons, "💰 Мой заработок")
 }
 
-func TestAdminModeratorKeyboardContainsStatsButton(t *testing.T) {
-	keyboard := AdminModeratorKeyboard()
+func TestAdminReferralsKeyboardContainsStatsButtons(t *testing.T) {
+	keyboard := AdminReferralsKeyboard()
 
 	var buttons []string
 	for _, row := range keyboard.ReplyKeyboard {
@@ -139,7 +138,8 @@ func TestAdminModeratorKeyboardContainsStatsButton(t *testing.T) {
 		}
 	}
 
-	assert.Contains(t, buttons, BtnAdminModStats)
+	assert.Contains(t, buttons, BtnAdminReferralOverview)
+	assert.Contains(t, buttons, BtnAdminReferralLeaders)
 }
 
 func TestAdminChangePriceMigrationKeyboardContainsExpectedButtons(t *testing.T) {
@@ -190,7 +190,7 @@ func TestUserMenuKeyboardDynamicContainsPayButton(t *testing.T) {
 		assert.Contains(t, buttons, BtnPay)
 		assert.Contains(t, buttons, BtnServers)
 		assert.Contains(t, buttons, BtnInfo)
-		assert.NotContains(t, buttons, BtnModInvites)
+		assert.NotContains(t, buttons, BtnInvites)
 	})
 
 	t.Run("без кнопки оплаты", func(t *testing.T) {
@@ -209,7 +209,7 @@ func TestUserMenuKeyboardDynamicContainsPayButton(t *testing.T) {
 		assert.Contains(t, buttons, BtnServers)
 	})
 
-	t.Run("модератор — с кнопкой приглашений", func(t *testing.T) {
+	t.Run("пользователь — с кнопкой приглашений", func(t *testing.T) {
 		keyboard := UserMenuKeyboardDynamic(BtnRenew, true, true)
 
 		var buttons []string
@@ -219,7 +219,7 @@ func TestUserMenuKeyboardDynamicContainsPayButton(t *testing.T) {
 			}
 		}
 
-		assert.Contains(t, buttons, BtnModInvites)
+		assert.Contains(t, buttons, BtnInvites)
 		assert.Contains(t, buttons, BtnRenew)
 	})
 }
