@@ -141,9 +141,6 @@ func (h *paymentCallbackHandler) handleConfirmedWithNotification(payment *databa
 		return fmt.Errorf("confirm payment: %w", err)
 	}
 
-	// Финансовый учёт фиксируем в момент подтверждения денег, даже если активация ещё retry-ится.
-	h.createEarningRecord(payment)
-
 	// Пытаемся активировать подписку один раз.
 	// Долгие retry выполняет scheduler, чтобы не держать callback/manual-check path открытым.
 	if err := h.activateSubscription(payment); err != nil {
@@ -369,67 +366,6 @@ func (h *paymentCallbackHandler) activateSubscription(payment *database.Payment)
 	return h.bot.remnawave.EnableUser(user.RemnawaveUUID, newExpireAt)
 }
 
-// createEarningRecord создаёт запись начисления модератору
-func (h *paymentCallbackHandler) createEarningRecord(payment *database.Payment) {
-	if payment.IsTest || payment.ModeratorID == nil {
-		return // Админский пользователь — без начислений
-	}
-
-	moderatorID := *payment.ModeratorID
-	// payments.moderator_id хранит snapshot куратора на момент создания платежа,
-	// поэтому финансовая история не должна зависеть от последующего снятия роли.
-
-	// Считаем количество платящих клиентов для определения доли
-	payingCount, err := h.bot.db.CountPayingSubscribersByModerator(moderatorID)
-	if err != nil {
-		slog.Error("Ошибка подсчёта платящих подписчиков", "error", err, "moderator_id", moderatorID)
-		return
-	}
-
-	sharePercent := calculateSharePercent(payingCount)
-
-	// Определяем комиссию Platega по методу оплаты
-	feeBasisPoints := h.bot.getPaymentFeeBasisPoints(payment.Provider, payment.PaymentMethod)
-	if payment.ProviderFeeBasisPoints != nil {
-		feeBasisPoints = *payment.ProviderFeeBasisPoints
-	}
-	withdrawalPercent := h.bot.config.PlategaFeeWithdrawal
-
-	grossAmount := payment.Amount
-	plategaFee := grossAmount * feeBasisPoints / 10000
-	afterPlatega := grossAmount - plategaFee
-	withdrawalFee := afterPlatega * withdrawalPercent / 100
-	netAmount := afterPlatega - withdrawalFee
-	shareAmount := netAmount * sharePercent / 100
-
-	earning := &database.ModeratorEarning{
-		PaymentID:     payment.ID,
-		ModeratorID:   moderatorID,
-		GrossAmount:   grossAmount,
-		PlategaFee:    plategaFee,
-		WithdrawalFee: withdrawalFee,
-		NetAmount:     netAmount,
-		SharePercent:  sharePercent,
-		ShareAmount:   shareAmount,
-	}
-
-	if _, err := h.bot.db.CreateEarning(earning); err != nil {
-		slog.Error("Ошибка создания записи начисления", "error", err, "payment_id", payment.ID)
-	}
-}
-
-// calculateSharePercent определяет долю модератора по количеству платящих клиентов
-func calculateSharePercent(payingCount int) int {
-	switch {
-	case payingCount >= 25:
-		return 25
-	case payingCount >= 15:
-		return 20
-	default:
-		return 15
-	}
-}
-
 // getPlategaFeePercent возвращает процент комиссии Platega для метода оплаты
 func (b *Bot) getPlategaFeePercent(paymentMethod string) int {
 	switch paymentMethod {
@@ -489,11 +425,6 @@ func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) err
 	// Если BanUser не сработает — возвращаем ошибку, чтобы Platega retry-ла callback.
 	if err := h.bot.db.BanUser(payment.TelegramID, 0); err != nil {
 		return fmt.Errorf("chargeback ban user: %w", err)
-	}
-
-	// Каскадное удаление: если пользователь — модератор
-	if h.bot.isModerator(payment.TelegramID) {
-		h.bot.cascadeDeleteModerator(payment.TelegramID)
 	}
 
 	// Удаляем из Remnawave (полное удаление, не просто disable)
@@ -600,11 +531,7 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 	if payment == nil {
 		// Сначала создаём локальную запись: её ID передаётся в metadata ЮKassa.
 		isTest := telegramID == b.config.AdminID && b.config.AdminTestPaymentPrice > 0
-		moderatorID := user.ModeratorID
-		if isTest {
-			moderatorID = nil
-		}
-		payment = &database.Payment{TelegramID: telegramID, ModeratorID: moderatorID, Amount: price, PaymentMethod: paymentMethodStr, Status: "pending", Provider: providerName, IsTest: isTest}
+		payment = &database.Payment{TelegramID: telegramID, Amount: price, PaymentMethod: paymentMethodStr, Status: "pending", Provider: providerName, IsTest: isTest}
 		feeBasisPoints := b.getPaymentFeeBasisPoints(providerName, paymentMethodStr)
 		payment.ProviderFeeBasisPoints = &feeBasisPoints
 		if providerName == paymentprovider.YooKassa {

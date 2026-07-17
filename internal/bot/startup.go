@@ -20,9 +20,9 @@ type StartupReconcileStats struct {
 func ReconcileOrphanedRegistrations(db *database.DB, client *remnawave.Client) (StartupReconcileStats, error) {
 	var stats StartupReconcileStats
 
-	invites, err := db.GetRecentOrphanedInvites()
+	invites, err := db.GetOrphanedInvites()
 	if err != nil {
-		return stats, fmt.Errorf("load recent orphaned invites: %w", err)
+		return stats, fmt.Errorf("load orphaned invites: %w", err)
 	}
 
 	for _, invite := range invites {
@@ -34,7 +34,7 @@ func ReconcileOrphanedRegistrations(db *database.DB, client *remnawave.Client) (
 		remoteUser, err := client.GetUserByTelegramID(telegramID)
 		if err != nil {
 			if isRemnawaveNotFound(err) {
-				if err := db.UnclaimInvite(invite.Code); err != nil {
+				if err := db.UnclaimInvite(invite.Code, *invite.UsedBy); err != nil {
 					return stats, fmt.Errorf("unclaim invite %s: %w", invite.Code, err)
 				}
 				stats.ReleasedInvites++
@@ -48,24 +48,19 @@ func ReconcileOrphanedRegistrations(db *database.DB, client *remnawave.Client) (
 			username = fmt.Sprintf("tg_%d", telegramID)
 		}
 
-		var moderatorID *int64
-		if invite.ExpireDays != nil {
-			isModerator, err := db.IsModerator(invite.CreatedBy)
-			if err != nil {
-				return stats, fmt.Errorf("check moderator status for %d: %w", invite.CreatedBy, err)
-			}
-			if isModerator {
-				moderatorID = &invite.CreatedBy
-			}
+		invitedBy, err := db.GetFirstReferralInviter(telegramID)
+		if err != nil {
+			return stats, fmt.Errorf("load first inviter for telegram_id=%d: %w", telegramID, err)
 		}
 
-		if _, err := db.CreateUser(
+		if _, err := db.CreateUserWithInviter(
 			telegramID,
 			username,
 			"",
 			remoteUser.UUID,
 			invite.SubscriptionPrice,
-			moderatorID,
+			nil,
+			invitedBy,
 		); err != nil {
 			return stats, fmt.Errorf("restore local user for telegram_id=%d: %w", telegramID, err)
 		}

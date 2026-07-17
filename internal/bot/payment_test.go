@@ -111,28 +111,6 @@ func TestTestPaymentConfirmationMessageDoesNotMentionSubscription(t *testing.T) 
 	assert.NotContains(t, message, "подписк")
 }
 
-func TestCalculateSharePercent(t *testing.T) {
-	tests := []struct {
-		name        string
-		payingCount int
-		wantPercent int
-	}{
-		{"Менее 15 — 15%", 0, 15},
-		{"Ровно 14 — 15%", 14, 15},
-		{"Ровно 15 — 20%", 15, 20},
-		{"Между 15 и 25 — 20%", 20, 20},
-		{"Ровно 25 — 25%", 25, 25},
-		{"Более 25 — 25%", 50, 25},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := calculateSharePercent(tt.payingCount)
-			assert.Equal(t, tt.wantPercent, got)
-		})
-	}
-}
-
 func TestGetPlategaFeePercent(t *testing.T) {
 	b := &Bot{
 		config: &config.Config{
@@ -275,7 +253,7 @@ func TestHandleConfirmedReturnsQuicklyWhenActivationFails(t *testing.T) {
 	require.NotNil(t, stored.ConfirmedAt)
 }
 
-func TestHandleConfirmedCreatesModeratorEarningBeforeActivationRetry(t *testing.T) {
+func TestHandleConfirmedDoesNotCreateModeratorEarning(t *testing.T) {
 	dbFile := "test_payment_confirm_retry_earning.db"
 	db, err := database.New(dbFile)
 	require.NoError(t, err)
@@ -337,15 +315,10 @@ func TestHandleConfirmedCreatesModeratorEarningBeforeActivationRetry(t *testing.
 	var count int
 	err = db.Conn().QueryRow(`SELECT COUNT(*) FROM moderator_earnings WHERE payment_id = ?`, id).Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count)
-
-	var shareAmount int
-	err = db.Conn().QueryRow(`SELECT share_amount FROM moderator_earnings WHERE payment_id = ?`, id).Scan(&shareAmount)
-	require.NoError(t, err)
-	assert.Equal(t, 52, shareAmount)
+	assert.Equal(t, 0, count)
 }
 
-func TestRetryConfirmedPaymentActivationDoesNotDuplicateEarning(t *testing.T) {
+func TestRetryConfirmedPaymentActivationDoesNotCreateEarning(t *testing.T) {
 	dbFile := "test_payment_retry_duplicate_earning.db"
 	db, err := database.New(dbFile)
 	require.NoError(t, err)
@@ -427,7 +400,7 @@ func TestRetryConfirmedPaymentActivationDoesNotDuplicateEarning(t *testing.T) {
 	var count int
 	err = db.Conn().QueryRow(`SELECT COUNT(*) FROM moderator_earnings WHERE payment_id = ?`, id).Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count)
+	assert.Equal(t, 0, count)
 }
 
 func TestHandleConfirmedDoesNotReapplyActivationFromStaleSnapshot(t *testing.T) {

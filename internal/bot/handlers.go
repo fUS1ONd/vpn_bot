@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -45,8 +46,6 @@ type Bot struct {
 	paymentRetryInFlight sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
 	shutdownCh           chan struct{}             // Закрывается при Stop() для отмены фоновых горутин
 	userLimiter          *userRateLimiter          // per-user rate limiter для команд бота
-	modChangePriceMu     sync.RWMutex
-	modChangePriceData   map[int64]modChangePriceSession // pending-данные изменения цены для модератора
 	adminSwitchMu        sync.RWMutex
 	adminSwitchData      map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
 	adminPriceMu         sync.RWMutex
@@ -82,19 +81,18 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	}
 
 	bot := &Bot{
-		bot:                b,
-		db:                 db,
-		remnawave:          remnawaveClient,
-		config:             cfg,
-		userStates:         newStateMap(),
-		metricsClient:      monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
-		dashboardMgr:       newDashboardManager(),
-		sdConfigsPath:      cfg.SDConfigsPath,
-		shutdownCh:         make(chan struct{}),
-		modChangePriceData: make(map[int64]modChangePriceSession),
-		adminSwitchData:    make(map[int64]adminSwitchSession),
-		adminPriceData:     make(map[int64]adminChangePriceSession),
-		bugReportData:      make(map[int64]bugReportSession),
+		bot:             b,
+		db:              db,
+		remnawave:       remnawaveClient,
+		config:          cfg,
+		userStates:      newStateMap(),
+		metricsClient:   monitoring.NewMetricsClient(cfg.VictoriaMetricsURL),
+		dashboardMgr:    newDashboardManager(),
+		sdConfigsPath:   cfg.SDConfigsPath,
+		shutdownCh:      make(chan struct{}),
+		adminSwitchData: make(map[int64]adminSwitchSession),
+		adminPriceData:  make(map[int64]adminChangePriceSession),
+		bugReportData:   make(map[int64]bugReportSession),
 	}
 	bot.userLimiter = newUserRateLimiter(3, 5, bot.shutdownCh) // 3 req/s, burst 5
 
@@ -190,6 +188,32 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnExtMonth, bot.handleAdminExtendMonth)
 	b.Handle(&btnExtConfirm, bot.handleAdminExtendConfirm)
 	b.Handle(&btnExtCancel, bot.handleAdminExtendCancel)
+
+	refMenu := &tele.ReplyMarkup{}
+	btnRefResend := refMenu.Data("", cbReferralResend)
+	btnRefRevoke := refMenu.Data("", cbReferralRevoke)
+	btnRefRevokeOK := refMenu.Data("", cbReferralRevokeOK)
+	btnRefPage := refMenu.Data("", cbReferralPage)
+	btnRefBack := refMenu.Data("", cbReferralBack)
+	b.Handle(&btnRefResend, bot.handleReferralResend)
+	b.Handle(&btnRefRevoke, bot.handleReferralRevoke)
+	b.Handle(&btnRefRevokeOK, bot.handleReferralRevokeConfirm)
+	b.Handle(&btnRefPage, bot.handleReferralPage)
+	b.Handle(&btnRefBack, bot.handleReferralClose)
+
+	adminRefMenu := &tele.ReplyMarkup{}
+	btnAdminRefOverview := adminRefMenu.Data("", cbAdminReferralOverview)
+	btnAdminRefLeaders := adminRefMenu.Data("", cbAdminReferralLeaders)
+	btnAdminUserRefs := adminRefMenu.Data("", cbAdminUserReferrals)
+	btnAdminRefRevoke := adminRefMenu.Data("", cbAdminReferralRevoke)
+	btnAdminRefRevokeOK := adminRefMenu.Data("", cbAdminReferralRevokeOK)
+	btnAdminRefBack := adminRefMenu.Data("", cbAdminReferralBack)
+	b.Handle(&btnAdminRefOverview, bot.handleAdminReferralOverview)
+	b.Handle(&btnAdminRefLeaders, bot.handleAdminReferralLeaderboard)
+	b.Handle(&btnAdminUserRefs, bot.handleAdminUserReferrals)
+	b.Handle(&btnAdminRefRevoke, bot.handleAdminReferralRevoke)
+	b.Handle(&btnAdminRefRevokeOK, bot.handleAdminReferralRevokeConfirm)
+	b.Handle(&btnAdminRefBack, bot.handleAdminReferralBack)
 
 	return bot, nil
 }
@@ -369,15 +393,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processBanUser(c, text)
 		}
 
-	case StateWaitDeleteInvite:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
-		}
-		if b.isAdmin(c) {
-			return b.processDeleteInvite(c, text)
-		}
-
 	case StateWaitSwitchSubscriptionID:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
@@ -437,68 +452,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processAdminChangePriceMigrationConfirm(c, text)
 		}
 
-	case StateWaitModDeleteInvite:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
-		}
-		if b.isModerator(telegramID) {
-			return b.processModeratorDeleteInvite(c, text)
-		}
-		b.userStates.Delete(telegramID) // права модератора отозваны — сбрасываем состояние
-
-	case StateWaitModInvitePrice:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorMenuKeyboard()})
-		}
-		if b.isModerator(telegramID) {
-			return b.processModeratorInvitePrice(c, text)
-		}
-		b.userStates.Delete(telegramID) // права модератора отозваны — сбрасываем состояние
-
-	case StateWaitModChangePriceID:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			b.clearModChangePriceSession(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
-		}
-		if b.isModerator(telegramID) {
-			return b.processModChangePriceID(c, text)
-		}
-		b.userStates.Delete(telegramID)          // права модератора отозваны — сбрасываем состояние
-		b.clearModChangePriceSession(telegramID) // очищаем сессионные данные смены цены
-
-	case StateWaitModChangePriceValue:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			b.clearModChangePriceSession(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: ModeratorSubscribersKeyboard()})
-		}
-		if b.isModerator(telegramID) {
-			return b.processModChangePriceValue(c, text)
-		}
-		b.userStates.Delete(telegramID)          // права модератора отозваны — сбрасываем состояние
-		b.clearModChangePriceSession(telegramID) // очищаем сессионные данные смены цены
-
-	case StateWaitAddModerator:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
-		}
-		if b.isAdmin(c) {
-			return b.processAddModerator(c, text)
-		}
-
-	case StateWaitRemoveModerator:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminKeyboard(b.isMaintenanceMode())})
-		}
-		if b.isAdmin(c) {
-			return b.processRemoveModerator(c, text)
-		}
-
 	case StateWaitPaymentMethod:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)
@@ -543,10 +496,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleCreateInvite(c)
 		case BtnAdminBanUser:
 			return b.handleBanUserRequest(c)
-		case BtnAdminViewInvites:
-			return b.handleViewInvites(c)
-		case BtnAdminDeleteInvite:
-			return b.handleDeleteInviteRequest(c)
 		case BtnAdminSwitchSubscription:
 			return b.handleSwitchSubscription(c)
 		case BtnAdminSwitchInfinite:
@@ -557,43 +506,25 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleAdminUserInfoRequest(c)
 		case BtnBroadcastActive:
 			return b.handleBroadcastActiveRequest(c)
-		case BtnAdminModerators:
-			return b.handleAdminModeratorMenu(c)
-		case BtnAdminAddModerator:
-			return b.handleAdminAddModeratorRequest(c)
-		case BtnAdminListMods:
-			return b.handleAdminListModerators(c)
-		case BtnAdminRemoveMod:
-			return b.handleAdminRemoveModeratorRequest(c)
-		case BtnAdminModStats:
-			return b.handleAdminModStats(c)
+		case BtnAdminReferrals:
+			return b.handleAdminReferralsMenu(c)
+		case BtnAdminReferralOverview:
+			return b.showAdminReferralOverview(c, "30", false)
+		case BtnAdminReferralLeaders:
+			return b.showAdminReferralLeaderboard(c, "30", 0, false)
 		}
 	}
 
-	// Кнопки модератора
-	if b.isModerator(telegramID) {
-		switch text {
-		case BtnModInvites:
-			return b.handleModeratorMenu(c)
-		case BtnModCreate:
-			return b.handleModeratorCreateInvite(c)
-		case BtnModView:
-			return b.handleModeratorViewInvites(c)
-		case BtnModDelete:
-			return b.handleModeratorDeleteInviteRequest(c)
-		case BtnModSubscribers:
-			return b.handleModSubscribers(c)
-		case BtnModEarnings:
-			return b.handleModeratorEarnings(c)
-		case BtnModChangePrice:
-			return b.handleModChangePriceRequest(c)
-		case BtnBack:
-			if b.userStates.Get(c.Sender().ID) == StateModSubscribers {
-				return b.handleModeratorMenu(c)
-			}
-		case BtnModBack:
-			return b.handleModeratorBack(c)
-		}
+	// Общая система приглашений доступна всем зарегистрированным пользователям.
+	switch text {
+	case BtnInvites:
+		return b.handleInvitesMenu(c)
+	case BtnInviteCreate:
+		return b.handleCreateReferralInvite(c)
+	case BtnInviteList:
+		return b.handleReferralList(c)
+	case BtnInviteBack:
+		return b.handleBack(c)
 	}
 
 	// Кнопки пользователя
@@ -637,13 +568,24 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	err := b.db.ClaimInvite(code, telegramID)
 	if err != nil {
 		slog.Warn("Failed to claim invite", "code", code, "error", err)
-		return c.Send("❌ Инвайт-код не найден или уже использован. Попробуйте другой:")
+		switch {
+		case errors.Is(err, database.ErrInviteExpired):
+			return c.Send("❌ Срок действия приглашения истёк. Попросите новую ссылку:")
+		case errors.Is(err, database.ErrInviteRevoked):
+			return c.Send("❌ Приглашение было отозвано. Попросите новую ссылку:")
+		case errors.Is(err, database.ErrInviteUsed):
+			return c.Send("❌ Приглашение уже использовано. Попросите новую ссылку:")
+		case errors.Is(err, database.ErrInviteNotFound):
+			return c.Send("❌ Инвайт-код не найден. Проверьте код или попросите новую ссылку:")
+		default:
+			return c.Send("❌ Приглашение сейчас недоступно. Попробуйте другой код:")
+		}
 	}
 
 	invite, err := b.db.GetInviteByCode(code)
 	if err != nil || invite == nil {
 		slog.Error("Failed to load invite after claim", "code", code, "error", err)
-		_ = b.db.UnclaimInvite(code)
+		_ = b.db.UnclaimInvite(code, telegramID)
 		return c.Send("Ошибка обработки приглашения. Попробуйте позже.")
 	}
 
@@ -654,13 +596,13 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	}
 
 	expireAt := time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC)
-	if invite.ExpireDays != nil {
+	if invite.Kind == database.InviteKindReferral || invite.IsTrial {
 		expireAt = time.Now().UTC().Add(72 * time.Hour)
 	}
 
 	// Определяем лимит трафика: триал получает ограничение, админский инвайт — безлимит
 	var trafficLimitBytes int64
-	if invite.ExpireDays != nil {
+	if invite.Kind == database.InviteKindReferral || invite.IsTrial {
 		trafficLimitBytes = int64(b.config.TrialTrafficLimitGB) * 1024 * 1024 * 1024
 	}
 
@@ -668,34 +610,38 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	if err != nil {
 		slog.Error("Failed to create user in Remnawave", "error", err)
 		// Откатываем инвайт — пользователь не создан
-		_ = b.db.UnclaimInvite(code)
+		_ = b.db.UnclaimInvite(code, telegramID)
 		return c.Send("Ошибка создания аккаунта. Попробуйте позже или обратитесь к администратору.")
 	}
 
-	// Определяем subscription_price и moderator_id из инвайта
+	// Цена берётся из snapshot инвайта, first-touch — из всей истории referral.
 	var subscriptionPrice *int
-	var moderatorID *int64
 	if invite.SubscriptionPrice != nil {
 		subscriptionPrice = invite.SubscriptionPrice
 	}
-	if invite.ExpireDays != nil && b.isModerator(invite.CreatedBy) {
-		// Модераторский инвайт — ставим created_by как moderator_id
-		moderatorID = &invite.CreatedBy
+	var invitedBy *int64
+	if invite.Kind == database.InviteKindReferral {
+		invitedBy, err = b.db.GetFirstReferralInviter(telegramID)
+		if err != nil {
+			slog.Error("Failed to resolve first referral inviter", "error", err, "telegram_id", telegramID)
+			b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.UUID)
+			return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
+		}
 	}
 
 	// Сохраняем связку в БД
-	_, err = b.db.CreateUser(telegramID, username, c.Sender().FirstName, remnawaveUser.UUID, subscriptionPrice, moderatorID)
+	_, err = b.db.CreateUserWithInviter(telegramID, username, c.Sender().FirstName, remnawaveUser.UUID, subscriptionPrice, nil, invitedBy)
 	if err != nil {
 		slog.Error("Failed to create user in DB", "error", err)
-		// Откатываем: удаляем из Remnawave и освобождаем инвайт
-		_ = b.remnawave.DeleteUser(remnawaveUser.UUID)
-		_ = b.db.UnclaimInvite(code)
+		// Claim освобождается только после подтверждённого удаления из Remnawave.
+		b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.UUID)
 		return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
 	}
 
 	// Отправляем уведомление админу о новом пользователе (асинхронно)
 	if b.bot != nil {
 		go b.notifyAdminNewUser(telegramID, username, c.Sender().FirstName)
+		go b.notifyReferralActivated(invite, telegramID, c.Sender().FirstName, c.Sender().Username)
 	}
 
 	// Очищаем состояние
@@ -707,6 +653,21 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: b.userKeyboard(telegramID),
 	})
+}
+
+// rollbackCreatedRemnawaveUser компенсирует частично завершённую регистрацию.
+// Если панель временно не смогла удалить пользователя, claim намеренно остаётся:
+// startup-reconcile увидит его и безопасно завершит восстановление/откат.
+func (b *Bot) rollbackCreatedRemnawaveUser(code string, telegramID int64, remnawaveUUID string) {
+	err := b.remnawave.DeleteUser(remnawaveUUID)
+	if err != nil && !isRemnawaveNotFound(err) {
+		slog.Error("Partial registration rollback: keeping invite claimed for startup reconcile",
+			"error", err, "telegram_id", telegramID, "invite_code", code, "remnawave_uuid", remnawaveUUID)
+		return
+	}
+	if err := b.db.UnclaimInvite(code, telegramID); err != nil {
+		slog.Error("Failed to release invite after Remnawave rollback", "error", err, "telegram_id", telegramID, "invite_code", code)
+	}
 }
 
 // notifyAdminNewUser отправляет админу уведомление о новом пользователе
@@ -855,49 +816,47 @@ func (b *Bot) handleInstructionDesktop(c tele.Context) error {
 }
 
 // userKeyboard возвращает правильную клавиатуру для пользователя
-// с динамической кнопкой оплаты и учётом роли модератора
+// с динамической кнопкой оплаты и общим разделом приглашений
 func (b *Bot) userKeyboard(telegramID int64) *tele.ReplyMarkup {
-	isMod := b.isModerator(telegramID)
-
 	// Определяем, показывать ли кнопку оплаты и какой текст
 	user, err := b.db.GetUserByTelegramID(telegramID)
 	if err != nil || user == nil {
-		return UserMenuKeyboardDynamic("", false, isMod)
+		return UserMenuKeyboardDynamic("", false, false)
 	}
 
 	// Нет цены — кнопка оплаты скрыта. Для администратора тестовая цена из
 	// окружения заменяет персональную цену и не меняет запись пользователя.
 	if price, ok := b.paymentPrice(telegramID, user); !ok || price <= 0 {
-		return UserMenuKeyboardDynamic("", false, isMod)
+		return UserMenuKeyboardDynamic("", false, true)
 	}
 
 	// Нет ни одного провайдера — кнопка оплаты скрыта
 	if b.platega == nil && b.yookassa == nil {
-		return UserMenuKeyboardDynamic("", false, isMod)
+		return UserMenuKeyboardDynamic("", false, true)
 	}
 
 	// В режиме обслуживания скрываем оплату для всех.
 	if b.isMaintenanceMode() {
-		return UserMenuKeyboardDynamic("", false, isMod)
+		return UserMenuKeyboardDynamic("", false, true)
 	}
 
 	// Проверяем тип подписки для определения текста кнопки
 	remUser, err := b.remnawave.GetUserByTelegramID(telegramID)
 	if err != nil || remUser == nil {
-		return UserMenuKeyboardDynamic(BtnPay, true, isMod)
+		return UserMenuKeyboardDynamic(BtnPay, true, true)
 	}
 
 	// Бесконечная подписка — кнопка скрыта (если не админ)
 	if remUser.ExpireAt.Year() >= 2099 && telegramID != b.config.AdminID {
-		return UserMenuKeyboardDynamic("", false, isMod)
+		return UserMenuKeyboardDynamic("", false, true)
 	}
 
 	// Триал или grace → "Оплатить", оплаченная → "Продлить"
 	if b.isTrialUser(telegramID) || remUser.Status == remnawave.StatusDisabled {
-		return UserMenuKeyboardDynamic(BtnPay, true, isMod)
+		return UserMenuKeyboardDynamic(BtnPay, true, true)
 	}
 
-	return UserMenuKeyboardDynamic(BtnRenew, true, isMod)
+	return UserMenuKeyboardDynamic(BtnRenew, true, true)
 }
 
 // getBotUsername возвращает username бота для формирования deep link
@@ -964,14 +923,10 @@ func isMenuNavigationButton(text string) bool {
 		BtnInstIOS,
 		BtnInstAndroid,
 		BtnInstDesktop,
-		BtnModInvites,
-		BtnModCreate,
-		BtnModView,
-		BtnModSubscribers,
-		BtnModEarnings,
-		BtnModChangePrice,
-		BtnModDelete,
-		BtnModBack,
+		BtnInvites,
+		BtnInviteCreate,
+		BtnInviteList,
+		BtnInviteBack,
 		BtnAdminManage,
 		BtnAdminBroadcast,
 		BtnAdminStats,
@@ -980,18 +935,14 @@ func isMenuNavigationButton(text string) bool {
 		BtnAdminUserMode,
 		BtnAdminBack,
 		BtnAdminCreateInvite,
-		BtnAdminViewInvites,
-		BtnAdminDeleteInvite,
 		BtnAdminBanUser,
 		BtnAdminUserInfo,
 		BtnAdminSwitchSubscription,
 		BtnAdminSwitchInfinite,
 		BtnBroadcastActive,
-		BtnAdminModerators,
-		BtnAdminAddModerator,
-		BtnAdminListMods,
-		BtnAdminModStats,
-		BtnAdminRemoveMod:
+		BtnAdminReferrals,
+		BtnAdminReferralOverview,
+		BtnAdminReferralLeaders:
 		return true
 	default:
 		return false

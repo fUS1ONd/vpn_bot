@@ -5,6 +5,7 @@ import (
 
 	tele "gopkg.in/telebot.v3"
 
+	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
 
@@ -27,9 +28,20 @@ const (
 
 // Unique-идентификаторы inline-кнопок ручного продления подписки админом
 const (
-	cbAdminExtendMonth   = "adm_ext_month"  // запрос продления (Data = targetID)
-	cbAdminExtendConfirm = "adm_ext_ok"     // подтверждение (Data = targetID)
-	cbAdminExtendCancel  = "adm_ext_cancel" // отмена (Data = targetID)
+	cbAdminExtendMonth      = "adm_ext_month"  // запрос продления (Data = targetID)
+	cbAdminExtendConfirm    = "adm_ext_ok"     // подтверждение (Data = targetID)
+	cbAdminExtendCancel     = "adm_ext_cancel" // отмена (Data = targetID)
+	cbReferralResend        = "ref_resend"
+	cbReferralRevoke        = "ref_revoke"
+	cbReferralRevokeOK      = "ref_revoke_ok"
+	cbReferralPage          = "ref_page"
+	cbReferralBack          = "ref_back"
+	cbAdminReferralOverview = "adm_ref_overview"
+	cbAdminReferralLeaders  = "adm_ref_leaders"
+	cbAdminUserReferrals    = "adm_user_refs"
+	cbAdminReferralRevoke   = "adm_ref_revoke"
+	cbAdminReferralRevokeOK = "adm_ref_revoke_ok"
+	cbAdminReferralBack     = "adm_ref_back"
 )
 
 // Текстовые константы кнопок
@@ -71,8 +83,6 @@ const (
 	BtnAdminUserMode           = "👤 Режим пользователя"
 	BtnAdminBack               = "🔙 В меню админа"
 	BtnAdminCreateInvite       = "🎟 Создать инвайт"
-	BtnAdminViewInvites        = "📋 Коды"
-	BtnAdminDeleteInvite       = "🗑 Удалить код"
 	BtnAdminBanUser            = "🚫 Забанить"
 	BtnAdminUserInfo           = "🔍 Инфо о пользователе"
 	BtnAdminSwitchSubscription = "♾️ Сменить тариф"
@@ -87,28 +97,22 @@ const (
 	// Кнопки рассылки — только активным (у кого есть доступ)
 	BtnBroadcastActive = "📢 Рассылка активным"
 
-	// Кнопки модератора
-	BtnModInvites     = "🎟 Приглашения"
-	BtnModCreate      = "📨 Создать приглашение"
-	BtnModView        = "📋 Мои приглашения"
-	BtnModSubscribers = "👥 Мои подписчики"
-	BtnModEarnings    = "💰 Мой заработок"
-	BtnModChangePrice = "✏️ Изменить цену"
-	BtnModDelete      = "🗑 Удалить приглашение"
-	BtnModBack        = "🔙 В меню"
+	// Общая система приглашений
+	BtnInvites      = "🎟 Приглашения"
+	BtnInviteCreate = "📨 Создать приглашение"
+	BtnInviteList   = "📋 Мои приглашения"
+	BtnInviteBack   = "🔙 В меню"
 
-	// Админ-кнопки управления модераторами
-	BtnAdminModerators   = "👥 Модераторы"
-	BtnAdminAddModerator = "➕ Назначить модератора"
-	BtnAdminListMods     = "📋 Список модераторов"
-	BtnAdminModStats     = "📊 Статистика"
-	BtnAdminRemoveMod    = "➖ Снять модератора"
+	// Админ-кнопки статистики приглашений
+	BtnAdminReferrals        = "🤝 Приглашения"
+	BtnAdminReferralOverview = "📊 Обзор"
+	BtnAdminReferralLeaders  = "🏆 Кто приглашает"
 )
 
 // UserMenuKeyboardDynamic строит главное меню с динамической кнопкой оплаты.
 // payButtonText — текст кнопки ("Оплатить" / "Продлить"), showPayButton — показывать ли,
-// isModerator — добавляет кнопку "Приглашения".
-func UserMenuKeyboardDynamic(payButtonText string, showPayButton bool, isModerator bool) *tele.ReplyMarkup {
+// showInvites — добавляет кнопку "Приглашения".
+func UserMenuKeyboardDynamic(payButtonText string, showPayButton bool, showInvites bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	rows := []tele.Row{
 		menu.Row(menu.Text(BtnStatus)),
@@ -120,10 +124,53 @@ func UserMenuKeyboardDynamic(payButtonText string, showPayButton bool, isModerat
 	}
 	rows = append(rows, menu.Row(menu.Text(BtnInstructions), menu.Text(BtnInfo)))
 	rows = append(rows, menu.Row(menu.Text(BtnBugReport)))
-	if isModerator {
-		rows = append(rows, menu.Row(menu.Text(BtnModInvites)))
+	if showInvites {
+		rows = append(rows, menu.Row(menu.Text(BtnInvites)))
 	}
 	menu.Reply(rows...)
+	return menu
+}
+
+// InvitesMenuKeyboard — общее меню приглашений без moderator-функций.
+func InvitesMenuKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu.Reply(
+		menu.Row(menu.Text(BtnInviteCreate)),
+		menu.Row(menu.Text(BtnInviteList)),
+		menu.Row(menu.Text(BtnInviteBack)),
+	)
+	return menu
+}
+
+// ReferralInvitesKeyboard строит действия для активных ссылок и пагинацию истории.
+func ReferralInvitesKeyboard(invites []database.Invite, page int, hasNext bool) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+	for _, invite := range invites {
+		resend := menu.Data("📨 "+invite.Code, cbReferralResend, invite.Code)
+		revoke := menu.Data("🗑 Отозвать", cbReferralRevoke, invite.Code)
+		rows = append(rows, menu.Row(resend, revoke))
+	}
+	var nav tele.Row
+	if page > 0 {
+		nav = append(nav, menu.Data("◀️", cbReferralPage, fmt.Sprintf("%d", page-1)))
+	}
+	if hasNext {
+		nav = append(nav, menu.Data("▶️", cbReferralPage, fmt.Sprintf("%d", page+1)))
+	}
+	if len(nav) > 0 {
+		rows = append(rows, nav)
+	}
+	rows = append(rows, menu.Row(menu.Data("🔙 Закрыть", cbReferralBack)))
+	menu.Inline(rows...)
+	return menu
+}
+
+func ReferralRevokeConfirmKeyboard(code string) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	yes := menu.Data("✅ Отозвать", cbReferralRevokeOK, code)
+	back := menu.Data("🔙 Назад", cbReferralPage, "0")
+	menu.Inline(menu.Row(yes), menu.Row(back))
 	return menu
 }
 
@@ -146,7 +193,7 @@ func AdminKeyboard(maintenanceMode bool) *tele.ReplyMarkup {
 		maintenanceBtn = BtnAdminMaintenanceOff
 	}
 	menu.Reply(
-		menu.Row(menu.Text(BtnAdminManage), menu.Text(BtnAdminModerators)),
+		menu.Row(menu.Text(BtnAdminManage), menu.Text(BtnAdminReferrals)),
 		menu.Row(menu.Text(BtnAdminBroadcast), menu.Text(BtnAdminStats)),
 		menu.Row(menu.Text(maintenanceBtn)),
 		menu.Row(menu.Text(BtnAdminUserMode)),
@@ -158,8 +205,8 @@ func AdminKeyboard(maintenanceMode bool) *tele.ReplyMarkup {
 func AdminManageKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
-		menu.Row(menu.Text(BtnAdminCreateInvite), menu.Text(BtnAdminViewInvites)),
-		menu.Row(menu.Text(BtnAdminBanUser), menu.Text(BtnAdminDeleteInvite)),
+		menu.Row(menu.Text(BtnAdminCreateInvite)),
+		menu.Row(menu.Text(BtnAdminBanUser)),
 		menu.Row(menu.Text(BtnAdminSwitchSubscription)),
 		menu.Row(menu.Text(BtnAdminUserInfo)),
 		menu.Row(menu.Text(BtnAdminBack)),
@@ -188,36 +235,48 @@ func AdminBroadcastKeyboard() *tele.ReplyMarkup {
 	return menu
 }
 
-// ModeratorMenuKeyboard возвращает подменю модератора
-func ModeratorMenuKeyboard() *tele.ReplyMarkup {
+func AdminReferralsKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	menu.Reply(
-		menu.Row(menu.Text(BtnModCreate)),
-		menu.Row(menu.Text(BtnModView), menu.Text(BtnModSubscribers)),
-		menu.Row(menu.Text(BtnModEarnings), menu.Text(BtnModDelete)),
-		menu.Row(menu.Text(BtnModBack)),
-	)
-	return menu
-}
-
-// ModeratorSubscribersKeyboard возвращает клавиатуру для списка подписчиков модератора.
-func ModeratorSubscribersKeyboard() *tele.ReplyMarkup {
-	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
-		menu.Row(menu.Text(BtnModChangePrice), menu.Text(BtnBack)),
-	)
-	return menu
-}
-
-// AdminModeratorKeyboard возвращает подменю управления модераторами
-func AdminModeratorKeyboard() *tele.ReplyMarkup {
-	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
-		menu.Row(menu.Text(BtnAdminAddModerator)),
-		menu.Row(menu.Text(BtnAdminListMods), menu.Text(BtnAdminModStats)),
-		menu.Row(menu.Text(BtnAdminRemoveMod)),
+		menu.Row(menu.Text(BtnAdminReferralOverview), menu.Text(BtnAdminReferralLeaders)),
 		menu.Row(menu.Text(BtnAdminBack)),
 	)
+	return menu
+}
+
+func AdminReferralOverviewKeyboard(selected string) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	labels := []struct{ value, label string }{{"7", "7 дней"}, {"30", "30 дней"}, {"all", "Всё время"}}
+	var row tele.Row
+	for _, item := range labels {
+		label := item.label
+		if item.value == selected {
+			label = "✅ " + label
+		}
+		row = append(row, menu.Data(label, cbAdminReferralOverview, item.value))
+	}
+	menu.Inline(row)
+	return menu
+}
+
+func AdminReferralLeadersKeyboard(period string, page int, hasNext bool) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	periodRow := menu.Row(
+		menu.Data(map[bool]string{true: "✅ 30 дней", false: "30 дней"}[period == "30"], cbAdminReferralLeaders, "30", "0"),
+		menu.Data(map[bool]string{true: "✅ Всё время", false: "Всё время"}[period == "all"], cbAdminReferralLeaders, "all", "0"),
+	)
+	rows := []tele.Row{periodRow}
+	var nav tele.Row
+	if page > 0 {
+		nav = append(nav, menu.Data("◀️", cbAdminReferralLeaders, period, fmt.Sprintf("%d", page-1)))
+	}
+	if hasNext {
+		nav = append(nav, menu.Data("▶️", cbAdminReferralLeaders, period, fmt.Sprintf("%d", page+1)))
+	}
+	if len(nav) > 0 {
+		rows = append(rows, nav)
+	}
+	menu.Inline(rows...)
 	return menu
 }
 
@@ -393,15 +452,52 @@ func BugCommentKeyboard() *tele.ReplyMarkup {
 // AdminUserInfoKeyboard — inline-клавиатура карточки пользователя.
 // Кнопка «Продлить на месяц» скрыта для безлимитных подписок (expireAt год >= 2099).
 func AdminUserInfoKeyboard(targetID int64, remUser *remnawave.User) *tele.ReplyMarkup {
+	return AdminUserInfoKeyboardWithReferrals(targetID, remUser, 0)
+}
+
+func AdminUserInfoKeyboardWithReferrals(targetID int64, remUser *remnawave.User, activeInvites int) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
+	var row tele.Row
 
 	if remUser != nil && remUser.ExpireAt.Year() < 2099 {
 		extend := menu.Data("➕ Продлить на месяц", cbAdminExtendMonth, fmt.Sprintf("%d", targetID))
-		rows = append(rows, menu.Row(extend))
+		row = append(row, extend)
 	}
+	refs := menu.Data(fmt.Sprintf("🎟 Приглашения %d/3", activeInvites), cbAdminUserReferrals, fmt.Sprintf("%d", targetID), "0")
+	row = append(row, refs)
+	rows = append(rows, row)
 
 	menu.Inline(rows...)
+	return menu
+}
+
+func AdminUserReferralsKeyboard(targetID int64, active []database.Invite, page int, hasNext bool) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+	for _, invite := range active {
+		rows = append(rows, menu.Row(menu.Data("🗑 "+invite.Code, cbAdminReferralRevoke, fmt.Sprintf("%d", targetID), invite.Code)))
+	}
+	var nav tele.Row
+	if page > 0 {
+		nav = append(nav, menu.Data("◀️", cbAdminUserReferrals, fmt.Sprintf("%d", targetID), fmt.Sprintf("%d", page-1)))
+	}
+	if hasNext {
+		nav = append(nav, menu.Data("▶️", cbAdminUserReferrals, fmt.Sprintf("%d", targetID), fmt.Sprintf("%d", page+1)))
+	}
+	if len(nav) > 0 {
+		rows = append(rows, nav)
+	}
+	rows = append(rows, menu.Row(menu.Data("🔙 Назад", cbAdminReferralBack, fmt.Sprintf("%d", targetID))))
+	menu.Inline(rows...)
+	return menu
+}
+
+func AdminReferralRevokeConfirmKeyboard(targetID int64, code string) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	yes := menu.Data("✅ Отозвать", cbAdminReferralRevokeOK, fmt.Sprintf("%d", targetID), code)
+	back := menu.Data("🔙 Назад", cbAdminUserReferrals, fmt.Sprintf("%d", targetID), "0")
+	menu.Inline(menu.Row(yes), menu.Row(back))
 	return menu
 }
 

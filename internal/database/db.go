@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -12,7 +13,8 @@ import (
 
 // DB оборачивает операции с базой данных
 type DB struct {
-	conn *sql.DB
+	conn       *sql.DB
+	referralMu sync.Mutex
 }
 
 // User представляет запись пользователя
@@ -23,6 +25,7 @@ type User struct {
 	RemnawaveUUID      string
 	SubscriptionPrice  *int   // Цена подписки руб/мес (NULL = не установлена)
 	ModeratorID        *int64 // Telegram ID куратора (NULL = админский/снят)
+	InvitedBy          *int64 // Telegram ID первого реферального автора
 	LegacyPaidMigrated bool   // Старый пользователь с ручной оплатой, переведённый на новую модель
 	CreatedAt          time.Time
 }
@@ -36,8 +39,18 @@ type Invite struct {
 	ExpireDays        *int       // NULL = бессрочный инвайт
 	SubscriptionPrice *int       // Цена подписки при создании инвайта
 	KickedAt          *time.Time // Время автокика — инвайт нельзя переиспользовать
+	Kind              string     // admin или referral
+	IsTrial           bool       // Неизменяемый признак trial-инвайта
+	ExpiresAt         *time.Time // Срок действия неиспользованной ссылки
+	RevokedAt         *time.Time // Время мягкого отзыва
+	RevokedBy         *int64     // Кто отозвал ссылку
 	CreatedAt         time.Time
 }
+
+const (
+	InviteKindAdmin    = "admin"
+	InviteKindReferral = "referral"
+)
 
 // New создаёт новое подключение к БД и инициализирует схему
 func New(dbPath string) (*DB, error) {
@@ -85,6 +98,7 @@ func migrate(conn *sql.DB) error {
 			telegram_id INTEGER PRIMARY KEY,
 			username TEXT,
 			remnawave_uuid TEXT UNIQUE NOT NULL,
+			invited_by INTEGER,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 
@@ -96,6 +110,10 @@ func migrate(conn *sql.DB) error {
 				used_at TIMESTAMP,
 				expire_days INTEGER,
 				is_trial INTEGER NOT NULL DEFAULT 0,
+				kind TEXT NOT NULL DEFAULT 'admin',
+				expires_at TIMESTAMP,
+				revoked_at TIMESTAMP,
+				revoked_by INTEGER,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 			)`,
 
@@ -188,10 +206,16 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE users ADD COLUMN moderator_id INTEGER`,
 		// Миграция: флаг старой ручной оплаты для перевода legacy-пользователей на новую модель
 		`ALTER TABLE users ADD COLUMN legacy_paid_migrated INTEGER NOT NULL DEFAULT 0`,
+		// Первый автор referral-приглашения; moderator_id остаётся архивным полем.
+		`ALTER TABLE users ADD COLUMN invited_by INTEGER`,
 		// Миграция: цена подписки при создании инвайта
 		`ALTER TABLE invites ADD COLUMN subscription_price INTEGER`,
 		// Миграция: неизменяемый исторический флаг trial-инвайта
 		`ALTER TABLE invites ADD COLUMN is_trial INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE invites ADD COLUMN kind TEXT NOT NULL DEFAULT 'admin'`,
+		`ALTER TABLE invites ADD COLUMN expires_at TIMESTAMP`,
+		`ALTER TABLE invites ADD COLUMN revoked_at TIMESTAMP`,
+		`ALTER TABLE invites ADD COLUMN revoked_by INTEGER`,
 		// Нейтральные поля провайдера; старый platega_transaction_id остаётся для rollback-совместимости.
 		`ALTER TABLE payments ADD COLUMN provider TEXT NOT NULL DEFAULT 'platega'`,
 		`ALTER TABLE payments ADD COLUMN provider_payment_id TEXT`,
@@ -223,6 +247,64 @@ func migrate(conn *sql.DB) error {
 	// должно остаться trial в исторической статистике даже после последующих изменений expire_days.
 	if _, err := conn.Exec(`UPDATE invites SET is_trial = 1 WHERE is_trial = 0 AND expire_days IS NOT NULL`); err != nil {
 		return fmt.Errorf("failed to backfill invites.is_trial: %w", err)
+	}
+	// Исторические trial-инвайты становятся referral. Остальные старые инвайты
+	// остаются служебными admin-инвайтами.
+	if _, err := conn.Exec(`UPDATE invites SET kind = 'referral' WHERE is_trial = 1 OR expire_days IS NOT NULL OR subscription_price IS NOT NULL`); err != nil {
+		return fmt.Errorf("failed to backfill invites.kind: %w", err)
+	}
+	if _, err := conn.Exec(`UPDATE invites SET kind = 'admin' WHERE kind IS NULL OR kind = ''`); err != nil {
+		return fmt.Errorf("failed to backfill admin invites.kind: %w", err)
+	}
+	// В старых схемах used_at появился позже used_by. Без детерминированного
+	// fallback такие активации выпадали бы даже из статистики «за всё время».
+	if _, err := conn.Exec(`UPDATE invites
+		SET used_at = COALESCE(created_at, CURRENT_TIMESTAMP)
+		WHERE used_by IS NOT NULL AND used_at IS NULL`); err != nil {
+		return fmt.Errorf("failed to backfill invites.used_at: %w", err)
+	}
+	// Старые неиспользованные referral-ссылки аннулируются при переходе. Новые
+	// referral-ссылки всегда имеют expires_at и этим запросом не затрагиваются.
+	if _, err := conn.Exec(`UPDATE invites
+		SET revoked_at = CURRENT_TIMESTAMP, revoked_by = created_by
+		WHERE kind = 'referral' AND used_by IS NULL AND expires_at IS NULL AND revoked_at IS NULL`); err != nil {
+		return fmt.Errorf("failed to revoke legacy referral invites: %w", err)
+	}
+	// Если от старой moderator-модели не сохранилась строка инвайта, создаём
+	// использованную архивную запись. Иначе fallback жил бы только в users и
+	// исчезал после автокика, ломая first-touch и историческую статистику.
+	if _, err := conn.Exec(`INSERT INTO invites
+		(code, created_by, used_by, used_at, expire_days, subscription_price, is_trial, kind, created_at)
+		SELECT printf('legacy-referral-%d-%d', u.moderator_id, u.telegram_id), u.moderator_id, u.telegram_id,
+		       COALESCE(u.created_at, CURRENT_TIMESTAMP), 30, u.subscription_price, 1, 'referral',
+		       COALESCE(u.created_at, CURRENT_TIMESTAMP)
+		FROM users u
+		WHERE u.moderator_id IS NOT NULL
+		  AND NOT EXISTS (SELECT 1 FROM invites i WHERE i.used_by = u.telegram_id)`); err != nil {
+		return fmt.Errorf("failed to preserve legacy moderator attribution: %w", err)
+	}
+	// First-touch определяется самым ранним использованным инвайтом любого вида:
+	// служебный admin-first-touch никогда не может быть перезаписан referral.
+	if _, err := conn.Exec(`UPDATE users
+		SET invited_by = (
+			SELECT i.created_by FROM invites i
+			WHERE i.used_by = users.telegram_id
+			ORDER BY i.used_at ASC, i.created_at ASC, i.rowid ASC LIMIT 1
+		)
+		WHERE invited_by IS NULL AND 'referral' = (
+			SELECT i.kind FROM invites i WHERE i.used_by = users.telegram_id
+			ORDER BY i.used_at ASC, i.created_at ASC, i.rowid ASC LIMIT 1
+		)`); err != nil {
+		return fmt.Errorf("failed to backfill users.invited_by from invites: %w", err)
+	}
+	if _, err := conn.Exec(`CREATE INDEX IF NOT EXISTS idx_invites_creator_state ON invites(created_by, kind, used_by, expires_at, revoked_at)`); err != nil {
+		return fmt.Errorf("failed to create invite state index: %w", err)
+	}
+	if _, err := conn.Exec(`CREATE INDEX IF NOT EXISTS idx_invites_creator_created ON invites(created_by, kind, created_at)`); err != nil {
+		return fmt.Errorf("failed to create invite creation index: %w", err)
+	}
+	if _, err := conn.Exec(`CREATE INDEX IF NOT EXISTS idx_invites_first_touch ON invites(used_by, used_at)`); err != nil {
+		return fmt.Errorf("failed to create invite first-touch index: %w", err)
 	}
 
 	return nil

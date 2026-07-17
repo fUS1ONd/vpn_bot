@@ -232,7 +232,7 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 }
 
 // isTrialUser проверяет, находится ли пользователь на триале.
-// Триальный = приглашён модераторским инвайтом (expire_days != NULL) И ни разу не платил.
+// Триальный = активирован trial-инвайтом и ни разу не платил.
 // confirmed_not_activated уже не считается "не платил": деньги подтверждены, просто
 // активация доступа в панели временно отложена на retry.
 func (b *Bot) isTrialUser(telegramID int64) bool {
@@ -245,7 +245,7 @@ func (b *Bot) isTrialUser(telegramID int64) bool {
 	}
 
 	invite, err := b.db.GetInviteByUsedBy(telegramID)
-	if err != nil || invite == nil || invite.ExpireDays == nil {
+	if err != nil || invite == nil || !invite.IsTrial {
 		return false // Админский инвайт или нет инвайта — не триал
 	}
 

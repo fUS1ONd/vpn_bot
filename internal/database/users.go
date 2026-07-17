@@ -7,9 +7,15 @@ import (
 
 // CreateUser создаёт нового пользователя
 func (db *DB) CreateUser(telegramID int64, username, firstName, remnawaveUUID string, subscriptionPrice *int, moderatorID *int64) (*User, error) {
+	return db.CreateUserWithInviter(telegramID, username, firstName, remnawaveUUID, subscriptionPrice, moderatorID, moderatorID)
+}
+
+// CreateUserWithInviter создаёт пользователя с раздельными архивным moderator_id
+// и нейтральным first-touch invited_by.
+func (db *DB) CreateUserWithInviter(telegramID int64, username, firstName, remnawaveUUID string, subscriptionPrice *int, moderatorID, invitedBy *int64) (*User, error) {
 	_, err := db.conn.Exec(
-		`INSERT INTO users (telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, legacy_paid_migrated) VALUES (?, ?, ?, ?, ?, ?, 0)`,
-		telegramID, username, firstName, remnawaveUUID, subscriptionPrice, moderatorID,
+		`INSERT INTO users (telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, invited_by, legacy_paid_migrated) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+		telegramID, username, firstName, remnawaveUUID, subscriptionPrice, moderatorID, invitedBy,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
@@ -24,11 +30,12 @@ func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 	var firstName sql.NullString
 	var subPrice sql.NullInt64
 	var modID sql.NullInt64
+	var invitedBy sql.NullInt64
 	var legacyPaidMigrated sql.NullInt64
 	err := db.conn.QueryRow(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, legacy_paid_migrated, created_at FROM users WHERE telegram_id = ?`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, invited_by, legacy_paid_migrated, created_at FROM users WHERE telegram_id = ?`,
 		telegramID,
-	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &legacyPaidMigrated, &user.CreatedAt)
+	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &invitedBy, &legacyPaidMigrated, &user.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -46,6 +53,9 @@ func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
 	}
 	if modID.Valid {
 		user.ModeratorID = &modID.Int64
+	}
+	if invitedBy.Valid {
+		user.InvitedBy = &invitedBy.Int64
 	}
 	user.LegacyPaidMigrated = legacyPaidMigrated.Valid && legacyPaidMigrated.Int64 != 0
 
@@ -58,11 +68,12 @@ func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
 	var firstName sql.NullString
 	var subPrice sql.NullInt64
 	var modID sql.NullInt64
+	var invitedBy sql.NullInt64
 	var legacyPaidMigrated sql.NullInt64
 	err := db.conn.QueryRow(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, legacy_paid_migrated, created_at FROM users WHERE remnawave_uuid = ?`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, invited_by, legacy_paid_migrated, created_at FROM users WHERE remnawave_uuid = ?`,
 		uuid,
-	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &legacyPaidMigrated, &user.CreatedAt)
+	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &invitedBy, &legacyPaidMigrated, &user.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -81,6 +92,9 @@ func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
 	if modID.Valid {
 		user.ModeratorID = &modID.Int64
 	}
+	if invitedBy.Valid {
+		user.InvitedBy = &invitedBy.Int64
+	}
 	user.LegacyPaidMigrated = legacyPaidMigrated.Valid && legacyPaidMigrated.Int64 != 0
 
 	return &user, nil
@@ -89,7 +103,7 @@ func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
 // GetAllUsers получает всех пользователей
 func (db *DB) GetAllUsers() ([]User, error) {
 	rows, err := db.conn.Query(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, legacy_paid_migrated, created_at FROM users ORDER BY created_at`,
+		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, invited_by, legacy_paid_migrated, created_at FROM users ORDER BY created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query users: %w", err)
@@ -102,8 +116,9 @@ func (db *DB) GetAllUsers() ([]User, error) {
 		var firstName sql.NullString
 		var subPrice sql.NullInt64
 		var modID sql.NullInt64
+		var invitedBy sql.NullInt64
 		var legacyPaidMigrated sql.NullInt64
-		if err := rows.Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &legacyPaidMigrated, &user.CreatedAt); err != nil {
+		if err := rows.Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &invitedBy, &legacyPaidMigrated, &user.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
 		}
 		if firstName.Valid {
@@ -115,6 +130,9 @@ func (db *DB) GetAllUsers() ([]User, error) {
 		}
 		if modID.Valid {
 			user.ModeratorID = &modID.Int64
+		}
+		if invitedBy.Valid {
+			user.InvitedBy = &invitedBy.Int64
 		}
 		user.LegacyPaidMigrated = legacyPaidMigrated.Valid && legacyPaidMigrated.Int64 != 0
 		users = append(users, user)

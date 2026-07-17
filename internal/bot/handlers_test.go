@@ -552,8 +552,8 @@ func TestProcessInviteCode_UsesExpectedTrialPeriod(t *testing.T) {
 	})
 }
 
-func TestProcessInviteCode_SetsModeratorIDOnlyForModeratorInvites(t *testing.T) {
-	t.Run("модераторский инвайт копирует moderator_id и цену", func(t *testing.T) {
+func TestProcessInviteCode_SetsFirstTouchWithoutModeratorRuntime(t *testing.T) {
+	t.Run("referral-инвайт копирует invited_by и цену", func(t *testing.T) {
 		b, db := setupTestBot(t)
 
 		modID := int64(1234)
@@ -602,9 +602,10 @@ func TestProcessInviteCode_SetsModeratorIDOnlyForModeratorInvites(t *testing.T) 
 		require.NoError(t, err)
 		require.NotNil(t, user)
 		require.NotNil(t, user.SubscriptionPrice)
-		require.NotNil(t, user.ModeratorID)
+		assert.Nil(t, user.ModeratorID)
+		require.NotNil(t, user.InvitedBy)
 		assert.Equal(t, price, *user.SubscriptionPrice)
-		assert.Equal(t, modID, *user.ModeratorID)
+		assert.Equal(t, modID, *user.InvitedBy)
 	})
 
 	t.Run("админский срочный инвайт не заполняет moderator_id", func(t *testing.T) {
@@ -653,6 +654,8 @@ func TestProcessInviteCode_SetsModeratorIDOnlyForModeratorInvites(t *testing.T) 
 		require.NotNil(t, user.SubscriptionPrice)
 		assert.Equal(t, price, *user.SubscriptionPrice)
 		assert.Nil(t, user.ModeratorID)
+		require.NotNil(t, user.InvitedBy)
+		assert.Equal(t, b.config.AdminID, *user.InvitedBy)
 	})
 }
 
@@ -703,42 +706,6 @@ func TestHandleTextMessage_InfoButtonRoutesToHelpMessage(t *testing.T) {
 	msg, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
 	assert.Equal(t, BuildInfoMessage(b.config), msg)
-}
-
-func TestHandleTextMessage_ModeratorStateClearedWhenRightsRevoked(t *testing.T) {
-	moderatorStates := []string{
-		StateWaitModDeleteInvite,
-		StateWaitModInvitePrice,
-		StateWaitModChangePriceID,
-		StateWaitModChangePriceValue,
-	}
-
-	for _, state := range moderatorStates {
-		t.Run(state, func(t *testing.T) {
-			b, db := setupTestBot(t)
-
-			// Создаём пользователя БЕЗ прав модератора
-			userID := int64(55001)
-			_, err := db.CreateUser(userID, "exmod", "ExMod", "uuid-exmod", nil, nil)
-			require.NoError(t, err)
-
-			// Устанавливаем зависшее модераторское состояние
-			b.userStates.Set(userID, state)
-
-			// Отправляем произвольный текст
-			ctx := &MockContext{
-				sender:  &tele.User{ID: userID, Username: "exmod"},
-				message: &tele.Message{Text: "какой-то текст"},
-			}
-
-			err = b.handleTextMessage(ctx)
-			require.NoError(t, err)
-
-			// Состояние должно быть очищено
-			assert.Equal(t, StateNone, b.userStates.Get(userID),
-				"состояние должно очищаться при отзыве прав модератора (state: %s)", state)
-		})
-	}
 }
 
 func TestHandleTextMessage_PaymentFlowResetsOnMainMenuButtons(t *testing.T) {

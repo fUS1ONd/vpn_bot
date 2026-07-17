@@ -16,9 +16,6 @@ import (
 // Состояния админа
 const (
 	StateWaitBanUser                          = "wait_ban_user"                             // Ожидание telegram_id для бана
-	StateWaitDeleteInvite                     = "wait_delete_invite"                        // Ожидание кода для удаления
-	StateWaitAddModerator                     = "wait_add_moderator"                        // Ожидание telegram_id для назначения модератора
-	StateWaitRemoveModerator                  = "wait_remove_moderator"                     // Ожидание telegram_id для снятия модератора
 	StateWaitAdminUserInfo                    = "wait_admin_user_info"                      // Ожидание telegram_id для карточки пользователя
 	StateWaitAdminChangePriceID               = "wait_admin_change_price_id"                // Ожидание telegram_id для смены цены
 	StateWaitAdminChangePriceValue            = "wait_admin_change_price_value"             // Ожидание новой цены подписки
@@ -235,33 +232,36 @@ func (b *Bot) processAdminUserInfo(c tele.Context, text string) error {
 		return c.Send("🚫 Пользователь забанен.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
+	msg, keyboard, err := b.buildAdminUserInfo(targetID)
+	if err != nil {
+		slog.Error("Failed to build admin user info", "error", err, "telegram_id", targetID)
+		return c.Send("❌ Пользователь не найден или данные подписки недоступны.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: keyboard})
+}
+
+func (b *Bot) buildAdminUserInfo(targetID int64) (string, *tele.ReplyMarkup, error) {
 	dbUser, err := b.db.GetUserByTelegramID(targetID)
-	if err != nil {
-		slog.Error("Failed to load DB user for admin info", "error", err, "telegram_id", targetID)
-		return c.Send("Ошибка получения пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	if err != nil || dbUser == nil {
+		return "", nil, fmt.Errorf("load db user: %w", err)
 	}
-	if dbUser == nil {
-		return c.Send("❌ Пользователь не найден.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
-	}
-
 	remUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
-	if err != nil {
-		slog.Error("Failed to load Remnawave user for admin info", "error", err, "telegram_id", targetID)
-		return c.Send("Ошибка получения данных подписки", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	if err != nil || remUser == nil {
+		return "", nil, fmt.Errorf("load remnawave user: %w", err)
 	}
 
-	invite, err := b.db.GetInviteByUsedBy(targetID)
-	if err != nil {
-		slog.Error("Failed to load invite for admin info", "error", err, "telegram_id", targetID)
-		return c.Send("Ошибка получения данных пользователя", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	inviterLabel := "администратор"
+	if dbUser.InvitedBy != nil {
+		inviterLabel = b.formatAdminSwitchCurator(*dbUser.InvitedBy)
 	}
-
-	curatorLabel := "админ"
-	switch {
-	case dbUser.ModeratorID != nil:
-		curatorLabel = b.formatAdminSwitchCurator(*dbUser.ModeratorID)
-	case invite != nil:
-		curatorLabel = b.formatAdminSwitchCurator(invite.CreatedBy)
+	referralSummary, err := b.db.GetReferralCreatorSummary(targetID, time.Now().UTC())
+	if err != nil {
+		return "", nil, fmt.Errorf("load referral summary: %w", err)
+	}
+	invitees, err := b.db.GetFirstTouchInvitees(targetID, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("load first-touch invitees: %w", err)
 	}
 
 	devicesLabel := "н/д"
@@ -285,7 +285,9 @@ func (b *Bot) processAdminUserInfo(c tele.Context, text string) error {
 	var msg strings.Builder
 	msg.WriteString("<b>🔍 Информация о пользователе</b>\n\n")
 	fmt.Fprintf(&msg, "👤 %s\n", formatUserLabel(dbUser.FirstName, dbUser.Username, dbUser.TelegramID))
-	fmt.Fprintf(&msg, "📋 Куратор: %s\n", curatorLabel)
+	fmt.Fprintf(&msg, "🤝 Пригласил: %s\n", inviterLabel)
+	fmt.Fprintf(&msg, "👥 Привёл пользователей: %d\n", len(invitees))
+	fmt.Fprintf(&msg, "🎟 Активных ссылок: %d из %d\n", referralSummary.Active, database.MaxActiveReferralInvites)
 	fmt.Fprintf(&msg, "💳 Цена подписки: %s\n", formatPriceLabel(dbUser.SubscriptionPrice))
 	if remUser.ExpireAt.Year() < 2099 {
 		fmt.Fprintf(
@@ -300,10 +302,18 @@ func (b *Bot) processAdminUserInfo(c tele.Context, text string) error {
 	fmt.Fprintf(&msg, "🏷 Тип: %s\n", typeLabel)
 	fmt.Fprintf(&msg, "%s Статус: %s", statusEmoji, statusLabel)
 
-	return c.Send(msg.String(), &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminUserInfoKeyboard(targetID, remUser),
-	})
+	return msg.String(), AdminUserInfoKeyboardWithReferrals(targetID, remUser, referralSummary.Active), nil
+}
+
+func (b *Bot) editAdminUserInfo(c tele.Context, targetID int64) error {
+	msg, keyboard, err := b.buildAdminUserInfo(targetID)
+	if err != nil {
+		return c.RespondAlert("Ошибка получения пользователя")
+	}
+	if err := c.Edit(msg, &tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: keyboard}); err != nil {
+		return err
+	}
+	return c.Respond()
 }
 
 // handleAdminChangePriceRequest запускает диалог изменения цены.
@@ -631,11 +641,6 @@ func (b *Bot) processBanUser(c tele.Context, text string) error {
 		return c.Send("Ошибка сохранения бана", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	// Каскадное удаление: если пользователь — модератор
-	if b.isModerator(telegramID) {
-		b.cascadeDeleteModerator(telegramID)
-	}
-
 	// Удаляем из Remnawave (отключаем доступ к серверам)
 	err = b.remnawave.DeleteUser(user.RemnawaveUUID)
 	if err != nil {
@@ -746,7 +751,6 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 	month := int(now.Month())
 
 	// Источник финансовой статистики — все подтверждённые платежи месяца.
-	// Платежи без earnings (админские) включаются с share_amount = 0.
 	confirmedPayments, err := b.db.GetConfirmedPaymentsByMonth(year, month)
 	if err != nil {
 		slog.Error("Failed to load monthly confirmed payments for admin stats", "error", err)
@@ -761,7 +765,6 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 		monthEarnings.TotalPlategaFee += plategaFee
 		monthEarnings.TotalWithdrawal += withdrawalFee
 		monthEarnings.TotalNetAmount += netAmount
-		monthEarnings.TotalShareAmount += payment.ShareAmount
 	}
 
 	trialsThisMonth, err := b.db.CountTrialsByMonth(year, month)
@@ -830,18 +833,14 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 		conversion = firstPayments * 100 / trialsThisMonth
 	}
 
-	ownerIncome := monthEarnings.TotalNetAmount - monthEarnings.TotalShareAmount
-
 	msg := fmt.Sprintf(
 		"<b>📊 Общая статистика — %s %d</b>\n\n"+
 			"💰 <b>Финансы за %s %d</b>\n"+
 			"├ Платежей за месяц: %d\n"+
 			"├ Сумма платежей (грязная): %d руб\n"+
-			"├ Комиссии Platega: -%d руб\n"+
+			"├ Комиссии провайдеров: -%d руб\n"+
 			"├ Комиссия вывода (2%%): -%d руб\n"+
-			"├ Чистый доход: %d руб\n"+
-			"├ Выплаты модераторам: -%d руб\n"+
-			"└ Доход владельца: %d руб\n\n"+
+			"└ Чистый доход владельца: %d руб\n\n"+
 			"📈 <b>Воронка за %s %d</b>\n"+
 			"└ Конверсия триал → оплата: %d%%\n\n"+
 			"👥 <b>Текущее состояние пользователей</b>\n"+
@@ -859,8 +858,6 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 		monthEarnings.TotalPlategaFee,
 		monthEarnings.TotalWithdrawal,
 		monthEarnings.TotalNetAmount,
-		monthEarnings.TotalShareAmount,
-		ownerIncome,
 		monthNameRu(now.Month()),
 		now.Year(),
 		conversion,
@@ -1010,387 +1007,6 @@ func (b *Bot) processBroadcastMessage(c tele.Context) error {
 	return nil
 }
 
-// handleViewInvites показывает список всех инвайт-кодов
-func (b *Bot) handleViewInvites(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	invites, err := b.db.GetAllInvitesWithUsers()
-	if err != nil {
-		slog.Error("Failed to get invites", "error", err)
-		return c.Send("Ошибка получения списка кодов", &tele.SendOptions{
-			ReplyMarkup: AdminManageKeyboard(),
-		})
-	}
-
-	if len(invites) == 0 {
-		return c.Send("📋 Инвайт-кодов пока нет", &tele.SendOptions{
-			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: AdminManageKeyboard(),
-		})
-	}
-
-	chunks := FormatInvitesListChunked(invites, 4000)
-	for i, chunk := range chunks {
-		opts := &tele.SendOptions{ParseMode: tele.ModeHTML}
-		// Клавиатуру показываем только в последнем сообщении
-		if i == len(chunks)-1 {
-			opts.ReplyMarkup = AdminManageKeyboard()
-		}
-		if err := c.Send(chunk, opts); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// FormatInvitesListChunked разбивает список инвайтов на части, не превышающие maxLen символов
-func FormatInvitesListChunked(invites []database.InviteWithUser, maxLen int) []string {
-	if len(invites) == 0 {
-		return nil
-	}
-
-	var chunks []string
-	var current strings.Builder
-	current.WriteString("<b>📋 Список инвайт-кодов</b>\n\n")
-
-	for _, inv := range invites {
-		entry := formatInviteEntry(inv)
-
-		// Если добавление записи превысит лимит — сохраняем текущий чанк и начинаем новый
-		if current.Len()+len(entry) > maxLen && current.Len() > 0 {
-			chunks = append(chunks, current.String())
-			current.Reset()
-			current.WriteString("<b>📋 Список инвайт-кодов (продолжение)</b>\n\n")
-		}
-
-		current.WriteString(entry)
-	}
-
-	if current.Len() > 0 {
-		chunks = append(chunks, current.String())
-	}
-
-	return chunks
-}
-
-// formatInviteEntry форматирует один инвайт для списка
-func formatInviteEntry(inv database.InviteWithUser) string {
-	var msg strings.Builder
-	if inv.UsedBy != nil {
-		msg.WriteString("✅ <b>Использован</b>\n")
-		msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
-
-		msg.WriteString("👤 " + formatUserLabel(inv.UserFirstName, inv.UserUsername, *inv.UsedBy) + "\n")
-
-		if inv.UsedAt != nil {
-			msg.WriteString(fmt.Sprintf("📅 %s\n", inv.UsedAt.Format("02.01.06 15:04")))
-		}
-	} else {
-		msg.WriteString("⭕ <b>Не использован</b>\n")
-		msg.WriteString(fmt.Sprintf("🔹 Код: <code>%s</code>\n", inv.Code))
-		msg.WriteString(fmt.Sprintf("📅 Создан: %s\n", inv.CreatedAt.Format("02.01.06 15:04")))
-	}
-
-	// Автор кода (модератор или админ)
-	if inv.CreatorUsername != "" {
-		fmt.Fprintf(&msg, "✍️ @%s\n", inv.CreatorUsername)
-	} else if inv.CreatorFirstName != "" {
-		fmt.Fprintf(&msg, "✍️ %s\n", inv.CreatorFirstName)
-	}
-
-	msg.WriteString("\n")
-	return msg.String()
-}
-
-// handleDeleteInviteRequest запрашивает код для удаления
-func (b *Bot) handleDeleteInviteRequest(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	b.userStates.Set(c.Sender().ID, StateWaitDeleteInvite)
-	return c.Send("<b>🗑 Удаление инвайт-кода</b>\n\nВведите код для удаления:", &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: CancelKeyboard(),
-	})
-}
-
-// processDeleteInvite обрабатывает удаление инвайта
-func (b *Bot) processDeleteInvite(c tele.Context, code string) error {
-	b.userStates.Delete(c.Sender().ID)
-
-	code = strings.TrimSpace(code)
-
-	err := b.db.DeleteUnusedInvite(code)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found or already used") {
-			return c.Send("❌ Код не найден или уже использован.\nМожно удалить только неиспользованные коды.", &tele.SendOptions{
-				ReplyMarkup: AdminManageKeyboard(),
-			})
-		}
-		slog.Error("Failed to delete invite", "error", err)
-		return c.Send("Ошибка удаления кода", &tele.SendOptions{
-			ReplyMarkup: AdminManageKeyboard(),
-		})
-	}
-
-	return c.Send(fmt.Sprintf("✅ Код <code>%s</code> удалён", code), &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminManageKeyboard(),
-	})
-}
-
-// --- Управление модераторами ---
-
-// handleAdminModeratorMenu показывает меню управления модераторами
-func (b *Bot) handleAdminModeratorMenu(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-	return c.Send("<b>👥 Модераторы</b>\n\nВыберите действие:", &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminModeratorKeyboard(),
-	})
-}
-
-// handleAdminAddModeratorRequest запрашивает telegram_id для назначения модератора
-func (b *Bot) handleAdminAddModeratorRequest(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	b.userStates.Set(c.Sender().ID, StateWaitAddModerator)
-	return c.Send("<b>➕ Назначить модератора</b>\n\nВведите telegram_id зарегистрированного пользователя:", &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: CancelKeyboard(),
-	})
-}
-
-// processAddModerator обрабатывает назначение модератора
-func (b *Bot) processAddModerator(c tele.Context, text string) error {
-	b.userStates.Delete(c.Sender().ID)
-
-	telegramID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
-	if err != nil {
-		return c.Send("Неверный telegram_id", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
-	}
-
-	// Проверяем что пользователь существует
-	user, err := b.db.GetUserByTelegramID(telegramID)
-	if err != nil || user == nil {
-		return c.Send("❌ Пользователь не найден в БД бота", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
-	}
-
-	// Назначать модератором можно только бессрочных пользователей (админский инвайт).
-	invite, err := b.db.GetInviteByUsedBy(telegramID)
-	if err != nil {
-		slog.Error("Failed to get invite for moderator validation", "error", err, "telegram_id", telegramID)
-		return c.Send("Ошибка проверки приглашения пользователя", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
-	}
-	if invite != nil && invite.ExpireDays != nil {
-		return c.Send("❌ Этот пользователь приглашён по месячному инвайту. Назначить модератором можно только пользователя с бессрочным (админским) приглашением.", &tele.SendOptions{
-			ReplyMarkup: AdminModeratorKeyboard(),
-		})
-	}
-
-	err = b.db.AddModerator(telegramID, c.Sender().ID)
-	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
-			return c.Send("❌ Этот пользователь уже является модератором", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
-		}
-		slog.Error("Failed to add moderator", "error", err)
-		return c.Send("Ошибка назначения модератора", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
-	}
-
-	msg := fmt.Sprintf("✅ Пользователь <code>%d</code> (@%s) назначен модератором", telegramID, user.Username)
-	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminModeratorKeyboard(),
-	})
-}
-
-// handleAdminListModerators показывает список модераторов
-func (b *Bot) handleAdminListModerators(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	mods, err := b.db.GetAllModerators()
-	if err != nil {
-		slog.Error("Failed to get moderators", "error", err)
-		return c.Send("Ошибка получения списка модераторов", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
-	}
-
-	if len(mods) == 0 {
-		return c.Send("📋 Модераторов пока нет", &tele.SendOptions{
-			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: AdminModeratorKeyboard(),
-		})
-	}
-
-	var msg strings.Builder
-	fmt.Fprintf(&msg, "<b>📋 Модераторы (%d)</b>\n\n", len(mods))
-
-	for _, mod := range mods {
-		fmt.Fprintf(&msg, "👤 %s\n", formatUserLabel(mod.FirstName, mod.Username, mod.TelegramID))
-		fmt.Fprintf(&msg, "📨 Приглашено: %d\n\n", mod.InvitesCount)
-	}
-
-	return c.Send(msg.String(), &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminModeratorKeyboard(),
-	})
-}
-
-// handleAdminModStats показывает сводную статистику модераторов.
-func (b *Bot) handleAdminModStats(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	mods, err := b.db.GetAllModerators()
-	if err != nil {
-		slog.Error("Failed to load moderators for stats", "error", err)
-		return c.Send("Ошибка получения списка модераторов", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
-	}
-	if len(mods) == 0 {
-		return c.Send("📊 Модераторов пока нет", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
-	}
-
-	remUsers, err := b.remnawave.GetAllUsers()
-	if err != nil {
-		slog.Error("Failed to load users from Remnawave for moderator stats", "error", err)
-		return c.Send("Ошибка получения статистики из панели", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
-	}
-
-	byTelegramID := make(map[int64]remnawave.User, len(remUsers))
-	for _, user := range remUsers {
-		if user.TelegramID == nil || *user.TelegramID == 0 {
-			continue
-		}
-		byTelegramID[*user.TelegramID] = user
-	}
-
-	now := time.Now().UTC()
-	reportDate := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
-	reportYear := reportDate.Year()
-	reportMonth := int(reportDate.Month())
-	totalPayments := 0
-	totalGross := 0
-	totalShare := 0
-
-	for _, mod := range mods {
-		subs, err := b.db.GetSubscribersByModerator(mod.TelegramID)
-		if err != nil {
-			slog.Error("Failed to load subscribers for moderator stats", "error", err, "moderator_id", mod.TelegramID)
-			continue
-		}
-
-		currentState := b.summarizeModeratorSubscriberStates(subs, byTelegramID, now)
-
-		monthStats, err := b.db.GetModeratorEarningsByMonth(mod.TelegramID, reportYear, reportMonth)
-		if err != nil {
-			slog.Error("Failed to load moderator month earnings", "error", err, "moderator_id", mod.TelegramID)
-			continue
-		}
-		totalEarnings, err := b.db.GetModeratorTotalEarnings(mod.TelegramID)
-		if err != nil {
-			slog.Error("Failed to load moderator total earnings", "error", err, "moderator_id", mod.TelegramID)
-			continue
-		}
-
-		totalPayments += monthStats.TotalPayments
-		totalGross += monthStats.GrossAmount
-		totalShare += monthStats.TotalShareAmount
-
-		sharePercent := monthStats.SharePercent
-		msg := fmt.Sprintf(
-			"📊 <b>Статистика: %s — %s %d</b>\n\n"+
-				"💰 <b>Финансы за %s %d</b>\n"+
-				"├ Платежи: %d руб\n"+
-				"├ Комиссии Platega: -%d руб\n"+
-				"├ Комиссия вывода (2%%): -%d руб\n"+
-				"├ Чистый доход: %d руб\n"+
-				"└ Доля модератора (%d%%): %d руб\n\n"+
-				"💰 <b>За всё время</b>\n"+
-				"└ Заработано: %d руб\n\n"+
-				"👥 <b>Текущее состояние клиентов</b>\n"+
-				"└ 💳 Платящих: %d │ ⏳ Триал: %d │ ⚠️ Grace: %d",
-			formatAdminModeratorLabel(mod.FirstName, mod.Username, mod.TelegramID),
-			monthNameRu(reportDate.Month()),
-			reportYear,
-			monthNameRu(reportDate.Month()),
-			reportYear,
-			monthStats.GrossAmount,
-			monthStats.TotalPlategaFee,
-			monthStats.TotalWithdrawal,
-			monthStats.TotalNetAmount,
-			sharePercent,
-			monthStats.TotalShareAmount,
-			totalEarnings,
-			currentState.Paying,
-			currentState.Trial,
-			currentState.Grace,
-		)
-
-		if err := c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML}); err != nil {
-			return err
-		}
-	}
-
-	summary := fmt.Sprintf(
-		"<b>Итого за %s %d</b>\n\n📥 Платежей: %d\n💰 Сумма платежей: %d руб\n💸 Выплаты модераторам: %d руб",
-		monthNameRu(reportDate.Month()),
-		reportYear,
-		totalPayments,
-		totalGross,
-		totalShare,
-	)
-
-	return c.Send(summary, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminModeratorKeyboard(),
-	})
-}
-
-// handleAdminRemoveModeratorRequest запрашивает telegram_id для снятия модератора
-func (b *Bot) handleAdminRemoveModeratorRequest(c tele.Context) error {
-	if !b.isAdmin(c) {
-		return nil
-	}
-
-	b.userStates.Set(c.Sender().ID, StateWaitRemoveModerator)
-	return c.Send("<b>➖ Снять модератора</b>\n\nВведите telegram_id модератора:", &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: CancelKeyboard(),
-	})
-}
-
-// processRemoveModerator обрабатывает снятие модератора
-func (b *Bot) processRemoveModerator(c tele.Context, text string) error {
-	b.userStates.Delete(c.Sender().ID)
-
-	telegramID, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
-	if err != nil {
-		return c.Send("Неверный telegram_id", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
-	}
-
-	if !b.isModerator(telegramID) {
-		return c.Send("❌ Этот пользователь не является модератором", &tele.SendOptions{ReplyMarkup: AdminModeratorKeyboard()})
-	}
-
-	// Каскадное удаление инвайтов и снятие роли
-	b.cascadeDeleteModerator(telegramID)
-
-	msg := fmt.Sprintf("✅ Модератор <code>%d</code> снят. Неиспользованные инвайты удалены.", telegramID)
-	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: AdminModeratorKeyboard(),
-	})
-}
-
 func (b *Bot) setAdminChangePriceSession(adminID int64, session adminChangePriceSession) {
 	b.adminPriceMu.Lock()
 	defer b.adminPriceMu.Unlock()
@@ -1425,13 +1041,7 @@ func (b *Bot) notifyUserAboutPriceChange(telegramID int64, newPrice int) {
 }
 
 func (b *Bot) applyAdminChangePrice(telegramID int64, newPrice int, legacyPaidMigrated *bool) error {
-	if err := b.db.UpdateSubscriptionPriceAndLegacyPaidMigrated(telegramID, newPrice, legacyPaidMigrated); err != nil {
-		return err
-	}
-	if err := b.db.UpdateInviteSubscriptionPrice(telegramID, newPrice); err != nil {
-		slog.Error("Failed to update invite subscription price by admin", "error", err, "telegram_id", telegramID)
-	}
-	return nil
+	return b.db.UpdateSubscriptionPriceAndLegacyPaidMigrated(telegramID, newPrice, legacyPaidMigrated)
 }
 
 func (b *Bot) shouldPromptAdminChangePriceMigration(dbUser *database.User, invite *database.Invite, remUser *remnawave.User) bool {
@@ -1520,17 +1130,4 @@ func formatAdminOldPrice(session adminChangePriceSession) string {
 		return "не установлена"
 	}
 	return fmt.Sprintf("%d", session.CurrentPrice)
-}
-
-func formatAdminModeratorLabel(firstName, username string, telegramID int64) string {
-	switch {
-	case firstName != "" && username != "":
-		return fmt.Sprintf("%s (@%s)", html.EscapeString(firstName), username)
-	case username != "":
-		return "@" + username
-	case firstName != "":
-		return html.EscapeString(firstName)
-	default:
-		return fmt.Sprintf("<code>%d</code>", telegramID)
-	}
 }

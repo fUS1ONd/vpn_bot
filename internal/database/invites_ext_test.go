@@ -298,10 +298,13 @@ func TestDeleteUnusedInviteByOwner(t *testing.T) {
 		err := db.DeleteUnusedInviteByOwner(inv1.Code, 100)
 		assert.NoError(t, err)
 
-		// Проверяем что код удалён
+		// Проверяем soft revoke: история сохранена, код больше не активен.
 		inv, err := db.GetInviteByCode(inv1.Code)
 		assert.NoError(t, err)
-		assert.Nil(t, inv)
+		require.NotNil(t, inv)
+		assert.NotNil(t, inv.RevokedAt)
+		require.NotNil(t, inv.RevokedBy)
+		assert.Equal(t, int64(100), *inv.RevokedBy)
 	})
 
 	t.Run("Удаление чужого кода — ошибка", func(t *testing.T) {

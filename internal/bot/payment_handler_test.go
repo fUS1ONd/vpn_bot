@@ -373,7 +373,7 @@ func TestHandleCheckPaymentReturnsDetailedSuccessMessage(t *testing.T) {
 	assert.Equal(t, "confirmed", stored.Status)
 }
 
-func TestHandlePaymentCallbackKeepsModeratorSnapshotAfterModeratorRemoval(t *testing.T) {
+func TestHandlePaymentCallbackDoesNotCreateLegacyModeratorEarning(t *testing.T) {
 	b, db := setupTestBot(t)
 
 	adminID := int64(999999)
@@ -440,11 +440,15 @@ func TestHandlePaymentCallbackKeepsModeratorSnapshotAfterModeratorRemoval(t *tes
 	})
 	require.NoError(t, err)
 
-	var storedModeratorID int64
+	var earningCount int
 	err = db.Conn().QueryRow(
-		`SELECT moderator_id FROM moderator_earnings WHERE payment_id = ?`,
+		`SELECT COUNT(*) FROM moderator_earnings WHERE payment_id = ?`,
 		paymentID,
-	).Scan(&storedModeratorID)
+	).Scan(&earningCount)
 	require.NoError(t, err)
-	assert.Equal(t, oldModeratorID, storedModeratorID)
+	assert.Zero(t, earningCount)
+	stored, err := db.GetPaymentByID(paymentID)
+	require.NoError(t, err)
+	require.NotNil(t, stored.ModeratorID, "архивный snapshot старого платежа сохраняется")
+	assert.Equal(t, oldModeratorID, *stored.ModeratorID)
 }

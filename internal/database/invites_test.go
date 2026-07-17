@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestClaimInviteAtomicity(t *testing.T) {
 	// Второй claim того же кода — должен вернуть ошибку
 	err = db.ClaimInvite(invite.Code, 222)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not found or already used")
+	assert.True(t, errors.Is(err, ErrInviteUsed))
 }
 
 // TestReconcileOrphanedInvites проверяет откат инвайтов без соответствующего пользователя
@@ -47,10 +48,12 @@ func TestReconcileOrphanedInvites(t *testing.T) {
 	require.NoError(t, err)
 	err = db.ClaimInvite(invite.Code, 111)
 	require.NoError(t, err)
+	_, err = db.Conn().Exec(`UPDATE invites SET used_at = datetime('now', '-2 hours') WHERE code = ?`, invite.Code)
+	require.NoError(t, err)
 
 	// Пользователя 111 нет в users — инвайт "завис"
 
-	// ReconcileOrphanedInvites должен откатить его
+	// ReconcileOrphanedInvites должен откатить его даже спустя больше часа.
 	count, err := db.ReconcileOrphanedInvites()
 	assert.NoError(t, err)
 	assert.Equal(t, 1, count, "Должен откатить 1 инвайт")
@@ -92,7 +95,7 @@ func TestReconcileOrphanedInvites_SkipsValidClaims(t *testing.T) {
 }
 
 // TestReconcileOrphanedInvites_SkipsBannedUserInvites проверяет, что инвайты забаненных
-// пользователей не откатываются (claimed давно — не в-процессе регистрации)
+// пользователей не откатываются независимо от возраста claim.
 func TestReconcileOrphanedInvites_SkipsBannedUserInvites(t *testing.T) {
 	dbFile := "test_reconcile_banned.db"
 	db, err := New(dbFile)
@@ -111,15 +114,12 @@ func TestReconcileOrphanedInvites_SkipsBannedUserInvites(t *testing.T) {
 	err = db.ClaimInvite(invite.Code, 111)
 	require.NoError(t, err)
 
-	// Имитируем бан — удаляем пользователя из users
+	// Имитируем реальный бан — durable ban-запись и удаление пользователя.
+	require.NoError(t, db.BanUser(111, 999))
 	err = db.DeleteUser(111)
 	require.NoError(t, err)
 
-	// Состариваем used_at — симулируем что инвайт был claimed давно (> 1 часа назад)
-	_, err = db.Conn().Exec(`UPDATE invites SET used_at = datetime('now', '-2 hours') WHERE code = ?`, invite.Code)
-	require.NoError(t, err)
-
-	// Reconcile НЕ должен трогать этот инвайт — он был claimed давно (не в-процессе)
+	// Reconcile НЕ должен трогать исторический инвайт забаненного пользователя.
 	count, err := db.ReconcileOrphanedInvites()
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count, "Инвайт забаненного пользователя не должен откатываться")
@@ -141,5 +141,5 @@ func TestClaimInviteNonExistent(t *testing.T) {
 
 	err = db.ClaimInvite("nonexistent", 111)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not found or already used")
+	assert.True(t, errors.Is(err, ErrInviteNotFound))
 }

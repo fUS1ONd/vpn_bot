@@ -36,6 +36,7 @@ func TestLoadPlategaConfig(t *testing.T) {
 		t.Setenv("PLATEGA_SECRET", "")
 		t.Setenv("PLATEGA_CALLBACK_URL", "")
 		t.Setenv("MIN_SUBSCRIPTION_PRICE", "")
+		t.Setenv("DEFAULT_SUBSCRIPTION_PRICE", "")
 		t.Setenv("ADMIN_TEST_PAYMENT_PRICE", "")
 		t.Setenv("TRIAL_TRAFFIC_LIMIT_GB", "")
 		t.Setenv("PLATEGA_FEE_SBP", "")
@@ -49,6 +50,7 @@ func TestLoadPlategaConfig(t *testing.T) {
 		require.Equal(t, "", cfg.PlategaSecret)
 		require.Equal(t, "", cfg.PlategaCallbackURL)
 		require.Equal(t, 400, cfg.MinSubscriptionPrice)
+		require.Equal(t, 400, cfg.DefaultSubscriptionPrice)
 		require.Zero(t, cfg.AdminTestPaymentPrice)
 		require.Equal(t, 1, cfg.TrialTrafficLimitGB)
 		require.Equal(t, 11, cfg.PlategaFeeSBP)
@@ -62,6 +64,7 @@ func TestLoadPlategaConfig(t *testing.T) {
 		t.Setenv("PLATEGA_SECRET", "secret-abc")
 		t.Setenv("PLATEGA_CALLBACK_URL", "https://example.com/platega/callback")
 		t.Setenv("MIN_SUBSCRIPTION_PRICE", "500")
+		t.Setenv("DEFAULT_SUBSCRIPTION_PRICE", "650")
 		t.Setenv("ADMIN_TEST_PAYMENT_PRICE", "10")
 		t.Setenv("PLATEGA_FEE_SBP", "9")
 
@@ -71,9 +74,24 @@ func TestLoadPlategaConfig(t *testing.T) {
 		require.Equal(t, "secret-abc", cfg.PlategaSecret)
 		require.Equal(t, "https://example.com/platega/callback", cfg.PlategaCallbackURL)
 		require.Equal(t, 500, cfg.MinSubscriptionPrice)
+		require.Equal(t, 650, cfg.DefaultSubscriptionPrice)
 		require.Equal(t, 10, cfg.AdminTestPaymentPrice)
 		require.Equal(t, 9, cfg.PlategaFeeSBP)
 	})
+}
+
+func TestLoadDefaultSubscriptionPriceFallback(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DEFAULT_SUBSCRIPTION_PRICE", "invalid")
+	t.Setenv("MIN_SUBSCRIPTION_PRICE", "550")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 550, cfg.DefaultSubscriptionPrice)
+
+	t.Setenv("MIN_SUBSCRIPTION_PRICE", "0")
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.Equal(t, 400, cfg.DefaultSubscriptionPrice)
 }
 
 func TestLoadAdminTestPaymentPriceDisablesInvalidValues(t *testing.T) {
