@@ -629,7 +629,7 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 	if payment.ProviderRequestKey != nil {
 		requestKey = *payment.ProviderRequestKey
 	}
-	resp, err := provider.CreatePayment(paymentprovider.CreateRequest{Amount: price, Currency: "RUB", Description: "VPN подписка на 1 месяц", ReturnURL: returnURL, CallbackURL: callbackURL, LocalPaymentID: payment.ID, IdempotenceKey: requestKey})
+	resp, err := provider.CreatePayment(paymentprovider.CreateRequest{Amount: price, Currency: "RUB", Description: "Пополнение баланса", ReturnURL: returnURL, CallbackURL: callbackURL, LocalPaymentID: payment.ID, IdempotenceKey: requestKey})
 	if err != nil {
 		if providerName != paymentprovider.YooKassa {
 			_ = b.db.UpdatePaymentStatus(payment.ID, "expired")
