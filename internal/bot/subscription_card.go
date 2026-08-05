@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"time"
 
 	tele "gopkg.in/telebot.v3"
@@ -14,25 +15,56 @@ import (
 // subRevokeCooldownWindow — минимальный интервал между двумя перевыпусками
 // ссылки одного пользователя. Каждый лишний перевыпуск рвёт связь и сбрасывает
 // устройства, а дабл-клик по inline-кнопке — обычное дело.
-const subRevokeCooldownWindow = 5 * time.Minute
+// Окно короткое намеренно: дабл-клик укладывается в доли секунды, а осознанный
+// повтор нужен как раз в сценарии, ради которого перевыпуск и существует, —
+// когда ссылка утекла ещё раз.
+const subRevokeCooldownWindow = 30 * time.Second
+
+// revokeCooldownError несёт остаток окна, чтобы алерт называл срок, а не просто
+// сообщал об отказе.
+type revokeCooldownError struct{ remain time.Duration }
+
+func (e revokeCooldownError) Error() string {
+	return fmt.Sprintf("%v: осталось %s", errRevokeCooldown, e.remain)
+}
+
+func (e revokeCooldownError) Unwrap() error { return errRevokeCooldown }
 
 // Ошибки applyRevoke, различаемые для показа нужного текста алерта.
 var (
 	errRevokeCooldown      = errors.New("ссылка уже перевыпущена недавно")
 	errRevokeUserNotFound  = errors.New("пользователь не найден")
+	errRevokeUnavailable   = errors.New("перевыпуск сейчас недоступен")
+	errRevokeLoadFailed    = errors.New("ошибка получения данных подписки")
 	errRevokeDevicesFailed = errors.New("не удалось сбросить устройства")
 	errRevokeFailed        = errors.New("не удалось перевыпустить ссылку")
+	errRevokeUnknown       = errors.New("состояние ссылки после перевыпуска неизвестно")
 )
 
 // revokeErrorAlert возвращает текст алерта пользователю для ошибки applyRevoke.
 // Тексты различают падение сброса устройств и падение самого перевыпуска, чтобы
 // пользователь понимал, изменилось ли что-то на самом деле.
 func revokeErrorAlert(err error) string {
+	var cooldownErr revokeCooldownError
+	if errors.As(err, &cooldownErr) {
+		seconds := int(math.Ceil(cooldownErr.remain.Seconds()))
+		if seconds < 1 {
+			seconds = 1
+		}
+		return fmt.Sprintf("Ссылка уже перевыпущена. Повторить можно через %d сек.", seconds)
+	}
+
 	switch {
 	case errors.Is(err, errRevokeCooldown):
 		return "Ссылка уже перевыпущена, повторное нажатие проигнорировано"
+	case errors.Is(err, errRevokeUnknown):
+		return "Состояние ссылки неизвестно. Откройте «👤 Моя подписка» и проверьте её."
 	case errors.Is(err, errRevokeUserNotFound):
 		return "Сначала активируйте подписку"
+	case errors.Is(err, errRevokeUnavailable):
+		return "Перевыпуск недоступен: подписка неактивна"
+	case errors.Is(err, errRevokeLoadFailed):
+		return "Ошибка получения данных подписки. Попробуйте позже."
 	case errors.Is(err, errRevokeDevicesFailed):
 		return "❌ Не удалось сбросить устройства. Ссылка не изменилась, попробуйте ещё раз."
 	default:
@@ -120,11 +152,11 @@ func (b *Bot) handleSubRevoke(c tele.Context) error {
 		return c.RespondAlert("Сначала активируйте подписку")
 	}
 
-	if err := c.Edit(MsgRevokeConfirm, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: SubscriptionRevokeConfirmKeyboard(),
-	}); err != nil {
-		slog.Warn("Failed to show revoke confirmation", "error", err, "telegram_id", c.Sender().ID)
+	// Фоллбэк обязателен: без него транзиентная ошибка Edit оставляет пользователя
+	// с погасшими «часиками» и неизменившимся экраном — кнопка выглядит мёртвой.
+	if err := editWithInlineFallback(c, MsgRevokeConfirm, SubscriptionRevokeConfirmKeyboard()); err != nil {
+		slog.Error("Failed to show revoke confirmation", "error", err, "telegram_id", c.Sender().ID)
+		return c.RespondAlert("Не удалось открыть подтверждение. Попробуйте ещё раз.")
 	}
 	return c.Respond()
 }
@@ -165,14 +197,28 @@ func (b *Bot) applyRevoke(telegramID int64) (*remnawave.User, error) {
 	defer mu.Unlock()
 
 	if last, ok := b.subRevokeCooldown.Load(telegramID); ok {
-		if time.Since(last.(time.Time)) < subRevokeCooldownWindow {
-			return nil, errRevokeCooldown
+		if elapsed := time.Since(last.(time.Time)); elapsed < subRevokeCooldownWindow {
+			return nil, revokeCooldownError{remain: subRevokeCooldownWindow - elapsed}
 		}
 	}
 
 	uuid, ok := b.resolveUserUUID(telegramID)
 	if !ok {
 		return nil, errRevokeUserNotFound
+	}
+
+	// Inline-кнопки живут в чате вечно, поэтому карточка, отрисованная при
+	// активной подписке, остаётся нажимаемой и после того, как scheduler увёл
+	// пользователя в grace или триал упёрся в лимит трафика. Перечитываем
+	// состояние и отказываем там же, где кнопки не должно быть видно, — иначе
+	// перевыпуск сбросил бы устройства в состоянии, где спека его запрещает.
+	current, err := b.remnawave.GetUser(uuid)
+	if err != nil {
+		slog.Error("Failed to reload Remnawave user before revoke", "error", err, "telegram_id", telegramID)
+		return nil, errRevokeLoadFailed
+	}
+	if !SubscriptionLinkVisible(current, b.isTrialUser(telegramID)) {
+		return nil, errRevokeUnavailable
 	}
 
 	if err := b.remnawave.DeleteAllUserHwidDevices(uuid); err != nil {
@@ -183,7 +229,22 @@ func (b *Bot) applyRevoke(telegramID int64) (*remnawave.User, error) {
 	remUser, err := b.remnawave.RevokeUserSubscription(uuid)
 	if err != nil {
 		slog.Error("Failed to revoke subscription", "error", err, "telegram_id", telegramID)
-		return nil, fmt.Errorf("%w: %v", errRevokeFailed, err)
+
+		// Ответ мог потеряться уже после того, как панель выполнила перевыпуск
+		// (таймаут, разрыв соединения). Утверждать про состояние доступа то,
+		// чего не проверяли, нельзя: перечитываем и сравниваем ссылку.
+		actual, getErr := b.remnawave.GetUser(uuid)
+		switch {
+		case getErr != nil:
+			return nil, fmt.Errorf("%w: %v", errRevokeUnknown, err)
+		case actual.SubscriptionURL != current.SubscriptionURL:
+			slog.Warn("Revoke request failed but subscription URL changed, treating as success",
+				"error", err, "telegram_id", telegramID)
+			b.subRevokeCooldown.Store(telegramID, time.Now())
+			return actual, nil
+		default:
+			return nil, fmt.Errorf("%w: %v", errRevokeFailed, err)
+		}
 	}
 
 	b.subRevokeCooldown.Store(telegramID, time.Now())

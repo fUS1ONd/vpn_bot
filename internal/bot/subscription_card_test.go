@@ -216,3 +216,78 @@ func TestSubscriptionLinkVisible(t *testing.T) {
 		}, true))
 	})
 }
+
+func TestRevokeCooldownAlertNamesRemainingTime(t *testing.T) {
+	const telegramID = int64(4009)
+	b, _ := setupRevokeBot(t, telegramID, false, false)
+
+	_, err := b.applyRevoke(telegramID)
+	require.NoError(t, err)
+
+	_, err = b.applyRevoke(telegramID)
+	require.ErrorIs(t, err, errRevokeCooldown)
+
+	alert := revokeErrorAlert(err)
+	assert.Contains(t, alert, "Повторить можно через")
+	assert.Contains(t, alert, "сек.")
+}
+
+// Панель могла выполнить перевыпуск и не донести ответ (таймаут, обрыв).
+// Утверждать «переподключитесь по прежней ссылке» в этом случае нельзя:
+// перечитываем состояние и, если ссылка сменилась, считаем перевыпуск успешным.
+func TestApplyRevokeTreatsChangedURLAsSuccessWhenResponseLost(t *testing.T) {
+	const telegramID = int64(4010)
+	b, db := setupTestBot(t)
+	_, err := db.CreateUser(telegramID, "user", "User", "uuid-sub", nil, nil)
+	require.NoError(t, err)
+
+	revoked := false
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			jsonResp := func(payload any) (*http.Response, error) {
+				body, err := json.Marshal(payload)
+				require.NoError(t, err)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(string(body))),
+					Header:     make(http.Header),
+				}, nil
+			}
+
+			switch r.URL.Path {
+			case "/api/hwid/devices/delete-all":
+				return jsonResp(map[string]any{"response": map[string]any{"success": true}})
+
+			case "/api/users/uuid-sub/actions/revoke":
+				// Панель выполнила перевыпуск, но ответ до бота не дошёл.
+				revoked = true
+				return nil, assert.AnError
+
+			case "/api/users/uuid-sub":
+				short := "oldshort"
+				if revoked {
+					short = "newshort"
+				}
+				return jsonResp(map[string]any{"response": map[string]any{
+					"uuid":            "uuid-sub",
+					"shortUuid":       short,
+					"username":        "user",
+					"status":          "ACTIVE",
+					"expireAt":        time.Now().UTC().AddDate(0, 0, 20).Format(time.RFC3339),
+					"subscriptionUrl": "https://sub.example.com:8443/" + short,
+				}})
+			}
+			return jsonResp(map[string]any{"response": map[string]any{"devices": []any{}}})
+		}),
+	})
+	b.remnawave = client
+
+	remUser, err := b.applyRevoke(telegramID)
+	require.NoError(t, err)
+	assert.Equal(t, "https://sub.example.com:8443/newshort", remUser.SubscriptionURL)
+}
+
+func TestRevokeDoneWarnsAboutStaleCards(t *testing.T) {
+	assert.Contains(t, MsgRevokeDone, "более старых сообщениях")
+}

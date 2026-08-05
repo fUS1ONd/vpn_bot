@@ -33,3 +33,5 @@ sd_configs/targets.json
 *.swp
 *.swo
 *~
+# Локальные git-worktree, созданные агентами
+.claude/worktrees/
