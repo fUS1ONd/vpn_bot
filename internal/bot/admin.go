@@ -733,15 +733,22 @@ func strPtr(v string) *string {
 	return &v
 }
 
-// calculateMonthlyPaymentFinance считает комиссии платежа по текущим конфигурационным ставкам.
-// Используется для расчёта финансовой статистики в отчёте админа.
-func (b *Bot) calculateMonthlyPaymentFinance(payment database.MonthlyConfirmedPayment) (plategaFee, withdrawalFee, netAmount int) {
-	feePercent := b.getPlategaFeePercent(payment.PaymentMethod)
+// calculateMonthlyPaymentFinance считает комиссии платежа для финансовой статистики админа.
+// Ставка провайдера берётся из снапшота платежа (provider_fee_percent), зафиксированного
+// в момент его создания, — так отчёт совпадает с уже начисленными moderator_earnings и не
+// «переписывается» задним числом при смене тарифа в конфиге. Снапшот отсутствует только у
+// старых записей, созданных до его появления; для них падаем на текущие ставки конфига
+// с учётом провайдера.
+func (b *Bot) calculateMonthlyPaymentFinance(payment database.MonthlyConfirmedPayment) (providerFee, withdrawalFee, netAmount int) {
+	feeBasisPoints := b.getPaymentFeeBasisPoints(payment.Provider, payment.PaymentMethod)
+	if payment.ProviderFeeBasisPoints != nil {
+		feeBasisPoints = *payment.ProviderFeeBasisPoints
+	}
 	grossAmount := payment.Amount
-	plategaFee = grossAmount * feePercent / 100
-	afterPlatega := grossAmount - plategaFee
-	withdrawalFee = afterPlatega * b.config.PlategaFeeWithdrawal / 100
-	netAmount = afterPlatega - withdrawalFee
+	providerFee = grossAmount * feeBasisPoints / 10000
+	afterProvider := grossAmount - providerFee
+	withdrawalFee = afterProvider * b.config.PlategaFeeWithdrawal / 100
+	netAmount = afterProvider - withdrawalFee
 	return
 }
 
@@ -764,10 +771,10 @@ func (b *Bot) handleAdminStats(c tele.Context) error {
 
 	monthEarnings := &database.MonthlyEarnings{}
 	for _, payment := range confirmedPayments {
-		plategaFee, withdrawalFee, netAmount := b.calculateMonthlyPaymentFinance(payment)
+		providerFee, withdrawalFee, netAmount := b.calculateMonthlyPaymentFinance(payment)
 		monthEarnings.TotalPayments++
 		monthEarnings.GrossAmount += payment.Amount
-		monthEarnings.TotalPlategaFee += plategaFee
+		monthEarnings.TotalPlategaFee += providerFee
 		monthEarnings.TotalWithdrawal += withdrawalFee
 		monthEarnings.TotalNetAmount += netAmount
 	}

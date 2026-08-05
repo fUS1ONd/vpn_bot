@@ -314,7 +314,7 @@ func (db *DB) GetConfirmedPaymentsByMonth(year int, month int) ([]MonthlyConfirm
 
 	rows, err := db.conn.Query(
 		`SELECT p.id, p.telegram_id, p.moderator_id, p.amount, p.payment_method, p.status,
-		        p.platega_transaction_id, p.provider, p.provider_payment_id, p.redirect_url, p.expires_at, p.created_at, p.confirmed_at,
+		        p.platega_transaction_id, p.provider, p.provider_payment_id, p.provider_fee_percent, p.redirect_url, p.expires_at, p.created_at, p.confirmed_at,
 		        COALESCE(me.share_amount, 0)
 		 FROM payments p
 		 LEFT JOIN (
@@ -338,10 +338,11 @@ func (db *DB) GetConfirmedPaymentsByMonth(year int, month int) ([]MonthlyConfirm
 		var modID sql.NullInt64
 		var txID sql.NullString
 		var redirectURL, providerPaymentID sql.NullString
+		var providerFeePercent sql.NullInt64
 		var expiresAt sql.NullTime
 		var confirmedAt sql.NullTime
 
-		if err := rows.Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &redirectURL, &expiresAt, &p.CreatedAt, &p.ConfirmedAt, &p.ShareAmount); err != nil {
+		if err := rows.Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerFeePercent, &redirectURL, &expiresAt, &p.CreatedAt, &p.ConfirmedAt, &p.ShareAmount); err != nil {
 			return nil, err
 		}
 
@@ -353,6 +354,10 @@ func (db *DB) GetConfirmedPaymentsByMonth(year int, month int) ([]MonthlyConfirm
 		}
 		if providerPaymentID.Valid {
 			p.ProviderPaymentID = &providerPaymentID.String
+		}
+		if providerFeePercent.Valid {
+			v := int(providerFeePercent.Int64)
+			p.ProviderFeeBasisPoints = &v
 		}
 		if redirectURL.Valid {
 			p.RedirectURL = &redirectURL.String

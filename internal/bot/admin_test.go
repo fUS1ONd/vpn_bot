@@ -14,6 +14,7 @@ import (
 
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1315,4 +1316,72 @@ func TestProcessAdminUserInfo_ShowsNonSuccessStatusForGraceUser(t *testing.T) {
 
 func intPtrAdmin(v int) *int {
 	return &v
+}
+
+// TestCalculateMonthlyPaymentFinance_UsesProviderFeeSnapshot фиксирует регрессию:
+// раньше комиссия в отчёте админа считалась только по ставкам Platega через
+// payment_method, из-за чего платежи ЮKassa (методы "sberbank"/"bank_card" не
+// совпадают ни с одним case) падали в fallback на ставку СБП и завышали комиссию
+// втрое — 11% вместо реальных 3.5%.
+func TestCalculateMonthlyPaymentFinance_UsesProviderFeeSnapshot(t *testing.T) {
+	b := &Bot{config: &config.Config{
+		PlategaFeeSBP:          11,
+		PlategaFeeCard:         12,
+		PlategaFeeCrypto:       5,
+		PlategaFeeWithdrawal:   2,
+		YooKassaFeeBasisPoints: 350,
+	}}
+
+	feeBP := func(v int) *int { return &v }
+
+	tests := []struct {
+		name           string
+		payment        database.MonthlyConfirmedPayment
+		wantProvider   int
+		wantWithdrawal int
+		wantNet        int
+	}{
+		{
+			name: "ЮKassa со снапшотом считается по своей ставке 3.5%",
+			payment: database.MonthlyConfirmedPayment{Payment: database.Payment{
+				Amount: 400, Provider: paymentprovider.YooKassa, PaymentMethod: "sberbank",
+				ProviderFeeBasisPoints: feeBP(350),
+			}},
+			// 400*350/10000=14; (400-14)*2/100=7; 386-7=379
+			wantProvider: 14, wantWithdrawal: 7, wantNet: 379,
+		},
+		{
+			name: "ЮKassa без снапшота падает на текущую ставку ЮKassa, а не Platega",
+			payment: database.MonthlyConfirmedPayment{Payment: database.Payment{
+				Amount: 400, Provider: paymentprovider.YooKassa, PaymentMethod: "bank_card",
+			}},
+			wantProvider: 14, wantWithdrawal: 7, wantNet: 379,
+		},
+		{
+			name: "Platega без снапшота сохраняет прежний расчёт по методу оплаты",
+			payment: database.MonthlyConfirmedPayment{Payment: database.Payment{
+				Amount: 400, Provider: paymentprovider.Platega, PaymentMethod: "sbp",
+			}},
+			// 400*1100/10000=44; (400-44)*2/100=7; 356-7=349
+			wantProvider: 44, wantWithdrawal: 7, wantNet: 349,
+		},
+		{
+			name: "Снапшот приоритетнее текущего конфига",
+			payment: database.MonthlyConfirmedPayment{Payment: database.Payment{
+				Amount: 400, Provider: paymentprovider.Platega, PaymentMethod: "sbp",
+				ProviderFeeBasisPoints: feeBP(500),
+			}},
+			// 400*500/10000=20; (400-20)*2/100=7; 380-7=373
+			wantProvider: 20, wantWithdrawal: 7, wantNet: 373,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			providerFee, withdrawalFee, netAmount := b.calculateMonthlyPaymentFinance(tt.payment)
+			assert.Equal(t, tt.wantProvider, providerFee)
+			assert.Equal(t, tt.wantWithdrawal, withdrawalFee)
+			assert.Equal(t, tt.wantNet, netAmount)
+		})
+	}
 }
