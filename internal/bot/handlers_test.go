@@ -708,6 +708,52 @@ func TestHandleTextMessage_InfoButtonRoutesToHelpMessage(t *testing.T) {
 	assert.Equal(t, BuildInfoMessage(b.config), msg)
 }
 
+func TestHandleTextMessage_AdminUserInfoCardCancelReturnsToManage(t *testing.T) {
+	b, _ := setupTestBot(t)
+	adminID := b.config.AdminID
+	b.userStates.Set(adminID, StateAdminUserInfoCard)
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: adminID, Username: "admin"},
+		message: &tele.Message{Text: BtnCancel},
+	}
+
+	require.NoError(t, b.handleTextMessage(ctx))
+
+	msg, ok := ctx.sentMsg.(string)
+	require.True(t, ok)
+	assert.Equal(t, "Отменено", msg)
+	assert.Equal(t, StateNone, b.userStates.Get(adminID))
+
+	require.Len(t, ctx.opts, 1)
+	sendOpts, ok := ctx.opts[0].(*tele.SendOptions)
+	require.True(t, ok)
+	markup := sendOpts.ReplyMarkup
+	require.NotNil(t, markup)
+
+	var buttons []string
+	for _, row := range markup.ReplyKeyboard {
+		for _, btn := range row {
+			buttons = append(buttons, btn.Text)
+		}
+	}
+	assert.Contains(t, buttons, BtnAdminUserInfo)
+}
+
+func TestHandleTextMessage_AdminUserInfoCardStateClearedOnOtherInput(t *testing.T) {
+	b, _ := setupTestBot(t)
+	adminID := b.config.AdminID
+	b.userStates.Set(adminID, StateAdminUserInfoCard)
+
+	ctx := &MockContext{
+		sender:  &tele.User{ID: adminID, Username: "admin"},
+		message: &tele.Message{Text: BtnAdminStats},
+	}
+
+	require.NoError(t, b.handleTextMessage(ctx))
+	assert.Equal(t, StateNone, b.userStates.Get(adminID))
+}
+
 func TestHandleTextMessage_PaymentFlowResetsOnMainMenuButtons(t *testing.T) {
 	b, _ := setupTestBot(t)
 	userID := int64(12345)

@@ -422,6 +422,14 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processAdminUserInfo(c, text)
 		}
 
+	case StateAdminUserInfoCard:
+		if text == BtnCancel {
+			b.userStates.Delete(telegramID)
+			return c.Send("Отменено", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+		}
+		// Любое другое действие выводит из карточки — обрабатываем его как обычно
+		b.userStates.Delete(telegramID)
+
 	case StateWaitAdminChangePriceID:
 		if text == BtnCancel {
 			b.userStates.Delete(telegramID)

@@ -17,6 +17,7 @@ import (
 const (
 	StateWaitBanUser                          = "wait_ban_user"                             // Ожидание telegram_id для бана
 	StateWaitAdminUserInfo                    = "wait_admin_user_info"                      // Ожидание telegram_id для карточки пользователя
+	StateAdminUserInfoCard                    = "admin_user_info_card"                      // Карточка пользователя показана, «Отмена» возвращает в «Управление»
 	StateWaitAdminChangePriceID               = "wait_admin_change_price_id"                // Ожидание telegram_id для смены цены
 	StateWaitAdminChangePriceValue            = "wait_admin_change_price_value"             // Ожидание новой цены подписки
 	StateWaitAdminChangePriceMigrationConfirm = "wait_admin_change_price_migration_confirm" // Ожидание подтверждения migration-case
@@ -237,6 +238,10 @@ func (b *Bot) processAdminUserInfo(c tele.Context, text string) error {
 		slog.Error("Failed to build admin user info", "error", err, "telegram_id", targetID)
 		return c.Send("❌ Пользователь не найден или данные подписки недоступны.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
+
+	// Карточка отправляется с inline-клавиатурой, поэтому reply-кнопка «Отмена»
+	// остаётся на экране — запоминаем состояние, чтобы она вернула в «Управление».
+	b.userStates.Set(adminID, StateAdminUserInfoCard)
 
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: keyboard})
 }
