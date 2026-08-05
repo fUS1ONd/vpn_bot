@@ -54,6 +54,7 @@ type Bot struct {
 	bugReportData        map[int64]bugReportSession // pending-данные багрепорта
 	bugReportCooldown    sync.Map                   // telegram_id -> time.Time последней отправки
 	adminExtendCooldown  sync.Map                   // telegram_id -> time.Time последнего продления (защита от дабл-клика)
+	subRevokeCooldown    sync.Map                   // telegram_id -> time.Time последнего перевыпуска ссылки
 }
 
 // buildBotSettings собирает настройки telebot.
@@ -159,13 +160,23 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	btnDevDelete := devMenu.Data("", cbDeviceDelete)
 	btnDevResetAll := devMenu.Data("", cbDevicesResetAll)
 	btnDevResetAllOK := devMenu.Data("", cbDevicesResetAllConfirm)
-	btnDevClose := devMenu.Data("", cbDevicesClose)
 
 	b.Handle(&btnDevManage, bot.handleDevicesManage)
 	b.Handle(&btnDevDelete, bot.handleDeviceDelete)
 	b.Handle(&btnDevResetAll, bot.handleDevicesResetAll)
 	b.Handle(&btnDevResetAllOK, bot.handleDevicesResetAllConfirm)
-	b.Handle(&btnDevClose, bot.handleDevicesClose)
+
+	// Inline-кнопки карточки подписки (роутинг по Unique)
+	subMenu := &tele.ReplyMarkup{}
+	btnSubCard := subMenu.Data("", cbSubCard)
+	btnSubRevoke := subMenu.Data("", cbSubRevoke)
+	btnSubRevokeOK := subMenu.Data("", cbSubRevokeConfirm)
+	btnSubRevokeCancel := subMenu.Data("", cbSubRevokeCancel)
+
+	b.Handle(&btnSubCard, bot.handleSubscriptionCard)
+	b.Handle(&btnSubRevoke, bot.handleSubRevoke)
+	b.Handle(&btnSubRevokeOK, bot.handleSubRevokeConfirm)
+	b.Handle(&btnSubRevokeCancel, bot.handleSubRevokeCancel)
 
 	// Inline-кнопки багрепорта (роутинг по Unique)
 	bugMenu := &tele.ReplyMarkup{}
@@ -539,8 +550,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	switch text {
 	case BtnStatus:
 		return b.handleStatus(c)
-	case BtnDevices:
-		return b.handleDevicesManage(c)
 	case BtnPay, BtnRenew:
 		return b.handlePayButton(c)
 	case BtnCheckPayment:
@@ -551,16 +560,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 		return b.handleBugReportStart(c)
 	case BtnServers:
 		return b.handleDashboard(c)
-	case BtnInstructions:
-		return b.handleInstructionsMenu(c)
 	case BtnBack:
 		return b.handleBack(c)
-	case BtnInstIOS:
-		return b.handleInstructionIOS(c)
-	case BtnInstAndroid:
-		return b.handleInstructionAndroid(c)
-	case BtnInstDesktop:
-		return b.handleInstructionDesktop(c)
 	}
 
 	// Неизвестное сообщение — показываем меню
@@ -655,12 +656,17 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 	// Очищаем состояние
 	b.userStates.Delete(telegramID)
 
-	// Отправляем приветствие
-	msg := fmt.Sprintf(MsgAccountCreated, remnawaveUser.SubscriptionURL)
-	return c.Send(msg, &tele.SendOptions{
+	// Приветствие несёт reply-клавиатуру главного меню, поэтому подключение
+	// уходит отдельным сообщением с inline-кнопкой на страницу подписки.
+	if err := c.Send(MsgAccountCreated, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: b.userKeyboard(telegramID),
-	})
+	}); err != nil {
+		return err
+	}
+
+	hint := fmt.Sprintf(MsgConnectHint, html.EscapeString(remnawaveUser.SubscriptionURL))
+	return sendWithInlineFallback(c, hint, ConnectKeyboard(remnawaveUser.SubscriptionURL))
 }
 
 // rollbackCreatedRemnawaveUser компенсирует частично завершённую регистрацию.
@@ -725,20 +731,11 @@ func (b *Bot) handleStatus(c tele.Context) error {
 		return c.Send("Ошибка получения статуса. Попробуйте позже.")
 	}
 
-	var devicesCount *int
-	count, err := b.remnawave.GetUserHwidDevicesCount(user.RemnawaveUUID)
-	if err != nil {
-		slog.Warn("Failed to get user HWID devices for status", "error", err, "telegram_id", telegramID)
-	} else {
-		devicesCount = &count
-	}
-
-	msg := FormatUserStatus(remnawaveUser, user, b.isTrialUser(telegramID), devicesCount)
-	// Переходим в подменю подписки: отсюда доступно управление устройствами и возврат.
-	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: SubscriptionMenuKeyboard(),
-	})
+	// Карточка подписки самодостаточна: статус, ссылка и inline-кнопки
+	// (страница подписки, устройства, перевыпуск). Reply-клавиатура главного
+	// меню остаётся снизу нетронутой, отдельное подменю не нужно.
+	msg, markup := b.buildSubscriptionCard(telegramID, remnawaveUser)
+	return sendWithInlineFallback(c, msg, markup)
 }
 
 // handleInfo показывает помощь, контакты и ссылки на документы сервиса
@@ -746,14 +743,6 @@ func (b *Bot) handleInfo(c tele.Context) error {
 	return c.Send(BuildInfoMessage(b.config), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: b.userKeyboard(c.Sender().ID),
-	})
-}
-
-// handleInstructionsMenu показывает меню инструкций
-func (b *Bot) handleInstructionsMenu(c tele.Context) error {
-	return c.Send(MsgInstructions, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: InstructionsKeyboard(),
 	})
 }
 
@@ -778,48 +767,6 @@ func (b *Bot) handleUserMode(c tele.Context) error {
 	return c.Send(MsgWelcomeBack, &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: b.userKeyboard(c.Sender().ID),
-	})
-}
-
-// getSubLinkForUser возвращает ссылку подписки для пользователя
-func (b *Bot) getSubLinkForUser(telegramID int64) string {
-	user, err := b.db.GetUserByTelegramID(telegramID)
-	if err != nil || user == nil {
-		return "Сначала активируйте подписку"
-	}
-
-	remnawaveUser, err := b.remnawave.GetUser(user.RemnawaveUUID)
-	if err != nil {
-		return "Ошибка получения ссылки"
-	}
-
-	return remnawaveUser.SubscriptionURL
-}
-
-// handleInstructionIOS - инструкция для iOS
-func (b *Bot) handleInstructionIOS(c tele.Context) error {
-	subLink := b.getSubLinkForUser(c.Sender().ID)
-	return c.Send(fmt.Sprintf(MsgInstructionIOS, subLink), &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: InstructionsKeyboard(),
-	})
-}
-
-// handleInstructionAndroid - инструкция для Android
-func (b *Bot) handleInstructionAndroid(c tele.Context) error {
-	subLink := b.getSubLinkForUser(c.Sender().ID)
-	return c.Send(fmt.Sprintf(MsgInstructionAndroid, subLink), &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: InstructionsKeyboard(),
-	})
-}
-
-// handleInstructionDesktop - инструкция для ПК
-func (b *Bot) handleInstructionDesktop(c tele.Context) error {
-	subLink := b.getSubLinkForUser(c.Sender().ID)
-	return c.Send(fmt.Sprintf(MsgInstructionDesktop, subLink), &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: InstructionsKeyboard(),
 	})
 }
 
@@ -926,11 +873,7 @@ func isMenuNavigationButton(text string) bool {
 		BtnInfo,
 		BtnBugReport,
 		BtnServers,
-		BtnInstructions,
 		BtnBack,
-		BtnInstIOS,
-		BtnInstAndroid,
-		BtnInstDesktop,
 		BtnInvites,
 		BtnInviteCreate,
 		BtnInviteList,

@@ -34,78 +34,40 @@ const (
 
 	MsgAccountCreated = `<b>✅ Аккаунт создан!</b>
 
-Добро пожаловать! Ваш VPN-доступ активирован.
+Добро пожаловать! Ваш VPN-доступ активирован.`
 
-<b>Ссылка для подключения:</b>
-<code>%s</code>
+	// MsgConnectHint отправляется отдельным сообщением с inline-кнопкой перехода
+	// на страницу подписки: Telegram не допускает reply- и inline-разметку в одном
+	// сообщении, а приветствие несёт reply-клавиатуру главного меню.
+	MsgConnectHint = `<b>🔗 Подключение</b>
 
-Скопируйте ссылку и вставьте в приложение.
-Нажмите "📚 Инструкции" для настройки.`
+Нажмите кнопку ниже — на странице подписки будут приложения для вашей платформы и подключение в один тап.
+
+<b>Ссылка для ручного подключения</b>
+(нажмите, чтобы скопировать):
+<code>%s</code>`
 
 	MsgNotRegistered = `<b>❌ Вы не зарегистрированы</b>
 
 Для доступа к VPN нужен инвайт-код.
 Отправьте /start для регистрации.`
 
-	MsgSubscriptionLink = `<b>🌐 Ссылка для подключения</b>
+	// MsgRevokeConfirm — экран подтверждения перевыпуска ссылки подписки.
+	MsgRevokeConfirm = `<b>🔄 Перевыпуск ссылки</b>
 
-<code>%s</code>
+Будет создана новая ссылка подписки, а старая перестанет работать <b>немедленно</b>.
 
-Скопируйте ссылку и вставьте в приложение VPN-клиента.`
+Все подключённые устройства отвалятся, и их придётся настроить заново по новой ссылке.
 
-	MsgInstructions = `<b>📚 Инструкции по настройке</b>
+Перевыпустить?`
 
-Выберите вашу платформу:`
+	// MsgRevokeDone предваряет обновлённую карточку после успешного перевыпуска.
+	MsgRevokeDone = `<b>✅ Ссылка перевыпущена</b>
 
-	MsgInstructionIOS = `<b>Настройка на iOS (iPhone/iPad)</b>
+Старая ссылка больше не работает, устройства сброшены. Подключите их заново.
 
-1. Скачайте приложение <b>Happ</b> из App Store:
-   https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973
+`
 
-2. Откройте приложение
-
-3. Нажмите "+" в правом верхнем углу
-
-4. Выберите "Вставить из буфера обмена"
-
-5. Выберите сервер и включите VPN переключателем
-
-<b>Ваша ссылка подписки:</b>
-<code>%s</code>`
-
-	MsgInstructionAndroid = `<b>Настройка на Android</b>
-
-1. Скачайте приложение <b>Happ</b> из Play Market:
-   https://play.google.com/store/apps/details?id=com.happproxy
-
-   Или APK: https://github.com/Happ-proxy/happ-android/releases/latest/download/Happ.apk
-
-2. Откройте приложение
-
-3. Нажмите "+" в правом верхнем углу
-
-4. Выберите "Добавить из буфера обмена"
-
-5. Включите VPN переключателем
-
-<b>Ваша ссылка подписки:</b>
-<code>%s</code>`
-
-	MsgInstructionDesktop = `<b>Настройка на ПК</b>
-
-1. Скачайте <b>HAPP</b>:
-   https://www.happ.su/main/ru
-
-2. Установите и откройте клиент
-
-3. Нажмите "Добавить"(визуально плюсик)
-
-4. Вставьте в поле "URL подписки" вашу ссылку (внизу данного поста)
-
-5. Переключите тумблер на "TUN" и подключитесь
-
-<b>Ваша ссылка подписки:</b>
-<code>%s</code>`
 	MsgSubtitlesProcessing = `⏳ Рендеринг видео...`
 
 	MsgSubtitlesNoAvatar = `⚠️ Не удалось получить фото профиля — возможно, закрыты настройки приватности.
@@ -193,6 +155,26 @@ func determineSubscriptionType(remUser *remnawave.User, isTrial bool) subscripti
 	return subTypePaid
 }
 
+// formatSubscriptionLink возвращает блок со ссылкой подписки для ручного
+// подключения. Ссылка моноширинная и не кликабельная: тап по ней копирует текст.
+func formatSubscriptionLink(subURL string) string {
+	return fmt.Sprintf("\n<b>Ссылка для ручного подключения</b>\n(нажмите, чтобы скопировать):\n<code>%s</code>", html.EscapeString(subURL))
+}
+
+// SubscriptionLinkVisible сообщает, показывается ли пользователю ссылка подписки.
+// Кнопки перехода на страницу подписки и перевыпуска следуют за ссылкой: нет
+// ссылки — нет и кнопок (grace-период, исчерпанный трафик триала).
+func SubscriptionLinkVisible(remUser *remnawave.User, isTrial bool) bool {
+	switch determineSubscriptionType(remUser, isTrial) {
+	case subTypeInfinite:
+		return true
+	case subTypeGrace:
+		return false
+	default:
+		return remUser.Status == remnawave.StatusActive
+	}
+}
+
 // FormatUserStatus форматирует статус пользователя с учётом типа подписки
 func FormatUserStatus(remUser *remnawave.User, dbUser *database.User, isTrial bool, devicesCount *int) string {
 	subType := determineSubscriptionType(remUser, isTrial)
@@ -224,7 +206,7 @@ func formatInfiniteStatus(remUser *remnawave.User, devicesCount *int) string {
 	}
 	msg += formatDevicesLine(remUser, devicesCount)
 
-	msg += fmt.Sprintf("\n<b>Ссылка подписки:</b>\n<code>%s</code>", remUser.SubscriptionURL)
+	msg += formatSubscriptionLink(remUser.SubscriptionURL)
 	return msg
 }
 
@@ -295,7 +277,7 @@ func formatTrialStatus(remUser *remnawave.User, dbUser *database.User, devicesCo
 
 	// Ссылка подписки
 	if remUser.Status == remnawave.StatusActive {
-		msg += fmt.Sprintf("\n<b>Ссылка подписки:</b>\n<code>%s</code>", remUser.SubscriptionURL)
+		msg += formatSubscriptionLink(remUser.SubscriptionURL)
 	}
 
 	// Подсказка
@@ -340,7 +322,7 @@ func formatPaidStatus(remUser *remnawave.User, dbUser *database.User, devicesCou
 
 	// Ссылка подписки
 	if remUser.Status == remnawave.StatusActive {
-		msg += fmt.Sprintf("\n<b>Ссылка подписки:</b>\n<code>%s</code>", remUser.SubscriptionURL)
+		msg += formatSubscriptionLink(remUser.SubscriptionURL)
 	}
 
 	return msg

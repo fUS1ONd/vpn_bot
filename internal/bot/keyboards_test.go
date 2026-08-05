@@ -9,18 +9,49 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
 
-func TestSubscriptionMenuKeyboard(t *testing.T) {
-	kb := SubscriptionMenuKeyboard()
+func TestSubscriptionCardKeyboardWithActiveAccess(t *testing.T) {
+	kb := SubscriptionCardKeyboard("https://sub.example.com:8443/abc123", true)
 	require.NotNil(t, kb)
+	require.Len(t, kb.InlineKeyboard, 3)
 
-	var buttons []string
-	for _, row := range kb.ReplyKeyboard {
-		for _, btn := range row {
-			buttons = append(buttons, btn.Text)
-		}
+	assert.Equal(t, "https://sub.example.com:8443/abc123", kb.InlineKeyboard[0][0].URL)
+	assert.Equal(t, cbDevicesManage, kb.InlineKeyboard[1][0].Unique)
+	assert.Equal(t, cbSubRevoke, kb.InlineKeyboard[2][0].Unique)
+}
+
+func TestSubscriptionCardKeyboardWithoutActiveAccess(t *testing.T) {
+	// Нет доступа — остаются только устройства: ни перехода, ни перевыпуска.
+	kb := SubscriptionCardKeyboard("https://sub.example.com/abc123", false)
+	require.Len(t, kb.InlineKeyboard, 1)
+	assert.Equal(t, cbDevicesManage, kb.InlineKeyboard[0][0].Unique)
+}
+
+func TestSubscriptionCardKeyboardSkipsInvalidURL(t *testing.T) {
+	// Битую ссылку Telegram отверг бы вместе со всем сообщением, поэтому
+	// URL-кнопки быть не должно, а остальные кнопки остаются на месте.
+	for _, subURL := range []string{"", "vless://example", "не ссылка", "://broken", "https://"} {
+		kb := SubscriptionCardKeyboard(subURL, true)
+		require.Len(t, kb.InlineKeyboard, 2, "subURL=%q", subURL)
+		assert.Equal(t, cbDevicesManage, kb.InlineKeyboard[0][0].Unique, "subURL=%q", subURL)
+		assert.Equal(t, cbSubRevoke, kb.InlineKeyboard[1][0].Unique, "subURL=%q", subURL)
 	}
-	require.Contains(t, buttons, BtnDevices)
-	require.Contains(t, buttons, BtnBack)
+}
+
+func TestConnectKeyboard(t *testing.T) {
+	kb := ConnectKeyboard("https://sub.example.com:8443/abc123")
+	require.NotNil(t, kb)
+	require.Len(t, kb.InlineKeyboard, 1)
+	assert.Equal(t, "https://sub.example.com:8443/abc123", kb.InlineKeyboard[0][0].URL)
+
+	assert.Nil(t, ConnectKeyboard("vless://example"))
+	assert.Nil(t, ConnectKeyboard(""))
+}
+
+func TestSubscriptionRevokeConfirmKeyboard(t *testing.T) {
+	kb := SubscriptionRevokeConfirmKeyboard()
+	require.Len(t, kb.InlineKeyboard, 2)
+	assert.Equal(t, cbSubRevokeConfirm, kb.InlineKeyboard[0][0].Unique)
+	assert.Equal(t, cbSubRevokeCancel, kb.InlineKeyboard[1][0].Unique)
 }
 
 func TestDevicesManagementKeyboard(t *testing.T) {
@@ -30,21 +61,21 @@ func TestDevicesManagementKeyboard(t *testing.T) {
 	}
 	kb := DevicesManagementKeyboard(devices)
 	require.NotNil(t, kb)
-	// 2 устройства + строка "сбросить все" + строка "закрыть" = 4 ряда
+	// 2 устройства + строка "сбросить все" + строка "назад" = 4 ряда
 	require.Len(t, kb.InlineKeyboard, 4)
 	require.Equal(t, "dev_del", kb.InlineKeyboard[0][0].Unique)
 	require.Equal(t, "0", kb.InlineKeyboard[0][0].Data)
 	require.Equal(t, "dev_del", kb.InlineKeyboard[1][0].Unique)
 	require.Equal(t, "1", kb.InlineKeyboard[1][0].Data)
 	require.Equal(t, "dev_reset_all", kb.InlineKeyboard[2][0].Unique)
-	require.Equal(t, "dev_close", kb.InlineKeyboard[3][0].Unique)
+	require.Equal(t, cbSubCard, kb.InlineKeyboard[3][0].Unique)
 }
 
 func TestDevicesManagementKeyboardEmpty(t *testing.T) {
 	kb := DevicesManagementKeyboard(nil)
-	// нет устройств -> только кнопка "закрыть", без "сбросить все"
+	// нет устройств -> только кнопка "назад", без "сбросить все"
 	require.Len(t, kb.InlineKeyboard, 1)
-	require.Equal(t, "dev_close", kb.InlineKeyboard[0][0].Unique)
+	require.Equal(t, cbSubCard, kb.InlineKeyboard[0][0].Unique)
 }
 
 func TestAdminManageKeyboardDoesNotContainAddTrafficButton(t *testing.T) {
@@ -155,24 +186,6 @@ func TestAdminChangePriceMigrationKeyboardContainsExpectedButtons(t *testing.T) 
 	assert.Contains(t, buttons, BtnAdminMigrationPaidYes)
 	assert.Contains(t, buttons, BtnAdminMigrationPaidNo)
 	assert.Contains(t, buttons, BtnCancel)
-}
-
-func TestInstructionsKeyboardContainsUnifiedDesktopButton(t *testing.T) {
-	keyboard := InstructionsKeyboard()
-
-	var buttons []string
-	for _, row := range keyboard.ReplyKeyboard {
-		for _, btn := range row {
-			buttons = append(buttons, btn.Text)
-		}
-	}
-
-	assert.Contains(t, buttons, BtnInstIOS)
-	assert.Contains(t, buttons, BtnInstAndroid)
-	assert.Contains(t, buttons, BtnInstDesktop)
-	assert.Contains(t, buttons, "💻ПК")
-	assert.NotContains(t, buttons, "💻 Windows/Linux")
-	assert.NotContains(t, buttons, "🍏 macOS")
 }
 
 func TestUserMenuKeyboardDynamicContainsPayButton(t *testing.T) {

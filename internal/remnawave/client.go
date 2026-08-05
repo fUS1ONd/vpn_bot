@@ -321,6 +321,29 @@ func (c *Client) DeleteAllUserHwidDevices(uuid string) error {
 	return err
 }
 
+// RevokeUserSubscription перевыпускает подписку: панель генерирует новый
+// shortUuid, старая ссылка немедленно перестаёт работать. Свой shortUuid не
+// передаём — Remnawave настойчиво рекомендует генерировать его самостоятельно.
+// Ответ содержит пользователя с уже обновлённым subscriptionUrl.
+func (c *Client) RevokeUserSubscription(uuid string) (*User, error) {
+	resp, err := c.doRequest("POST", "/api/users/"+uuid+"/actions/revoke", []byte("{}"))
+	if err != nil {
+		return nil, err
+	}
+
+	var result apiResponse
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	var user User
+	if err := json.Unmarshal(result.Response, &user); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal revoked user: %w", err)
+	}
+
+	return &user, nil
+}
+
 // UpdateUsername обновляет username пользователя в панели Remnawave
 func (c *Client) UpdateUsername(uuid string, username string) error {
 	req := UpdateUserRequest{

@@ -28,7 +28,7 @@ func TestFormatUserStatusShowsUsedTrafficPerMonthWithoutLimit(t *testing.T) {
 	assert.NotContains(t, msg, " / ")
 	assert.NotContains(t, msg, "%)")
 	assert.NotContains(t, msg, "<b>Сброс трафика:</b>")
-	assert.Contains(t, msg, "<b>Ссылка подписки:</b>")
+	assert.Contains(t, msg, "<b>Ссылка для ручного подключения</b>")
 }
 
 func TestFormatUserStatusGraceShowsPaymentWindow(t *testing.T) {
@@ -52,6 +52,10 @@ func TestFormatUserStatusGraceShowsPaymentWindow(t *testing.T) {
 func TestMsgAccountCreatedHasNoTrafficLimitDetails(t *testing.T) {
 	assert.NotContains(t, MsgAccountCreated, "Лимит трафика")
 	assert.NotContains(t, MsgAccountCreated, "Сброс трафика")
+}
+
+func TestMsgAccountCreatedDoesNotMentionRemovedInstructionsButton(t *testing.T) {
+	assert.NotContains(t, MsgAccountCreated, "Инструкции")
 }
 
 func TestBuildInfoMessageSubstitutesValuesFromConfig(t *testing.T) {

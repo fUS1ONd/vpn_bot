@@ -139,12 +139,3 @@ func (b *Bot) handleDevicesResetAllConfirm(c tele.Context) error {
 	})
 	return c.Respond(&tele.CallbackResponse{Text: "Все устройства сброшены"})
 }
-
-// handleDevicesClose закрывает экран управления устройствами.
-func (b *Bot) handleDevicesClose(c tele.Context) error {
-	if err := c.Delete(); err != nil {
-		// Если удалить не получилось — просто убираем inline-клавиатуру.
-		_ = c.Edit("Готово.", &tele.SendOptions{ParseMode: tele.ModeHTML})
-	}
-	return c.Respond()
-}

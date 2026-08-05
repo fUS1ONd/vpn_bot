@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"net/url"
 
 	tele "gopkg.in/telebot.v3"
 
@@ -15,7 +16,14 @@ const (
 	cbDeviceDelete           = "dev_del"
 	cbDevicesResetAll        = "dev_reset_all"
 	cbDevicesResetAllConfirm = "dev_reset_all_ok"
-	cbDevicesClose           = "dev_close"
+)
+
+// Unique-идентификаторы inline-кнопок карточки подписки
+const (
+	cbSubRevoke        = "sub_revoke"        // запрос перевыпуска ссылки
+	cbSubRevokeConfirm = "sub_revoke_ok"     // подтверждение перевыпуска
+	cbSubRevokeCancel  = "sub_revoke_cancel" // отмена перевыпуска, возврат карточки
+	cbSubCard          = "sub_card"          // возврат к карточке подписки
 )
 
 // Unique-идентификаторы inline-кнопок багрепорта
@@ -47,12 +55,10 @@ const (
 // Текстовые константы кнопок
 const (
 	// Кнопки пользователя
-	BtnStatus       = "👤 Моя подписка"
-	BtnDevices      = "📱 Управление устройствами"
-	BtnInfo         = "ℹ️ Информация"
-	BtnInstructions = "📚 Инструкции"
-	BtnBack         = "🔙 Назад"
-	BtnCancel       = "🚫 Отмена"
+	BtnStatus = "👤 Моя подписка"
+	BtnInfo   = "ℹ️ Информация"
+	BtnBack   = "🔙 Назад"
+	BtnCancel = "🚫 Отмена"
 
 	// Кнопки багрепорта
 	BtnBugReport   = "🛠 Сообщить о проблеме"
@@ -65,11 +71,6 @@ const (
 	BtnPayYooKassa  = "⚡ Карта / СБП / SberPay"
 	BtnPayCrypto    = "🪙 Крипта"
 	BtnCheckPayment = "🔄 Проверить оплату"
-
-	// Кнопки инструкций
-	BtnInstIOS     = "🍎 iOS"
-	BtnInstAndroid = "🤖 Android"
-	BtnInstDesktop = "💻ПК"
 
 	// Кнопка серверов (мониторинг)
 	BtnServers = "📡 Серверы"
@@ -122,7 +123,7 @@ func UserMenuKeyboardDynamic(payButtonText string, showPayButton bool, showInvit
 	} else {
 		rows = append(rows, menu.Row(menu.Text(BtnServers)))
 	}
-	rows = append(rows, menu.Row(menu.Text(BtnInstructions), menu.Text(BtnInfo)))
+	rows = append(rows, menu.Row(menu.Text(BtnInfo)))
 	rows = append(rows, menu.Row(menu.Text(BtnBugReport)))
 	if showInvites {
 		rows = append(rows, menu.Row(menu.Text(BtnInvites)))
@@ -171,17 +172,6 @@ func ReferralRevokeConfirmKeyboard(code string) *tele.ReplyMarkup {
 	yes := menu.Data("✅ Отозвать", cbReferralRevokeOK, code)
 	back := menu.Data("🔙 Назад", cbReferralPage, "0")
 	menu.Inline(menu.Row(yes), menu.Row(back))
-	return menu
-}
-
-// InstructionsKeyboard возвращает меню инструкций
-func InstructionsKeyboard() *tele.ReplyMarkup {
-	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
-		menu.Row(menu.Text(BtnInstIOS), menu.Text(BtnInstAndroid)),
-		menu.Row(menu.Text(BtnInstDesktop)),
-		menu.Row(menu.Text(BtnBack)),
-	)
 	return menu
 }
 
@@ -332,13 +322,61 @@ func PaymentWaitKeyboard() *tele.ReplyMarkup {
 	return menu
 }
 
-// SubscriptionMenuKeyboard — reply-подменю, в которое попадает пользователь после
-// «Моя подписка»: управление устройствами и возврат в главное меню.
-func SubscriptionMenuKeyboard() *tele.ReplyMarkup {
-	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
-		menu.Row(menu.Text(BtnDevices)),
-		menu.Row(menu.Text(BtnBack)),
+// isValidSubscriptionURL проверяет, что ссылку подписки можно отдать Telegram
+// как URL inline-кнопки. Битый URL Telegram отвергает вместе со всем сообщением,
+// поэтому при сомнении кнопку лучше не показывать вовсе.
+func isValidSubscriptionURL(subURL string) bool {
+	if subURL == "" {
+		return false
+	}
+	u, err := url.Parse(subURL)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	return u.Host != ""
+}
+
+// SubscriptionCardKeyboard — inline-клавиатура карточки «Моя подписка».
+// showConnect включает кнопки перехода на страницу подписки и перевыпуска ссылки:
+// они показываются там же, где показывается сама ссылка (активный доступ).
+// «Мои устройства» доступны всегда, пока пользователь зарегистрирован.
+func SubscriptionCardKeyboard(subURL string, showConnect bool) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+
+	if showConnect && isValidSubscriptionURL(subURL) {
+		rows = append(rows, menu.Row(menu.URL("🔗 Подключить устройство", subURL)))
+	}
+	rows = append(rows, menu.Row(menu.Data("📱 Мои устройства", cbDevicesManage)))
+	if showConnect {
+		rows = append(rows, menu.Row(menu.Data("🔄 Перевыпустить ссылку", cbSubRevoke)))
+	}
+
+	menu.Inline(rows...)
+	return menu
+}
+
+// ConnectKeyboard — одиночная кнопка перехода на страницу подписки.
+// Возвращает nil, если ссылка непригодна для URL-кнопки: тогда сообщение
+// отправляется без разметки, со ссылкой в тексте.
+func ConnectKeyboard(subURL string) *tele.ReplyMarkup {
+	if !isValidSubscriptionURL(subURL) {
+		return nil
+	}
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(menu.Row(menu.URL("🔗 Подключить устройство", subURL)))
+	return menu
+}
+
+// SubscriptionRevokeConfirmKeyboard — подтверждение перевыпуска ссылки.
+func SubscriptionRevokeConfirmKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(
+		menu.Row(menu.Data("✅ Да, перевыпустить", cbSubRevokeConfirm)),
+		menu.Row(menu.Data("🔙 Отмена", cbSubRevokeCancel)),
 	)
 	return menu
 }
@@ -382,8 +420,10 @@ func DevicesManagementKeyboard(devices []remnawave.HwidDevice) *tele.ReplyMarkup
 		rows = append(rows, menu.Row(resetAll))
 	}
 
-	closeBtn := menu.Data("🔙 Закрыть", cbDevicesClose)
-	rows = append(rows, menu.Row(closeBtn))
+	// Экран устройств редактирует карточку подписки, поэтому выход возвращает
+	// карточку на место, а не удаляет сообщение.
+	backBtn := menu.Data("🔙 Назад", cbSubCard)
+	rows = append(rows, menu.Row(backBtn))
 
 	menu.Inline(rows...)
 	return menu

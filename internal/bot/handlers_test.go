@@ -659,25 +659,6 @@ func TestProcessInviteCode_SetsFirstTouchWithoutModeratorRuntime(t *testing.T) {
 	})
 }
 
-func TestHandleInstructionDesktopUsesUnifiedPCMessage(t *testing.T) {
-	b, _ := setupTestBot(t)
-	ctx := &MockContext{
-		sender:  &tele.User{ID: 777, Username: "desktop"},
-		message: &tele.Message{},
-	}
-
-	err := b.handleInstructionDesktop(ctx)
-	require.NoError(t, err)
-
-	msg, ok := ctx.sentMsg.(string)
-	require.True(t, ok)
-	assert.Contains(t, msg, "<b>Настройка на ПК</b>")
-	assert.Contains(t, msg, "https://www.happ.su/main/ru")
-	assert.Contains(t, msg, "\"URL подписки\"")
-	assert.Contains(t, msg, "\"TUN\"")
-	assert.Contains(t, msg, "Сначала активируйте подписку")
-}
-
 func TestHandleInfoSendsHelpMessage(t *testing.T) {
 	b, _ := setupTestBot(t)
 	ctx := &MockContext{
