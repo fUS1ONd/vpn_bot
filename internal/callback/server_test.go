@@ -19,11 +19,15 @@ type mockHandler struct {
 }
 
 type mockYooKassaHandler struct {
-	id  string
-	err error
+	event string
+	id    string
+	err   error
 }
 
-func (m *mockYooKassaHandler) HandleYooKassaWebhook(id string) error { m.id = id; return m.err }
+func (m *mockYooKassaHandler) HandleYooKassaWebhook(event, id string) error {
+	m.event, m.id = event, id
+	return m.err
+}
 
 func (m *mockHandler) HandlePaymentCallback(p platega.CallbackPayload) error {
 	m.called = true
@@ -132,6 +136,9 @@ func TestYooKassaWebhookPassesOnlyExternalPaymentID(t *testing.T) {
 	}
 	if h.id != "yo-42" {
 		t.Fatalf("ожидали ID yo-42, получили %q", h.id)
+	}
+	if h.event != "payment.succeeded" {
+		t.Fatalf("ожидали событие payment.succeeded, получили %q", h.event)
 	}
 }
 

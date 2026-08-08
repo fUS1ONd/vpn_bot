@@ -57,6 +57,17 @@ type Config struct {
 	YooKassaReturnURL        string
 	YooKassaFeeBasisPoints   int // Договорная комиссия ЮKassa в сотых долях процента: 3.5% = 350
 	CallbackPort             int // Порт для callback-сервера (по умолчанию 8080)
+
+	// «Мой налог» — автопробитие чеков по платежам ЮKassa (опционально).
+	// Интеграция включается наличием ИНН и пароля, как Platega и YooKassa.
+	MoynalogINN         string
+	MoynalogPassword    string
+	MoynalogServiceName string // Базовая часть наименования услуги, к ней приписывается метка
+}
+
+// MoynalogEnabled сообщает, настроена ли интеграция с кабинетом «Мой налог».
+func (c *Config) MoynalogEnabled() bool {
+	return c != nil && c.MoynalogINN != "" && c.MoynalogPassword != ""
 }
 
 // Load читает конфигурацию из переменных окружения
@@ -94,6 +105,9 @@ func Load() (*Config, error) {
 		PrivacyPolicyURL:         os.Getenv("PRIVACY_POLICY_URL"),
 		TermsOfServiceURL:        os.Getenv("TERMS_OF_SERVICE_URL"),
 		SupportContact:           os.Getenv("SUPPORT_CONTACT"),
+		MoynalogINN:              strings.TrimSpace(os.Getenv("MOYNALOG_INN")),
+		MoynalogPassword:         os.Getenv("MOYNALOG_PASSWORD"),
+		MoynalogServiceName:      getEnvOrDefault("MOYNALOG_SERVICE_NAME", "Sarvizza - Подписка на месяц"),
 	}
 
 	// Парсинг AdminID
