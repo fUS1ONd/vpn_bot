@@ -13,6 +13,7 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/monitoring"
+	"github.com/fus1ond/vpn_bot/internal/moynalog"
 	"github.com/fus1ond/vpn_bot/internal/platega"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/fus1ond/vpn_bot/internal/render"
@@ -30,31 +31,38 @@ const (
 
 // Bot представляет Telegram бота
 type Bot struct {
-	bot                  *tele.Bot
-	db                   *database.DB
-	remnawave            *remnawave.Client
-	config               *config.Config
-	userStates           *stateMap
-	metricsClient        *monitoring.MetricsClient // клиент метрик VM
-	dashboardMgr         *dashboardManager         // менеджер сессий дашборда
-	sdConfigsPath        string                    // путь к sd_configs (для чтения targets)
-	render               *render.Client            // клиент render-сервиса (nil если не настроен)
-	platega              *platega.Client           // Platega API клиент (nil если не настроен)
-	yookassa             *yookassa.Client          // ЮKassa API клиент (nil если не настроен)
-	maintenanceMode      atomic.Bool               // Режим обслуживания (сбрасывается при перезапуске)
-	paymentRetryDelays   []time.Duration           // Тестовые override-задержки для короткого background retry активации
-	paymentRetryInFlight sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
-	shutdownCh           chan struct{}             // Закрывается при Stop() для отмены фоновых горутин
-	userLimiter          *userRateLimiter          // per-user rate limiter для команд бота
-	adminSwitchMu        sync.RWMutex
-	adminSwitchData      map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
-	adminPriceMu         sync.RWMutex
-	adminPriceData       map[int64]adminChangePriceSession // pending-данные изменения цены для админа
-	bugReportMu          sync.RWMutex
-	bugReportData        map[int64]bugReportSession // pending-данные багрепорта
-	bugReportCooldown    sync.Map                   // telegram_id -> time.Time последней отправки
-	adminExtendCooldown  sync.Map                   // telegram_id -> time.Time последнего продления (защита от дабл-клика)
-	subRevokeCooldown    sync.Map                   // telegram_id -> time.Time последнего перевыпуска ссылки
+	bot                    *tele.Bot
+	db                     *database.DB
+	remnawave              *remnawave.Client
+	config                 *config.Config
+	userStates             *stateMap
+	metricsClient          *monitoring.MetricsClient // клиент метрик VM
+	dashboardMgr           *dashboardManager         // менеджер сессий дашборда
+	sdConfigsPath          string                    // путь к sd_configs (для чтения targets)
+	render                 *render.Client            // клиент render-сервиса (nil если не настроен)
+	platega                *platega.Client           // Platega API клиент (nil если не настроен)
+	yookassa               *yookassa.Client          // ЮKassa API клиент (nil если не настроен)
+	moynalog               *moynalog.Client          // Клиент кабинета «Мой налог» (nil если не настроен)
+	maintenanceMode        atomic.Bool               // Режим обслуживания (сбрасывается при перезапуске)
+	paymentRetryDelays     []time.Duration           // Тестовые override-задержки для короткого background retry активации
+	paymentRetryInFlight   sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
+	shutdownCh             chan struct{}             // Закрывается при Stop() для отмены фоновых горутин
+	userLimiter            *userRateLimiter          // per-user rate limiter для команд бота
+	adminSwitchMu          sync.RWMutex
+	adminSwitchData        map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
+	adminPriceMu           sync.RWMutex
+	adminPriceData         map[int64]adminChangePriceSession // pending-данные изменения цены для админа
+	bugReportMu            sync.RWMutex
+	bugReportData          map[int64]bugReportSession // pending-данные багрепорта
+	bugReportCooldown      sync.Map                   // telegram_id -> time.Time последней отправки
+	adminExtendCooldown    sync.Map                   // telegram_id -> time.Time последнего продления (защита от дабл-клика)
+	unmatchedEventReported sync.Map                   // object_id -> struct{}, чтобы повторные доставки не спамили владельца
+	receiptsInFlight       sync.WaitGroup             // Запущенные пробития чеков — чтобы дождаться их при остановке
+	receiptsStopMu         sync.RWMutex               // Закрывает приём новых пробитий, чтобы Add не гонялся с Wait
+	receiptsStopped        bool                       // true после Stop(): новые пробития не начинаем
+	receiptAuthBlocked     atomic.Bool                // Кабинет не принял вход — проход по чекам прерывается до следующего раза
+	receiptAlerted         sync.Map                   // ключ алерта по чекам -> struct{}, защита от повторов
+	subRevokeCooldown      sync.Map                   // telegram_id -> time.Time последнего перевыпуска ссылки
 }
 
 // buildBotSettings собирает настройки telebot.
@@ -143,6 +151,12 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	if cfg.YooKassaShopID != "" && cfg.YooKassaSecretKey != "" {
 		bot.yookassa = yookassa.NewClient(cfg.YooKassaShopID, cfg.YooKassaSecretKey)
 		slog.Info("YooKassa client initialized")
+	}
+
+	// Интеграция с «Мой налог» включается наличием ИНН и пароля.
+	if cfg.MoynalogEnabled() {
+		bot.moynalog = moynalog.NewClient(cfg.MoynalogINN, cfg.MoynalogPassword)
+		slog.Info("Moynalog client initialized", "service_name", cfg.MoynalogServiceName)
 	}
 
 	// Регистрация обработчиков
@@ -238,6 +252,11 @@ func (b *Bot) Run() {
 // Stop останавливает бота (для graceful shutdown)
 func (b *Bot) Stop() {
 	close(b.shutdownCh)
+	// Начатое пробитие чека доводим до конца: оборванная попытка оставила бы
+	// в базе состояние, по которому непонятно, есть чек в кабинете или нет.
+	// Сначала закрываем приём новых, потом ждём начатые.
+	b.stopReceipts()
+	b.waitReceipts()
 	b.bot.Stop()
 }
 

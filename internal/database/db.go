@@ -174,6 +174,21 @@ func migrate(conn *sql.DB) error {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 
+		// Таблица чеков «Мой налог». payment_id как PRIMARY KEY даёт связь 1:1
+		// и физический барьер против второго чека по одному платежу.
+		`CREATE TABLE IF NOT EXISTS receipts (
+			payment_id INTEGER PRIMARY KEY,
+			marker TEXT NOT NULL,
+			receipt_uuid TEXT,
+			state TEXT NOT NULL,
+			operation_time TIMESTAMP NOT NULL,
+			amount INTEGER NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP
+		)`,
+
 		// Индексы
 		`CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid)`,
 		`CREATE INDEX IF NOT EXISTS idx_invites_used_by ON invites(used_by)`,
@@ -182,6 +197,7 @@ func migrate(conn *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_payments_platega_tx ON payments(platega_transaction_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_earnings_moderator ON moderator_earnings(moderator_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_earnings_payment ON moderator_earnings(payment_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_receipts_state ON receipts(state)`,
 	}
 
 	for _, m := range migrations {
@@ -305,6 +321,11 @@ func migrate(conn *sql.DB) error {
 	}
 	if _, err := conn.Exec(`CREATE INDEX IF NOT EXISTS idx_invites_first_touch ON invites(used_by, used_at)`); err != nil {
 		return fmt.Errorf("failed to create invite first-touch index: %w", err)
+	}
+	// Ручные чеки владельца связываются с платежами один раз миграцией, а не
+	// запросом к ФНС при каждом старте.
+	if err := seedManualReceipts(conn); err != nil {
+		return err
 	}
 
 	return nil

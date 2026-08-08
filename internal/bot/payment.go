@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"html"
 	"log/slog"
 	"strings"
 	"sync"
@@ -42,16 +43,20 @@ func (b *Bot) PaymentCallbackHandler() callback.PaymentHandler {
 	return &paymentCallbackHandler{bot: b}
 }
 
-// HandleYooKassaWebhook implements callback.YooKassaHandler. The webhook payload is
-// not authoritative: the provider API response is matched to the immutable local record.
-func (b *Bot) HandleYooKassaWebhook(providerPaymentID string) error {
+// HandleYooKassaWebhook реализует callback.YooKassaHandler. Тело вебхука не
+// авторитетно: ответ API провайдера сверяется с неизменной локальной записью.
+func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 	payment, err := b.db.GetPaymentByProviderPaymentID(paymentprovider.YooKassa, providerPaymentID)
 	if err != nil {
 		return fmt.Errorf("get YooKassa payment: %w", err)
 	}
 	if payment == nil {
+		// Событие не сопоставилось с платежом. Так теряются возвраты: в теле
+		// refund.succeeded лежит идентификатор возврата, а не платежа. Тихо
+		// отвечать «ок» нельзя — молчание про деньги не видно месяцами.
+		b.reportUnmatchedYooKassaEvent(event, providerPaymentID)
 		return nil
-	} // unknown/stale event is acknowledged without leaking state
+	}
 	mu := getPaymentMutex(payment.TelegramID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -71,6 +76,29 @@ func (b *Bot) HandleYooKassaWebhook(providerPaymentID string) error {
 	default:
 		return nil
 	}
+}
+
+// reportUnmatchedYooKassaEvent логирует несопоставленное событие и доносит его до
+// владельца. Ответ вебхуку остаётся успешным: повторные доставки от ЮKassa ничего не
+// изменят — событие не станет сопоставимым, — а вот поток одинаковых сообщений создадут,
+// поэтому про каждое событие сообщаем один раз.
+func (b *Bot) reportUnmatchedYooKassaEvent(event, objectID string) {
+	slog.Warn("Событие ЮKassa не сопоставлено с платежом",
+		"event", event, "object_id", objectID)
+
+	if _, alreadyReported := b.unmatchedEventReported.LoadOrStore(objectID, struct{}{}); alreadyReported {
+		return
+	}
+
+	eventText := event
+	if eventText == "" {
+		eventText = "без типа"
+	}
+	b.sendAdminAlert(fmt.Sprintf(
+		"⚠️ Событие ЮKassa <b>%s</b> не сопоставлено с платежом (объект <code>%s</code>).\n\n"+
+			"Так приходят возвраты: в теле лежит идентификатор возврата, а не платежа. Проверьте операцию в кабинете ЮKassa.",
+		html.EscapeString(eventText), html.EscapeString(objectID),
+	))
 }
 
 // HandlePaymentCallback обрабатывает callback от Platega
@@ -198,6 +226,10 @@ func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Paym
 
 	// Очищаем уведомления (пользователь мог быть в grace period)
 	h.bot.db.ClearNotifications(payment.TelegramID)
+
+	// Чек пробивается после активации подписки и параллельно ответу вебхуку:
+	// налоговая не блокирует клиента.
+	h.bot.issueReceiptAsync(payment.ID)
 }
 
 func (b *Bot) paymentConfirmationMessage(payment *database.Payment) string {

@@ -60,7 +60,14 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 	// 2. Retry confirmed_not_activated платежей
 	b.retryConfirmedNotActivated()
 
-	// 3. Получаем пользователей
+	// 3. Добиваем чеки «Моего налога», не пробитые на платёжном пути — последним
+	// шагом и через defer. Поход в ФНС долгий, а уведомления, отключения и автокики
+	// ждать его не должны: налоговая подождёт полчаса, а просроченный доступ — нет.
+	// defer, а не просто вызов в конце, потому что шаги ниже умеют выходить раньше
+	// по ошибке Remnawave, а чеки от неё не зависят.
+	defer b.issuePendingReceipts()
+
+	// 4. Получаем пользователей
 	remUsers, err := b.remnawave.GetAllUsers()
 	if err != nil {
 		slog.Error("Scheduler failed to get users from Remnawave", "error", err)

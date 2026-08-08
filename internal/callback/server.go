@@ -19,9 +19,13 @@ type PaymentHandler interface {
 	HandlePaymentCallback(payload platega.CallbackPayload) error
 }
 
-// YooKassaHandler verifies a webhook by loading the payment from YooKassa API.
-// The callback server deliberately passes only the external ID from the untrusted body.
-type YooKassaHandler interface{ HandleYooKassaWebhook(paymentID string) error }
+// YooKassaHandler проверяет вебхук, загружая платёж из API ЮKassa.
+// Из недоверенного тела сервер намеренно передаёт только тип события и внешний
+// идентификатор: тип нужен, чтобы объяснить несопоставленное событие, остальному
+// в теле доверия нет.
+type YooKassaHandler interface {
+	HandleYooKassaWebhook(event, objectID string) error
+}
 
 // Server — HTTP-сервер для приёма callback от Platega
 type Server struct {
@@ -80,6 +84,7 @@ func (s *Server) handleYooKassaWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var payload struct {
+		Event  string `json:"event"`
 		Object struct {
 			ID string `json:"id"`
 		} `json:"object"`
@@ -88,8 +93,8 @@ func (s *Server) handleYooKassaWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
-	if err := s.yookassaHandler.HandleYooKassaWebhook(payload.Object.ID); err != nil {
-		slog.Error("YooKassa webhook handler error", "error", err, "payment_id", payload.Object.ID)
+	if err := s.yookassaHandler.HandleYooKassaWebhook(payload.Event, payload.Object.ID); err != nil {
+		slog.Error("YooKassa webhook handler error", "error", err, "event", payload.Event, "payment_id", payload.Object.ID)
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}

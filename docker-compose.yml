@@ -7,6 +7,14 @@ services:
     volumes:
       - ./data:/app/data
       - ./sd_configs:/app/sd_configs
+    # Явные DNS нужны для «Моего налога»: провайдерский резолвер Hetzner
+    # (185.12.64.1/2) и Cloudflare отдают SERVFAIL на lknpd.nalog.ru.
+    # Google, Quad9, OpenDNS, AdGuard и Яндекс резолвят его нормально
+    # (213.24.64.181). Без этой правки интеграция не заработает, а симптом
+    # будет выглядеть как отказ ФНС.
+    dns:
+      - 8.8.8.8
+      - 77.88.8.8
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - ADMIN_ID=${ADMIN_ID}
@@ -33,6 +41,9 @@ services:
       - YOOKASSA_SECRET_KEY=${YOOKASSA_SECRET_KEY}
       - YOOKASSA_RETURN_URL=${YOOKASSA_RETURN_URL}
       - YOOKASSA_FEE_PERCENT=${YOOKASSA_FEE_PERCENT:-0}
+      - MOYNALOG_INN=${MOYNALOG_INN}
+      - MOYNALOG_PASSWORD=${MOYNALOG_PASSWORD}
+      - MOYNALOG_SERVICE_NAME=${MOYNALOG_SERVICE_NAME:-Sarvizza - Подписка на месяц}
     env_file:
       - .env
     ports:

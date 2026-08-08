@@ -35,3 +35,6 @@ sd_configs/targets.json
 *~
 # Локальные git-worktree, созданные агентами
 .claude/worktrees/
+
+# Эфемерные артефакты фичи (SPEC.md, PLAN.md, тикеты) — умирают вместе с фичей
+.scratch/
