@@ -75,7 +75,7 @@ func TestReconcileOrphanedInvites_SkipsValidClaims(t *testing.T) {
 	}()
 
 	// Создаём реального пользователя
-	_, err = db.CreateUser(111, "user111", "User", "uuid-111", nil, nil)
+	_, err = db.CreateUser(111, "user111", "User", strPtrTest("uuid-111"), nil, nil, nil)
 	require.NoError(t, err)
 
 	// Создаём инвайт и claim-им его — пользователь есть в users
@@ -106,7 +106,7 @@ func TestReconcileOrphanedInvites_SkipsBannedUserInvites(t *testing.T) {
 	}()
 
 	// Создаём пользователя, claim-им его инвайт, потом "баним" (удаляем из users)
-	_, err = db.CreateUser(111, "user111", "User", "uuid-111", nil, nil)
+	_, err = db.CreateUser(111, "user111", "User", strPtrTest("uuid-111"), nil, nil, nil)
 	require.NoError(t, err)
 
 	invite, err := db.CreateInvite(999)

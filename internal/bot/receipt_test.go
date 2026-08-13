@@ -13,7 +13,6 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/moynalog"
-	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -365,7 +364,7 @@ func TestSeededManualReceiptsAreNotIssuedAgainByScheduler(t *testing.T) {
 func TestSchedulerPassIssuesReceiptsAlongsideItsOtherSteps(t *testing.T) {
 	stub := &fnsStub{}
 	b, db, _ := newReceiptTestBot(t, stub)
-	b.remnawave = remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	b.remnawave = newTestPanelClient()
 	b.remnawave.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(http.StatusOK, `{"response":{"users":[],"total":0}}`), nil
 	})})

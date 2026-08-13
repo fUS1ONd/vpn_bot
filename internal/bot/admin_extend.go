@@ -55,7 +55,7 @@ func (b *Bot) handleAdminExtendMonth(c tele.Context) error {
 		return c.RespondAlert("Пользователь не найден")
 	}
 
-	remUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
+	remUser, err := b.remnawaveUser(targetID)
 	if err != nil {
 		slog.Error("Failed to load Remnawave user for extend", "error", err, "telegram_id", targetID)
 		return c.RespondAlert("Ошибка получения данных подписки")
@@ -158,8 +158,14 @@ func (b *Bot) applyAdminExtend(targetID int64) (time.Time, error) {
 		return time.Time{}, errAdminExtendUserNotFound
 	}
 
+	ref, err := b.userRef(targetID)
+	if err != nil {
+		slog.Error("Failed to resolve user ref before extend", "error", err, "telegram_id", targetID)
+		return time.Time{}, errAdminExtendLoadFailed
+	}
+
 	// Перечитываем свежего remUser: дата могла измениться (юзер мог сам оплатить).
-	remUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
+	remUser, err := b.remnawave.GetUser(ref)
 	if err != nil {
 		slog.Error("Failed to reload Remnawave user before extend", "error", err, "telegram_id", targetID)
 		return time.Time{}, errAdminExtendLoadFailed
@@ -167,7 +173,7 @@ func (b *Bot) applyAdminExtend(targetID int64) (time.Time, error) {
 
 	newExpireAt := nextMonthExpireAt(remUser, time.Now().UTC())
 
-	if err := b.remnawave.EnableUser(dbUser.RemnawaveUUID, newExpireAt); err != nil {
+	if err := b.remnawave.EnableUser(ref, newExpireAt); err != nil {
 		slog.Error("Failed to extend subscription", "error", err, "telegram_id", targetID)
 		return time.Time{}, errAdminExtendEnableFailed
 	}

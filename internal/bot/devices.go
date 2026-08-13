@@ -30,23 +30,14 @@ func deviceByIndex(devices []remnawave.HwidDevice, idxStr string) (remnawave.Hwi
 	return devices[idx], true
 }
 
-// resolveUserUUID возвращает remnawave UUID для отправителя или признак, что подписки нет.
-func (b *Bot) resolveUserUUID(telegramID int64) (string, bool) {
-	user, err := b.db.GetUserByTelegramID(telegramID)
-	if err != nil || user == nil || user.RemnawaveUUID == "" {
-		return "", false
-	}
-	return user.RemnawaveUUID, true
-}
-
 // handleDevicesManage показывает экран управления устройствами (inline-список).
 func (b *Bot) handleDevicesManage(c tele.Context) error {
-	uuid, ok := b.resolveUserUUID(c.Sender().ID)
+	ref, ok := b.resolveUserRef(c.Sender().ID)
 	if !ok {
 		return c.RespondAlert("Сначала активируйте подписку")
 	}
 
-	devices, err := b.remnawave.GetUserHwidDevices(uuid)
+	devices, err := b.remnawave.GetUserHwidDevices(ref)
 	if err != nil {
 		slog.Error("Failed to get HWID devices", "error", err, "telegram_id", c.Sender().ID)
 		return c.RespondAlert("Ошибка получения списка устройств")
@@ -67,7 +58,7 @@ func (b *Bot) handleDevicesManage(c tele.Context) error {
 
 // handleDeviceDelete удаляет одно устройство по индексу и перерисовывает список.
 func (b *Bot) handleDeviceDelete(c tele.Context) error {
-	uuid, ok := b.resolveUserUUID(c.Sender().ID)
+	ref, ok := b.resolveUserRef(c.Sender().ID)
 	if !ok {
 		return c.RespondAlert("Сначала активируйте подписку")
 	}
@@ -78,7 +69,7 @@ func (b *Bot) handleDeviceDelete(c tele.Context) error {
 	}
 
 	// Берём актуальный список и сопоставляем по индексу (индекс мог устареть).
-	devices, err := b.remnawave.GetUserHwidDevices(uuid)
+	devices, err := b.remnawave.GetUserHwidDevices(ref)
 	if err != nil {
 		slog.Error("Failed to get HWID devices before delete", "error", err, "telegram_id", c.Sender().ID)
 		return c.RespondAlert("Ошибка получения списка устройств")
@@ -94,7 +85,7 @@ func (b *Bot) handleDeviceDelete(c tele.Context) error {
 		return c.RespondAlert("Список обновлён, попробуйте снова")
 	}
 
-	updated, err := b.remnawave.DeleteUserHwidDevice(uuid, device.Hwid)
+	updated, err := b.remnawave.DeleteUserHwidDevice(ref, device.Hwid)
 	if err != nil {
 		slog.Error("Failed to delete HWID device", "error", err, "telegram_id", c.Sender().ID)
 		return c.RespondAlert("Ошибка удаления устройства")
@@ -123,12 +114,12 @@ func (b *Bot) handleDevicesResetAll(c tele.Context) error {
 
 // handleDevicesResetAllConfirm сбрасывает все устройства пользователя.
 func (b *Bot) handleDevicesResetAllConfirm(c tele.Context) error {
-	uuid, ok := b.resolveUserUUID(c.Sender().ID)
+	ref, ok := b.resolveUserRef(c.Sender().ID)
 	if !ok {
 		return c.RespondAlert("Сначала активируйте подписку")
 	}
 
-	if err := b.remnawave.DeleteAllUserHwidDevices(uuid); err != nil {
+	if err := b.remnawave.DeleteAllUserHwidDevices(ref); err != nil {
 		slog.Error("Failed to reset all HWID devices", "error", err, "telegram_id", c.Sender().ID)
 		return c.RespondAlert("Ошибка сброса устройств")
 	}

@@ -103,7 +103,7 @@ func setupTestBot(t *testing.T) (*Bot, *database.DB) {
 		db:         db,
 		config:     cfg,
 		userStates: newStateMap(),
-		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
+		remnawave:  newTestPanelClient(),
 		shutdownCh: make(chan struct{}),
 	}
 	return b, db
@@ -130,7 +130,7 @@ func TestHandleStart(t *testing.T) {
 
 	t.Run("ExistingUser", func(t *testing.T) {
 		userID := int64(222)
-		_, err := db.CreateUser(userID, "olduser", "OldFirstName", "uuid-123", nil, nil)
+		_, err := db.CreateUser(userID, "olduser", "OldFirstName", strPtrTest("uuid-123"), nil, nil, nil)
 		assert.NoError(t, err)
 
 		user := &tele.User{ID: userID, Username: "olduser"}
@@ -156,7 +156,7 @@ func TestHandleStart(t *testing.T) {
 	t.Run("ExistingUserWithPayload_IgnoresCode", func(t *testing.T) {
 		// Существующий пользователь с payload — код игнорируется, не расходуется
 		userID := int64(333)
-		_, err := db.CreateUser(userID, "existing", "Existing", "uuid-333", nil, nil)
+		_, err := db.CreateUser(userID, "existing", "Existing", strPtrTest("uuid-333"), nil, nil, nil)
 		require.NoError(t, err)
 
 		// Создаём инвайт
@@ -242,14 +242,14 @@ func TestUserKeyboardHidesPaymentButtonInMaintenanceMode(t *testing.T) {
 
 	userID := int64(777)
 	price := 500
-	_, err := db.CreateUser(userID, "paid", "Paid", "uuid-paid", &price, nil)
+	_, err := db.CreateUser(userID, "paid", "Paid", strPtrTest("uuid-paid"), nil, &price, nil)
 	require.NoError(t, err)
 
 	b.platega = platega.NewClient("merchant", "secret")
 	b.remnawave.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/777" {
-				payload := `{"response":{"uuid":"uuid-paid","username":"paid","status":"ACTIVE","expireAt":"2026-04-15T00:00:00Z"}}`
+				payload := `{"response":[{"uuid":"uuid-paid","telegramId":777,"username":"paid","status":"ACTIVE","expireAt":"2026-04-15T00:00:00Z"}]}`
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(payload)),
@@ -287,7 +287,7 @@ func TestUserKeyboardHidesPaymentButtonWithoutPlatega(t *testing.T) {
 
 	userID := int64(778)
 	price := 500
-	_, err := db.CreateUser(userID, "paid", "Paid", "uuid-paid", &price, nil)
+	_, err := db.CreateUser(userID, "paid", "Paid", strPtrTest("uuid-paid"), nil, &price, nil)
 	require.NoError(t, err)
 
 	kb := b.userKeyboard(userID)
@@ -305,7 +305,7 @@ func TestUserKeyboardHidesPaymentButtonWithoutPlatega(t *testing.T) {
 func TestAdminTestPaymentPriceShowsPaymentButtonAndUsesConfiguredAmount(t *testing.T) {
 	b, db := setupTestBot(t)
 	adminID := b.config.AdminID
-	_, err := db.CreateUser(adminID, "admin", "Admin", "uuid-admin", nil, nil)
+	_, err := db.CreateUser(adminID, "admin", "Admin", strPtrTest("uuid-admin"), nil, nil, nil)
 	require.NoError(t, err)
 
 	b.config.AdminTestPaymentPrice = 10
@@ -334,7 +334,7 @@ func TestAdminTestPaymentPriceShowsPaymentButtonAndUsesConfiguredAmount(t *testi
 func TestAdminTestPaymentPriceDisabledHidesPaymentButton(t *testing.T) {
 	b, db := setupTestBot(t)
 	adminID := b.config.AdminID
-	_, err := db.CreateUser(adminID, "admin", "Admin", "uuid-admin", nil, nil)
+	_, err := db.CreateUser(adminID, "admin", "Admin", strPtrTest("uuid-admin"), nil, nil, nil)
 	require.NoError(t, err)
 	b.platega = platega.NewClient("merchant", "secret")
 
@@ -353,10 +353,10 @@ func TestUserKeyboardShowsRenewForLegacyPaidMigratedUser(t *testing.T) {
 	modID := int64(781)
 	userID := int64(780)
 	price := 500
-	_, err := db.CreateUser(modID, "moderator", "Moderator", "uuid-mod-781", nil, nil)
+	_, err := db.CreateUser(modID, "moderator", "Moderator", strPtrTest("uuid-mod-781"), nil, nil, nil)
 	require.NoError(t, err)
 
-	_, err = db.CreateUser(userID, "legacy_paid", "Legacy Paid", "uuid-legacy-paid", &price, &modID)
+	_, err = db.CreateUser(userID, "legacy_paid", "Legacy Paid", strPtrTest("uuid-legacy-paid"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -371,7 +371,7 @@ func TestUserKeyboardShowsRenewForLegacyPaidMigratedUser(t *testing.T) {
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
 			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/780":
-				payload := `{"response":{"uuid":"uuid-legacy-paid","username":"legacy_paid","status":"ACTIVE","expireAt":"2026-04-15T00:00:00Z"}}`
+				payload := `{"response":[{"uuid":"uuid-legacy-paid","telegramId":780,"username":"legacy_paid","status":"ACTIVE","expireAt":"2026-04-15T00:00:00Z"}]}`
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(payload)),
@@ -400,7 +400,7 @@ func TestHandleStatusShowsDevices(t *testing.T) {
 
 	userID := int64(779)
 	price := 500
-	_, err := db.CreateUser(userID, "paid", "Paid", "uuid-devices", &price, nil)
+	_, err := db.CreateUser(userID, "paid", "Paid", strPtrTest("uuid-devices"), nil, &price, nil)
 	require.NoError(t, err)
 
 	b.remnawave.SetHTTPClient(&http.Client{
@@ -503,7 +503,7 @@ func TestProcessInviteCode_UsesExpectedTrialPeriod(t *testing.T) {
 		require.NoError(t, err)
 
 		var captured remnawave.CreateUserRequest
-		client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+		client := newTestPanelClient()
 		clientHTTP := &http.Client{
 			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				require.Equal(t, http.MethodPost, r.Method)
@@ -557,7 +557,7 @@ func TestProcessInviteCode_SetsFirstTouchWithoutModeratorRuntime(t *testing.T) {
 		b, db := setupTestBot(t)
 
 		modID := int64(1234)
-		_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+		_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 		require.NoError(t, err)
 		require.NoError(t, db.AddModerator(modID, b.config.AdminID))
 
@@ -565,7 +565,7 @@ func TestProcessInviteCode_SetsFirstTouchWithoutModeratorRuntime(t *testing.T) {
 		inviteCode, err := db.CreateInviteWithPrice(modID, 30, price)
 		require.NoError(t, err)
 
-		client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+		client := newTestPanelClient()
 		client.SetHTTPClient(&http.Client{
 			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				payload, err := json.Marshal(map[string]any{
@@ -615,7 +615,7 @@ func TestProcessInviteCode_SetsFirstTouchWithoutModeratorRuntime(t *testing.T) {
 		inviteCode, err := db.CreateInviteWithPrice(b.config.AdminID, 30, price)
 		require.NoError(t, err)
 
-		client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+		client := newTestPanelClient()
 		client.SetHTTPClient(&http.Client{
 			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				payload, err := json.Marshal(map[string]any{

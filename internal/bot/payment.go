@@ -387,7 +387,12 @@ func (h *paymentCallbackHandler) activateSubscription(payment *database.Payment)
 		return fmt.Errorf("user not found: telegram_id=%d", payment.TelegramID)
 	}
 
-	remUser, err := h.bot.remnawave.GetUser(user.RemnawaveUUID)
+	ref, err := h.bot.userRef(payment.TelegramID)
+	if err != nil {
+		return fmt.Errorf("resolve user ref: %w", err)
+	}
+
+	remUser, err := h.bot.remnawave.GetUser(ref)
 	if err != nil {
 		return fmt.Errorf("get remnawave user: %w", err)
 	}
@@ -395,7 +400,7 @@ func (h *paymentCallbackHandler) activateSubscription(payment *database.Payment)
 	newExpireAt := nextMonthExpireAt(remUser, time.Now().UTC())
 
 	// Реактивируем пользователя: ставит Status=ACTIVE, ExpireAt=newExpireAt, TrafficLimitBytes=0.
-	return h.bot.remnawave.EnableUser(user.RemnawaveUUID, newExpireAt)
+	return h.bot.remnawave.EnableUser(ref, newExpireAt)
 }
 
 // getPlategaFeePercent возвращает процент комиссии Platega для метода оплаты
@@ -462,7 +467,7 @@ func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) err
 	// Удаляем из Remnawave (полное удаление, не просто disable)
 	user, err := h.bot.db.GetUserByTelegramID(payment.TelegramID)
 	if err == nil && user != nil {
-		if delErr := h.bot.remnawave.DeleteUser(user.RemnawaveUUID); delErr != nil {
+		if delErr := h.bot.deleteRemnawaveUser(payment.TelegramID); delErr != nil {
 			slog.Error("Chargeback: не удалось удалить из Remnawave", "error", delErr, "telegram_id", payment.TelegramID)
 		}
 	}

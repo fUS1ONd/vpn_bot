@@ -18,7 +18,7 @@ func TestUserLegacyPaidMigratedPersists(t *testing.T) {
 	}()
 
 	price := 500
-	_, err = db.CreateUser(1010, "legacy_paid", "Legacy Paid", "uuid-1010", &price, nil)
+	_, err = db.CreateUser(1010, "legacy_paid", "Legacy Paid", strPtrTest("uuid-1010"), nil, &price, nil)
 	require.NoError(t, err)
 
 	user, err := db.GetUserByTelegramID(1010)
@@ -55,7 +55,7 @@ func TestUpdateSubscriptionPriceAndLegacyPaidMigrated(t *testing.T) {
 	}()
 
 	price := 500
-	_, err = db.CreateUser(2020, "legacy_paid", "Legacy Paid", "uuid-2020", &price, nil)
+	_, err = db.CreateUser(2020, "legacy_paid", "Legacy Paid", strPtrTest("uuid-2020"), nil, &price, nil)
 	require.NoError(t, err)
 
 	value := true

@@ -31,7 +31,7 @@ func TestCheckPaymentStatusSyncsCanceledAndChargebacked(t *testing.T) {
 
 			userID := int64(810)
 			price := 500
-			_, err := db.CreateUser(userID, "payer", "Payer", "uuid-810", &price, nil)
+			_, err := db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-810"), nil, &price, nil)
 			require.NoError(t, err)
 
 			txID := "tx-810"
@@ -105,7 +105,7 @@ func TestHandleCheckPaymentDoesNotClaimActivationWhenEnableFails(t *testing.T) {
 
 	userID := int64(811)
 	price := 500
-	_, err := db.CreateUser(userID, "payer", "Payer", "uuid-811", &price, nil)
+	_, err := db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-811"), nil, &price, nil)
 	require.NoError(t, err)
 
 	txID := "tx-811"
@@ -189,7 +189,7 @@ func TestCheckPaymentStatusTreatsManualConfirmedAsConfirmed(t *testing.T) {
 
 	userID := int64(812)
 	price := 500
-	_, err := db.CreateUser(userID, "payer", "Payer", "uuid-812", &price, nil)
+	_, err := db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-812"), nil, &price, nil)
 	require.NoError(t, err)
 
 	txID := "tx-812"
@@ -244,7 +244,7 @@ func TestCheckPaymentStatusTreatsManualConfirmedAsConfirmed(t *testing.T) {
 					Header:     make(http.Header),
 				}, nil
 			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/812":
-				payload := `{"response":{"uuid":"uuid-812","username":"payer","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`
+				payload := `{"response":[{"uuid":"uuid-812","telegramId":812,"username":"payer","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}]}`
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(payload)),
@@ -278,7 +278,7 @@ func TestHandleCheckPaymentReturnsDetailedSuccessMessage(t *testing.T) {
 
 	userID := int64(815)
 	price := 500
-	_, err := db.CreateUser(userID, "payer", "Payer", "uuid-815", &price, nil)
+	_, err := db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-815"), nil, &price, nil)
 	require.NoError(t, err)
 
 	txID := "tx-815"
@@ -333,7 +333,7 @@ func TestHandleCheckPaymentReturnsDetailedSuccessMessage(t *testing.T) {
 					Header:     make(http.Header),
 				}, nil
 			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/815":
-				payload := `{"response":{"uuid":"uuid-815","username":"payer","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`
+				payload := `{"response":[{"uuid":"uuid-815","telegramId":815,"username":"payer","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}]}`
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(payload)),
@@ -380,11 +380,11 @@ func TestHandlePaymentCallbackDoesNotCreateLegacyModeratorEarning(t *testing.T) 
 	oldModeratorID := int64(813)
 	userID := int64(814)
 
-	_, err := db.CreateUser(oldModeratorID, "oldmod", "Old Mod", "uuid-oldmod", nil, nil)
+	_, err := db.CreateUser(oldModeratorID, "oldmod", "Old Mod", strPtrTest("uuid-oldmod"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(oldModeratorID, adminID))
 
-	_, err = db.CreateUser(userID, "payer", "Payer", "uuid-payer", nil, &oldModeratorID)
+	_, err = db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-payer"), nil, nil, &oldModeratorID)
 	require.NoError(t, err)
 
 	txID := "tx-814"
@@ -418,7 +418,7 @@ func TestHandlePaymentCallbackDoesNotCreateLegacyModeratorEarning(t *testing.T) 
 					Header:     make(http.Header),
 				}, nil
 			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/814":
-				payload := `{"response":{"uuid":"uuid-payer","username":"payer","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`
+				payload := `{"response":[{"uuid":"uuid-payer","telegramId":814,"username":"payer","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}]}`
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(payload)),

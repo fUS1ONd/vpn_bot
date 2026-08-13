@@ -1,8 +1,8 @@
 package bot
 
 import (
+	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
@@ -33,14 +33,18 @@ func ReconcileOrphanedRegistrations(db *database.DB, client *remnawave.Client) (
 		telegramID := *invite.UsedBy
 		remoteUser, err := client.GetUserByTelegramID(telegramID)
 		if err != nil {
-			if isRemnawaveNotFound(err) {
-				if err := db.UnclaimInvite(invite.Code, *invite.UsedBy); err != nil {
-					return stats, fmt.Errorf("unclaim invite %s: %w", invite.Code, err)
-				}
-				stats.ReleasedInvites++
-				continue
-			}
 			return stats, fmt.Errorf("get remote user by telegram_id=%d: %w", telegramID, err)
+		}
+
+		// Отсутствие пользователя — это (nil, nil), а не ошибка. Прежний код ждал
+		// здесь именно ошибку, и на nil разыменовал бы remoteUser ниже — паника
+		// при старте, до запуска бота.
+		if remoteUser == nil {
+			if err := db.UnclaimInvite(invite.Code, telegramID); err != nil {
+				return stats, fmt.Errorf("unclaim invite %s: %w", invite.Code, err)
+			}
+			stats.ReleasedInvites++
+			continue
 		}
 
 		username := remoteUser.Username
@@ -57,7 +61,8 @@ func ReconcileOrphanedRegistrations(db *database.DB, client *remnawave.Client) (
 			telegramID,
 			username,
 			"",
-			remoteUser.UUID,
+			remnawaveUUIDPtr(remoteUser),
+			&remoteUser.ID,
 			invite.SubscriptionPrice,
 			nil,
 			invitedBy,
@@ -71,14 +76,8 @@ func ReconcileOrphanedRegistrations(db *database.DB, client *remnawave.Client) (
 	return stats, nil
 }
 
+// isRemnawaveNotFound проверяет, что панель ответила «пользователя нет».
+// Признак — HTTP-статус 404, а не подстрока в тексте ошибки.
 func isRemnawaveNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	if strings.Contains(err.Error(), "API error 404") {
-		return true
-	}
-
-	return strings.Contains(err.Error(), remnawave.ErrUserNotFound.Error())
+	return err != nil && errors.Is(err, remnawave.ErrUserNotFound)
 }

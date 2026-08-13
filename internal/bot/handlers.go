@@ -63,6 +63,7 @@ type Bot struct {
 	receiptAuthBlocked     atomic.Bool                // Кабинет не принял вход — проход по чекам прерывается до следующего раза
 	receiptAlerted         sync.Map                   // ключ алерта по чекам -> struct{}, защита от повторов
 	subRevokeCooldown      sync.Map                   // telegram_id -> time.Time последнего перевыпуска ссылки
+	panelAuthAlerted       sync.Map                   // ключ алерта про токен панели -> struct{}, защита от повторов
 }
 
 // buildBotSettings собирает настройки telebot.
@@ -652,17 +653,19 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		invitedBy, err = b.db.GetFirstReferralInviter(telegramID)
 		if err != nil {
 			slog.Error("Failed to resolve first referral inviter", "error", err, "telegram_id", telegramID)
-			b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.UUID)
+			b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.Ref())
 			return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
 		}
 	}
 
-	// Сохраняем связку в БД
-	_, err = b.db.CreateUserWithInviter(telegramID, username, c.Sender().FirstName, remnawaveUser.UUID, subscriptionPrice, nil, invitedBy)
+	// Сохраняем обе половины связки: на 2.8.x значим UUID, на 3.x — числовой id.
+	// UUID у пользователя, созданного на 3.x, пустой и уйдёт в колонку как NULL.
+	_, err = b.db.CreateUserWithInviter(telegramID, username, c.Sender().FirstName,
+		remnawaveUUIDPtr(remnawaveUser), &remnawaveUser.ID, subscriptionPrice, nil, invitedBy)
 	if err != nil {
 		slog.Error("Failed to create user in DB", "error", err)
 		// Claim освобождается только после подтверждённого удаления из Remnawave.
-		b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.UUID)
+		b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.Ref())
 		return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
 	}
 
@@ -691,11 +694,12 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 // rollbackCreatedRemnawaveUser компенсирует частично завершённую регистрацию.
 // Если панель временно не смогла удалить пользователя, claim намеренно остаётся:
 // startup-reconcile увидит его и безопасно завершит восстановление/откат.
-func (b *Bot) rollbackCreatedRemnawaveUser(code string, telegramID int64, remnawaveUUID string) {
-	err := b.remnawave.DeleteUser(remnawaveUUID)
+func (b *Bot) rollbackCreatedRemnawaveUser(code string, telegramID int64, ref remnawave.UserRef) {
+	err := b.remnawave.DeleteUser(ref)
 	if err != nil && !isRemnawaveNotFound(err) {
 		slog.Error("Partial registration rollback: keeping invite claimed for startup reconcile",
-			"error", err, "telegram_id", telegramID, "invite_code", code, "remnawave_uuid", remnawaveUUID)
+			"error", err, "telegram_id", telegramID, "invite_code", code,
+			"remnawave_uuid", ref.UUID, "remnawave_id", ref.ID)
 		return
 	}
 	if err := b.db.UnclaimInvite(code, telegramID); err != nil {
@@ -744,7 +748,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	}
 
 	// Получаем данные из Remnawave
-	remnawaveUser, err := b.remnawave.GetUser(user.RemnawaveUUID)
+	remnawaveUser, err := b.remnawaveUser(telegramID)
 	if err != nil {
 		slog.Error("Failed to get user from Remnawave", "error", err)
 		return c.Send("Ошибка получения статуса. Попробуйте позже.")
@@ -874,7 +878,12 @@ func (b *Bot) syncUserInfo(c tele.Context) {
 		if usernameForRemnawave == "" {
 			usernameForRemnawave = fmt.Sprintf("tg_%d", telegramID)
 		}
-		if err := b.remnawave.UpdateUsername(user.RemnawaveUUID, usernameForRemnawave); err != nil {
+		ref, err := b.userRef(telegramID)
+		if err != nil {
+			slog.Error("Failed to resolve user ref for username sync", "error", err, "telegram_id", telegramID)
+			return
+		}
+		if err := b.remnawave.UpdateUsername(ref, usernameForRemnawave); err != nil {
 			slog.Error("Failed to sync username to Remnawave", "error", err, "telegram_id", telegramID)
 		}
 	}

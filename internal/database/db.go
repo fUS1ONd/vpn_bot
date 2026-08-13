@@ -19,10 +19,15 @@ type DB struct {
 
 // User представляет запись пользователя
 type User struct {
-	TelegramID         int64
-	Username           string
-	FirstName          string // Имя пользователя из Telegram
-	RemnawaveUUID      string
+	TelegramID int64
+	Username   string
+	FirstName  string // Имя пользователя из Telegram
+	// RemnawaveUUID заполнен только у пользователей, созданных на панели 2.8.x:
+	// в 3.x колонка uuid удалена из базы панели, и у новых записей здесь NULL.
+	RemnawaveUUID *string
+	// RemnawaveID — числовой идентификатор пользователя панели. Он один и тот же
+	// в обеих версиях API и единственный на 3.x.
+	RemnawaveID        *int64
 	SubscriptionPrice  *int   // Цена подписки руб/мес (NULL = не установлена)
 	ModeratorID        *int64 // Telegram ID куратора (NULL = админский/снят)
 	InvitedBy          *int64 // Telegram ID первого реферального автора
@@ -94,10 +99,13 @@ func New(dbPath string) (*DB, error) {
 func migrate(conn *sql.DB) error {
 	migrations := []string{
 		// Таблица пользователей — связка Telegram <-> Remnawave
+		// remnawave_uuid объявлен без NOT NULL: у пользователя, созданного на
+		// панели 3.x, UUID нет вовсе.
 		`CREATE TABLE IF NOT EXISTS users (
 			telegram_id INTEGER PRIMARY KEY,
 			username TEXT,
-			remnawave_uuid TEXT UNIQUE NOT NULL,
+			remnawave_uuid TEXT UNIQUE,
+			remnawave_id INTEGER,
 			invited_by INTEGER,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -189,8 +197,8 @@ func migrate(conn *sql.DB) error {
 			updated_at TIMESTAMP
 		)`,
 
-		// Индексы
-		`CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid)`,
+		// Индексы. Индексы по users создаются после возможной перестройки таблицы:
+		// DROP TABLE уносит их вместе со старой таблицей.
 		`CREATE INDEX IF NOT EXISTS idx_invites_used_by ON invites(used_by)`,
 		`CREATE INDEX IF NOT EXISTS idx_payments_telegram_id ON payments(telegram_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)`,
@@ -224,6 +232,8 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE users ADD COLUMN legacy_paid_migrated INTEGER NOT NULL DEFAULT 0`,
 		// Первый автор referral-приглашения; moderator_id остаётся архивным полем.
 		`ALTER TABLE users ADD COLUMN invited_by INTEGER`,
+		// Числовой идентификатор пользователя панели — единственный на 3.x.
+		`ALTER TABLE users ADD COLUMN remnawave_id INTEGER`,
 		// Миграция: цена подписки при создании инвайта
 		`ALTER TABLE invites ADD COLUMN subscription_price INTEGER`,
 		// Миграция: неизменяемый исторический флаг trial-инвайта
@@ -244,6 +254,20 @@ func migrate(conn *sql.DB) error {
 		// Игнорируем ошибки ALTER TABLE - колонка может уже существовать
 		conn.Exec(m)
 	}
+	// Перестройка users идёт после alterMigrations (чтобы remnawave_id уже
+	// существовал и переносился) и до создания индексов по users.
+	if err := rebuildUsersTable(conn); err != nil {
+		return err
+	}
+	if _, err := conn.Exec(`CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid)`); err != nil {
+		return fmt.Errorf("failed to create users uuid index: %w", err)
+	}
+	// Частичный уникальный индекс: NULL-ов может быть много, а один и тот же id
+	// панели не должен оказаться привязан к двум Telegram ID.
+	if _, err := conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_remnawave_id ON users(remnawave_id) WHERE remnawave_id IS NOT NULL`); err != nil {
+		return fmt.Errorf("failed to create users remnawave_id index: %w", err)
+	}
+
 	if _, err := conn.Exec(`UPDATE payments SET provider = 'platega' WHERE provider IS NULL OR provider = ''`); err != nil {
 		return fmt.Errorf("failed to backfill payments.provider: %w", err)
 	}
