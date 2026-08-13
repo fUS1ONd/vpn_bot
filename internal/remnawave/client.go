@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -29,12 +30,18 @@ var (
 	ErrUserNotFound = errors.New("user not found")
 )
 
-// Client — HTTP-клиент для Remnawave API
+// Client — HTTP-клиент для Remnawave API. Умеет работать и с 2.8.x, и с 3.x:
+// версию определяет сам, вызывающий код про неё не знает.
 type Client struct {
 	baseURL    string
 	apiToken   string
 	squadUUIDs []string
 	http       *http.Client
+
+	versionMu  sync.RWMutex
+	apiVersion APIVersion
+	// detectMu схлопывает конкурентные попытки детекта в один запрос metadata.
+	detectMu sync.Mutex
 }
 
 // NewClient создаёт новый клиент Remnawave API
@@ -53,6 +60,9 @@ func NewClient(baseURL, apiToken string, squadUUIDs []string) *Client {
 
 // User — данные пользователя из Remnawave
 type User struct {
+	// ID есть в обеих версиях API; на 3.x это единственный идентификатор пользователя.
+	ID int64 `json:"id"`
+	// UUID заполнен только на 2.8.x — в 3.x колонка удалена из базы панели.
 	UUID              string    `json:"uuid"`
 	ShortUUID         string    `json:"shortUuid"`
 	Username          string    `json:"username"`
@@ -105,9 +115,21 @@ type CreateUserRequest struct {
 	ActiveInternalSquads []string `json:"activeInternalSquads,omitempty"`
 }
 
-// UpdateUserRequest — запрос на обновление пользователя
+// UpdateUserRequest — запрос на обновление пользователя. Идентификатор в тело
+// подставляет сам клиент из UserRef: публичное поле привело бы к тому, что на 3.x
+// вызывающая сторона продолжила бы класть туда UUID и получала 400.
 type UpdateUserRequest struct {
-	UUID              string  `json:"uuid"`
+	Username          *string `json:"username,omitempty"`
+	Status            *string `json:"status,omitempty"`
+	ExpireAt          *string `json:"expireAt,omitempty"`
+	TrafficLimitBytes *int64  `json:"trafficLimitBytes,omitempty"`
+}
+
+// updateUserBody — тело PATCH /api/users с идентификатором нужного вида.
+// На 2.8.x панель ждёт uuid, на 3.x — числовой id.
+type updateUserBody struct {
+	UUID              string  `json:"uuid,omitempty"`
+	ID                int64   `json:"id,omitempty"`
 	Username          *string `json:"username,omitempty"`
 	Status            *string `json:"status,omitempty"`
 	ExpireAt          *string `json:"expireAt,omitempty"`
@@ -165,29 +187,9 @@ func (c *Client) SetHTTPClient(httpClient *http.Client) {
 	}
 }
 
-// GetUser получает данные пользователя по UUID
-func (c *Client) GetUser(uuid string) (*User, error) {
-	resp, err := c.doRequest("GET", "/api/users/"+uuid, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result apiResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	var user User
-	if err := json.Unmarshal(result.Response, &user); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal user: %w", err)
-	}
-
-	return &user, nil
-}
-
-// GetUserByTelegramID получает пользователя по Telegram ID
-func (c *Client) GetUserByTelegramID(telegramID int64) (*User, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/api/users/by-telegram-id/%d", telegramID), nil)
+// GetUser получает данные пользователя по ссылке, независимой от версии API.
+func (c *Client) GetUser(ref UserRef) (*User, error) {
+	resp, err := c.doUserRequest(ref, userPathRequest("GET", "", nil))
 	if err != nil {
 		return nil, err
 	}
@@ -237,8 +239,8 @@ func (c *Client) GetAllUsers() ([]User, error) {
 }
 
 // GetUserHwidDevicesCount возвращает количество HWID-устройств пользователя.
-func (c *Client) GetUserHwidDevicesCount(uuid string) (int, error) {
-	resp, err := c.doRequest("GET", "/api/hwid/devices/"+uuid, nil)
+func (c *Client) GetUserHwidDevicesCount(ref UserRef) (int, error) {
+	resp, err := c.doUserRequest(ref, hwidDevicesRequest)
 	if err != nil {
 		return 0, err
 	}
@@ -264,8 +266,8 @@ type HwidDevice struct {
 }
 
 // GetUserHwidDevices возвращает список HWID-устройств пользователя.
-func (c *Client) GetUserHwidDevices(uuid string) ([]HwidDevice, error) {
-	resp, err := c.doRequest("GET", "/api/hwid/devices/"+uuid, nil)
+func (c *Client) GetUserHwidDevices(ref UserRef) ([]HwidDevice, error) {
+	resp, err := c.doUserRequest(ref, hwidDevicesRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -284,16 +286,20 @@ func (c *Client) GetUserHwidDevices(uuid string) ([]HwidDevice, error) {
 
 // DeleteUserHwidDevice удаляет одно HWID-устройство пользователя и
 // возвращает обновлённый список оставшихся устройств.
-func (c *Client) DeleteUserHwidDevice(uuid, hwid string) ([]HwidDevice, error) {
-	body, err := json.Marshal(map[string]string{
-		"userUuid": uuid,
-		"hwid":     hwid,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal delete device request: %w", err)
-	}
+func (c *Client) DeleteUserHwidDevice(ref UserRef, hwid string) ([]HwidDevice, error) {
+	resp, err := c.doUserRequest(ref, func(version APIVersion, ref UserRef) (userRequest, error) {
+		payload, err := hwidUserPayload(version, ref)
+		if err != nil {
+			return userRequest{}, err
+		}
+		payload["hwid"] = hwid
 
-	resp, err := c.doRequest("POST", "/api/hwid/devices/delete", body)
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return userRequest{}, fmt.Errorf("failed to marshal delete device request: %w", err)
+		}
+		return userRequest{method: "POST", path: "/api/hwid/devices/delete", body: body}, nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -311,22 +317,57 @@ func (c *Client) DeleteUserHwidDevice(uuid, hwid string) ([]HwidDevice, error) {
 }
 
 // DeleteAllUserHwidDevices сбрасывает все HWID-устройства пользователя одним запросом.
-func (c *Client) DeleteAllUserHwidDevices(uuid string) error {
-	body, err := json.Marshal(map[string]string{"userUuid": uuid})
-	if err != nil {
-		return fmt.Errorf("failed to marshal delete-all request: %w", err)
-	}
+func (c *Client) DeleteAllUserHwidDevices(ref UserRef) error {
+	_, err := c.doUserRequest(ref, func(version APIVersion, ref UserRef) (userRequest, error) {
+		payload, err := hwidUserPayload(version, ref)
+		if err != nil {
+			return userRequest{}, err
+		}
 
-	_, err = c.doRequest("POST", "/api/hwid/devices/delete-all", body)
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return userRequest{}, fmt.Errorf("failed to marshal delete-all request: %w", err)
+		}
+		return userRequest{method: "POST", path: "/api/hwid/devices/delete-all", body: body}, nil
+	})
 	return err
+}
+
+// hwidDevicesRequest — чтение списка устройств: путь один и тот же, меняется только
+// идентификатор пользователя в нём.
+func hwidDevicesRequest(version APIVersion, ref UserRef) (userRequest, error) {
+	segment, err := userPathSegment(version, ref)
+	if err != nil {
+		return userRequest{}, err
+	}
+	return userRequest{method: "GET", path: "/api/hwid/devices/" + segment}, nil
+}
+
+// hwidUserPayload собирает поле идентификатора пользователя для тел HWID-запросов:
+// на 2.8.x это userUuid (строка), на 3.x — userId (число).
+func hwidUserPayload(version APIVersion, ref UserRef) (map[string]any, error) {
+	switch version {
+	case APIVersionV3:
+		if ref.ID == 0 {
+			return nil, ErrUserRefMissingID
+		}
+		return map[string]any{"userId": ref.ID}, nil
+	case APIVersionV2:
+		if ref.UUID == "" {
+			return nil, ErrUserRefMissingUUID
+		}
+		return map[string]any{"userUuid": ref.UUID}, nil
+	default:
+		return nil, ErrPanelVersionUnknown
+	}
 }
 
 // RevokeUserSubscription перевыпускает подписку: панель генерирует новый
 // shortUuid, старая ссылка немедленно перестаёт работать. Свой shortUuid не
 // передаём — Remnawave настойчиво рекомендует генерировать его самостоятельно.
 // Ответ содержит пользователя с уже обновлённым subscriptionUrl.
-func (c *Client) RevokeUserSubscription(uuid string) (*User, error) {
-	resp, err := c.doRequest("POST", "/api/users/"+uuid+"/actions/revoke", []byte("{}"))
+func (c *Client) RevokeUserSubscription(ref UserRef) (*User, error) {
+	resp, err := c.doUserRequest(ref, userPathRequest("POST", "/actions/revoke", []byte("{}")))
 	if err != nil {
 		return nil, err
 	}
@@ -345,46 +386,57 @@ func (c *Client) RevokeUserSubscription(uuid string) (*User, error) {
 }
 
 // UpdateUsername обновляет username пользователя в панели Remnawave
-func (c *Client) UpdateUsername(uuid string, username string) error {
-	req := UpdateUserRequest{
-		UUID:     uuid,
-		Username: &username,
-	}
-
-	return c.UpdateUser(uuid, req)
+func (c *Client) UpdateUsername(ref UserRef, username string) error {
+	return c.UpdateUser(ref, UpdateUserRequest{Username: &username})
 }
 
 // UpdateUser обновляет данные пользователя в панели Remnawave.
-func (c *Client) UpdateUser(uuid string, req UpdateUserRequest) error {
-	if req.UUID == "" {
-		req.UUID = uuid
-	}
+func (c *Client) UpdateUser(ref UserRef, req UpdateUserRequest) error {
+	_, err := c.doUserRequest(ref, func(version APIVersion, ref UserRef) (userRequest, error) {
+		payload := updateUserBody{
+			Username:          req.Username,
+			Status:            req.Status,
+			ExpireAt:          req.ExpireAt,
+			TrafficLimitBytes: req.TrafficLimitBytes,
+		}
 
-	body, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
+		switch version {
+		case APIVersionV3:
+			if ref.ID == 0 {
+				return userRequest{}, ErrUserRefMissingID
+			}
+			payload.ID = ref.ID
+		case APIVersionV2:
+			if ref.UUID == "" {
+				return userRequest{}, ErrUserRefMissingUUID
+			}
+			payload.UUID = ref.UUID
+		default:
+			return userRequest{}, ErrPanelVersionUnknown
+		}
 
-	_, err = c.doRequest("PATCH", "/api/users", body)
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return userRequest{}, fmt.Errorf("failed to marshal request: %w", err)
+		}
+		return userRequest{method: "PATCH", path: "/api/users", body: body}, nil
+	})
 	return err
 }
 
-// ResetUserTraffic сбрасывает использованный трафик пользователя
-func (c *Client) ResetUserTraffic(uuid string) error {
-	_, err := c.doRequest("POST", "/api/users/"+uuid+"/actions/reset-traffic", nil)
-	return err
-}
-
-// DeleteUser удаляет пользователя
-func (c *Client) DeleteUser(uuid string) error {
-	_, err := c.doRequest("DELETE", "/api/users/"+uuid, nil)
+// DeleteUser удаляет пользователя. На 3.x панель отвечает 204 без тела —
+// для нас это тот же успех.
+func (c *Client) DeleteUser(ref UserRef) error {
+	_, err := c.doUserRequest(ref, userPathRequest("DELETE", "", nil))
 	return err
 }
 
 // EnableUser реактивирует пользователя: ставит ACTIVE, обновляет ExpireAt, снимает лимит трафика.
-func (c *Client) EnableUser(uuid string, newExpireAt time.Time) error {
+// expireAt всегда уходит в UTC с суффиксом Z: 3.x валидирует формат регуляркой,
+// и локальное время получило бы 400, а на 2.8.x прошло бы молча.
+func (c *Client) EnableUser(ref UserRef, newExpireAt time.Time) error {
 	expireStr := newExpireAt.UTC().Format(time.RFC3339)
-	return c.UpdateUser(uuid, UpdateUserRequest{
+	return c.UpdateUser(ref, UpdateUserRequest{
 		Status:            strPtr(StatusActive),
 		ExpireAt:          &expireStr,
 		TrafficLimitBytes: int64Ptr(0), // Безлимит после оплаты
@@ -392,8 +444,8 @@ func (c *Client) EnableUser(uuid string, newExpireAt time.Time) error {
 }
 
 // DisableUser деактивирует пользователя (grace period).
-func (c *Client) DisableUser(uuid string) error {
-	return c.UpdateUser(uuid, UpdateUserRequest{
+func (c *Client) DisableUser(ref UserRef) error {
+	return c.UpdateUser(ref, UpdateUserRequest{
 		Status: strPtr(StatusDisabled),
 	})
 }
@@ -467,7 +519,7 @@ func (c *Client) doRequest(method, path string, body []byte) ([]byte, error) {
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, newAPIError(resp.StatusCode, respBody)
 	}
 
 	return respBody, nil

@@ -18,7 +18,7 @@ func TestReconcileOrphanedRegistrationsRestoresLocalUserFromRemnawave(t *testing
 	userID := int64(2001)
 	price := 650
 
-	_, err := db.CreateUser(moderatorID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(moderatorID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(moderatorID, adminID))
 
@@ -31,7 +31,7 @@ func TestReconcileOrphanedRegistrationsRestoresLocalUserFromRemnawave(t *testing
 			require.Equal(t, http.MethodGet, r.Method)
 			require.Equal(t, "/api/users/by-telegram-id/2001", r.URL.Path)
 
-			payload := `{"response":{"uuid":"uuid-remote-2001","username":"restored_user","telegramId":2001,"status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`
+			payload := `{"response":[{"uuid":"uuid-remote-2001","id":2001,"username":"restored_user","telegramId":2001,"status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}]}`
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader(payload)),
@@ -48,7 +48,8 @@ func TestReconcileOrphanedRegistrationsRestoresLocalUserFromRemnawave(t *testing
 	user, err := db.GetUserByTelegramID(userID)
 	require.NoError(t, err)
 	require.NotNil(t, user)
-	assert.Equal(t, "uuid-remote-2001", user.RemnawaveUUID)
+	require.NotNil(t, user.RemnawaveUUID)
+	assert.Equal(t, "uuid-remote-2001", *user.RemnawaveUUID)
 	assert.Equal(t, "restored_user", user.Username)
 	require.NotNil(t, user.SubscriptionPrice)
 	assert.Equal(t, price, *user.SubscriptionPrice)

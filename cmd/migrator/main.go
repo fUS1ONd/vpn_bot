@@ -139,18 +139,24 @@ func main() {
 		}
 
 		// Сохраняем в новую БД (first_name пустой, так как старая БД его не хранила)
-		_, err = newDB.CreateUser(oldUser.TelegramID, username, "", remnawaveUser.UUID, nil, nil)
+		// Сохраняем обе половины связки: на 3.x UUID в ответе панели отсутствует
+		// и уйдёт в колонку как NULL.
+		var uuidPtr *string
+		if remnawaveUser.UUID != "" {
+			uuidPtr = &remnawaveUser.UUID
+		}
+		_, err = newDB.CreateUser(oldUser.TelegramID, username, "", uuidPtr, &remnawaveUser.ID, nil, nil)
 		if err != nil {
 			logLine := fmt.Sprintf("[ERROR] telegram_id=%d — DB error: %v\n", oldUser.TelegramID, err)
 			fmt.Print(logLine)
 			logFile.WriteString(logLine)
 			// Удаляем из Remnawave если не смогли сохранить в БД
-			_ = remnawaveClient.DeleteUser(remnawaveUser.UUID)
+			_ = remnawaveClient.DeleteUser(remnawaveUser.Ref())
 			errorCount++
 			continue
 		}
 
-		logLine := fmt.Sprintf("[OK] telegram_id=%d, uuid=%s\n", oldUser.TelegramID, remnawaveUser.UUID)
+		logLine := fmt.Sprintf("[OK] telegram_id=%d, uuid=%s, id=%d\n", oldUser.TelegramID, remnawaveUser.UUID, remnawaveUser.ID)
 		fmt.Print(logLine)
 		logFile.WriteString(logLine)
 		successCount++

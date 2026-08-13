@@ -25,12 +25,12 @@ func edgeCaseBot(t *testing.T, telegramID int64, currentUser map[string]any) (*B
 	t.Helper()
 
 	b, db := setupTestBot(t)
-	_, err := db.CreateUser(telegramID, "user", "User", "uuid-sub", nil, nil)
+	_, err := db.CreateUser(telegramID, "user", "User", strPtrTest("uuid-sub"), nil, nil, nil)
 	require.NoError(t, err)
 
 	counters := &revokeStubCounters{}
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			jsonResp := func(payload any) (*http.Response, error) {
@@ -182,10 +182,10 @@ func TestSubscriptionCardStillShowsLinkWhenDeviceCountRequestFailsBecauseCountIs
 	const telegramID = int64(9204)
 
 	b, db := setupTestBot(t)
-	_, err := db.CreateUser(telegramID, "user", "User", "uuid-sub", nil, nil)
+	_, err := db.CreateUser(telegramID, "user", "User", strPtrTest("uuid-sub"), nil, nil, nil)
 	require.NoError(t, err)
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if strings.HasPrefix(r.URL.Path, "/api/hwid/devices/") {

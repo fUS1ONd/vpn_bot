@@ -28,7 +28,7 @@ const (
 type adminSwitchSession struct {
 	TargetTelegramID int64
 	TargetLabel      string
-	UserUUID         string
+	UserRef          remnawave.UserRef
 }
 
 type adminChangePriceSession struct {
@@ -171,7 +171,14 @@ func (b *Bot) processSwitchSubscriptionID(c tele.Context, text string) error {
 		return c.Send("Этот пользователь уже на бессрочном тарифе", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	remUser, err := b.remnawave.GetUser(user.RemnawaveUUID)
+	ref, err := b.userRef(targetID)
+	if err != nil {
+		slog.Error("Failed to resolve user ref before switching subscription", "error", err, "telegram_id", targetID)
+		b.userStates.Delete(adminID)
+		return c.Send("Ошибка при получении данных подписки, попробуйте позже", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
+	}
+
+	remUser, err := b.remnawave.GetUser(ref)
 	if err != nil {
 		slog.Error("Failed to get user from Remnawave before switching subscription", "error", err, "telegram_id", targetID)
 		b.userStates.Delete(adminID)
@@ -185,7 +192,7 @@ func (b *Bot) processSwitchSubscriptionID(c tele.Context, text string) error {
 	b.setAdminSwitchSession(adminID, adminSwitchSession{
 		TargetTelegramID: targetID,
 		TargetLabel:      targetLabel,
-		UserUUID:         user.RemnawaveUUID,
+		UserRef:          ref,
 	})
 	b.userStates.Set(adminID, StateWaitSwitchSubscriptionConfirm)
 
@@ -251,7 +258,11 @@ func (b *Bot) buildAdminUserInfo(targetID int64) (string, *tele.ReplyMarkup, err
 	if err != nil || dbUser == nil {
 		return "", nil, fmt.Errorf("load db user: %w", err)
 	}
-	remUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
+	ref, err := b.userRef(targetID)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve user ref: %w", err)
+	}
+	remUser, err := b.remnawave.GetUser(ref)
 	if err != nil || remUser == nil {
 		return "", nil, fmt.Errorf("load remnawave user: %w", err)
 	}
@@ -270,7 +281,7 @@ func (b *Bot) buildAdminUserInfo(targetID int64) (string, *tele.ReplyMarkup, err
 	}
 
 	devicesLabel := "н/д"
-	devicesCount, err := b.remnawave.GetUserHwidDevicesCount(dbUser.RemnawaveUUID)
+	devicesCount, err := b.remnawave.GetUserHwidDevicesCount(ref)
 	if err != nil {
 		slog.Error("Failed to load user HWID devices for admin info", "error", err, "telegram_id", targetID)
 	} else if remUser.HwidDeviceLimit > 0 {
@@ -392,7 +403,7 @@ func (b *Bot) processAdminChangePriceID(c tele.Context, text string) error {
 		session.HasCurrentPrice = true
 	}
 	if dbUser.SubscriptionPrice == nil {
-		remUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
+		remUser, err := b.remnawaveUser(targetID)
 		if err != nil {
 			slog.Error("Failed to load Remnawave user before migration check", "error", err, "telegram_id", targetID)
 			b.userStates.Delete(adminID)
@@ -570,7 +581,7 @@ func (b *Bot) processSwitchSubscriptionConfirm(c tele.Context, text string) erro
 		return c.Send("Сессия смены тарифа потеряна. Начните заново.", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
-	remUser, err := b.remnawave.GetUser(session.UserUUID)
+	remUser, err := b.remnawave.GetUser(session.UserRef)
 	if err != nil {
 		slog.Error("Failed to refresh user before switching subscription", "error", err, "telegram_id", session.TargetTelegramID)
 		b.userStates.Delete(adminID)
@@ -582,7 +593,7 @@ func (b *Bot) processSwitchSubscriptionConfirm(c tele.Context, text string) erro
 
 	if remUser.Status == remnawave.StatusExpired || remUser.Status == remnawave.StatusDisabled {
 		// EnableUser одним вызовом ставит ACTIVE + ExpireAt + безлимит трафика
-		if err := b.remnawave.EnableUser(session.UserUUID, unlimitedExpireAt); err != nil {
+		if err := b.remnawave.EnableUser(session.UserRef, unlimitedExpireAt); err != nil {
 			slog.Error("Failed to enable user before switching subscription", "error", err, "telegram_id", session.TargetTelegramID)
 			b.userStates.Delete(adminID)
 			b.clearAdminSwitchSession(adminID)
@@ -590,8 +601,7 @@ func (b *Bot) processSwitchSubscriptionConfirm(c tele.Context, text string) erro
 		}
 	}
 
-	if err := b.remnawave.UpdateUser(session.UserUUID, remnawave.UpdateUserRequest{
-		UUID:     session.UserUUID,
+	if err := b.remnawave.UpdateUser(session.UserRef, remnawave.UpdateUserRequest{
 		ExpireAt: strPtr(unlimitedExpireAt.Format(time.RFC3339)),
 	}); err != nil {
 		slog.Error("Failed to patch user expireAt while switching subscription", "error", err, "telegram_id", session.TargetTelegramID)
@@ -647,7 +657,7 @@ func (b *Bot) processBanUser(c tele.Context, text string) error {
 	}
 
 	// Удаляем из Remnawave (отключаем доступ к серверам)
-	err = b.remnawave.DeleteUser(user.RemnawaveUUID)
+	err = b.deleteRemnawaveUser(telegramID)
 	if err != nil {
 		slog.Error("Failed to delete user from Remnawave", "error", err)
 		// Продолжаем удаление из БД даже если не удалось удалить из Remnawave

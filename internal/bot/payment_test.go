@@ -15,7 +15,6 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/platega"
-	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tele "gopkg.in/telebot.v3"
@@ -27,7 +26,7 @@ func TestAdminTestPaymentUsesConfiguredPriceAndIsMarked(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 
 	const adminID int64 = 99
-	_, err = db.CreateUser(adminID, "admin", "Admin", "uuid-admin", nil, nil)
+	_, err = db.CreateUser(adminID, "admin", "Admin", strPtrTest("uuid-admin"), nil, nil, nil)
 	require.NoError(t, err)
 
 	plategaClient := platega.NewClientWithBaseURL("merchant", "secret", "https://platega.test")
@@ -52,7 +51,7 @@ func TestAdminTestPaymentUsesConfiguredPriceAndIsMarked(t *testing.T) {
 		db:         db,
 		config:     &config.Config{AdminID: adminID, AdminTestPaymentPrice: 10, PlategaCallbackURL: "https://bot.example/callback", YooKassaReturnURL: "https://t.me/testbot"},
 		userStates: newStateMap(),
-		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
+		remnawave:  newTestPanelClient(),
 		platega:    plategaClient,
 	}
 	b.remnawave.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -78,7 +77,7 @@ func TestAdminTestPaymentCallbackPreservesAccountOnConfirmationAndChargeback(t *
 	t.Cleanup(func() { db.Close() })
 
 	const adminID int64 = 99
-	_, err = db.CreateUser(adminID, "admin", "Admin", "uuid-admin", nil, nil)
+	_, err = db.CreateUser(adminID, "admin", "Admin", strPtrTest("uuid-admin"), nil, nil, nil)
 	require.NoError(t, err)
 	payment := &database.Payment{TelegramID: adminID, Amount: 10, PaymentMethod: "crypto", Status: "pending", IsTest: true}
 	payment.ID, err = db.CreatePayment(payment)
@@ -136,7 +135,7 @@ func TestHandleConfirmedIgnoresExpiredAlternativePayment(t *testing.T) {
 	db, err := database.New(t.TempDir() + "/bot.db")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
-	_, err = db.CreateUser(77, "payer", "Payer", "uuid-77", nil, nil)
+	_, err = db.CreateUser(77, "payer", "Payer", strPtrTest("uuid-77"), nil, nil, nil)
 	require.NoError(t, err)
 	id, err := db.CreatePayment(&database.Payment{TelegramID: 77, Amount: 500, PaymentMethod: "yookassa", Status: "expired", Provider: "yookassa"})
 	require.NoError(t, err)
@@ -159,7 +158,7 @@ func TestHandleConfirmedIdempotency(t *testing.T) {
 	})
 
 	// Создаём пользователя
-	_, err = db.CreateUser(500, "payer", "Payer", "uuid-500", nil, nil)
+	_, err = db.CreateUser(500, "payer", "Payer", strPtrTest("uuid-500"), nil, nil, nil)
 	require.NoError(t, err)
 
 	// Создаём платёж и сразу подтверждаем
@@ -206,7 +205,7 @@ func TestHandleConfirmedReturnsQuicklyWhenActivationFails(t *testing.T) {
 		os.Remove(dbFile)
 	})
 
-	_, err = db.CreateUser(501, "payer", "Payer", "uuid-501", nil, nil)
+	_, err = db.CreateUser(501, "payer", "Payer", strPtrTest("uuid-501"), nil, nil, nil)
 	require.NoError(t, err)
 
 	txID := "tx-quick-fail"
@@ -222,7 +221,7 @@ func TestHandleConfirmedReturnsQuicklyWhenActivationFails(t *testing.T) {
 	payment.ID = id
 
 	cfg := &config.Config{AdminID: 999}
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-501" {
@@ -267,10 +266,10 @@ func TestHandleConfirmedDoesNotCreateModeratorEarning(t *testing.T) {
 	userID := int64(551)
 	price := 400
 
-	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-550", nil, nil)
+	_, err = db.CreateUser(modID, "moderator", "Moderator", strPtrTest("uuid-550"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
-	_, err = db.CreateUser(userID, "payer", "Payer", "uuid-551", &price, &modID)
+	_, err = db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-551"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	txID := "tx-retry-earning"
@@ -287,7 +286,7 @@ func TestHandleConfirmedDoesNotCreateModeratorEarning(t *testing.T) {
 	payment.ID = id
 
 	cfg := &config.Config{AdminID: adminID, PlategaFeeSBP: 11, PlategaFeeWithdrawal: 2}
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-551" {
@@ -332,10 +331,10 @@ func TestRetryConfirmedPaymentActivationDoesNotCreateEarning(t *testing.T) {
 	userID := int64(561)
 	price := 400
 
-	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-560", nil, nil)
+	_, err = db.CreateUser(modID, "moderator", "Moderator", strPtrTest("uuid-560"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
-	_, err = db.CreateUser(userID, "payer", "Payer", "uuid-561", &price, &modID)
+	_, err = db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-561"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	txID := "tx-retry-no-duplicate"
@@ -352,7 +351,7 @@ func TestRetryConfirmedPaymentActivationDoesNotCreateEarning(t *testing.T) {
 	payment.ID = id
 
 	var getUserAttempts atomic.Int32
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
@@ -378,7 +377,7 @@ func TestRetryConfirmedPaymentActivationDoesNotCreateEarning(t *testing.T) {
 			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/561":
 				return &http.Response{
 					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader(`{"response":{"uuid":"uuid-561","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`)),
+					Body:       io.NopCloser(strings.NewReader(`{"response":[{"uuid":"uuid-561","telegramId":561,"status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}]}`)),
 					Header:     make(http.Header),
 				}, nil
 			default:
@@ -413,7 +412,7 @@ func TestHandleConfirmedDoesNotReapplyActivationFromStaleSnapshot(t *testing.T) 
 	})
 
 	userID := int64(580)
-	_, err = db.CreateUser(userID, "payer", "Payer", "uuid-580", nil, nil)
+	_, err = db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-580"), nil, nil, nil)
 	require.NoError(t, err)
 
 	txID := "tx-stale-snapshot"
@@ -435,7 +434,7 @@ func TestHandleConfirmedDoesNotReapplyActivationFromStaleSnapshot(t *testing.T) 
 	var getUserCalls atomic.Int32
 	var patchCalls atomic.Int32
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
@@ -464,7 +463,7 @@ func TestHandleConfirmedDoesNotReapplyActivationFromStaleSnapshot(t *testing.T) 
 				if patchCalls.Load() > 1 {
 					expireAt = "2026-05-20T00:00:00Z"
 				}
-				payload := fmt.Sprintf(`{"response":{"uuid":"uuid-580","username":"payer","status":"ACTIVE","expireAt":"%s"}}`, expireAt)
+				payload := fmt.Sprintf(`{"response":[{"uuid":"uuid-580","telegramId":580,"username":"payer","status":"ACTIVE","expireAt":"%s"}]}`, expireAt)
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(payload)),
@@ -504,12 +503,12 @@ func TestCreatePaymentForUser_RejectsZeroOrNilPrice(t *testing.T) {
 	})
 
 	// Пользователь без цены подписки (NULL)
-	_, err = db.CreateUser(700, "user_no_price", "No Price", "uuid-700", nil, nil)
+	_, err = db.CreateUser(700, "user_no_price", "No Price", strPtrTest("uuid-700"), nil, nil, nil)
 	require.NoError(t, err)
 
 	// Пользователь с нулевой ценой подписки
 	zeroPrice := 0
-	_, err = db.CreateUser(701, "user_zero_price", "Zero Price", "uuid-701", &zeroPrice, nil)
+	_, err = db.CreateUser(701, "user_zero_price", "Zero Price", strPtrTest("uuid-701"), nil, &zeroPrice, nil)
 	require.NoError(t, err)
 
 	cfg := &config.Config{AdminID: 999}
@@ -517,7 +516,7 @@ func TestCreatePaymentForUser_RejectsZeroOrNilPrice(t *testing.T) {
 		db:         db,
 		config:     cfg,
 		userStates: newStateMap(),
-		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
+		remnawave:  newTestPanelClient(),
 	}
 
 	t.Run("SubscriptionPrice is nil — ошибка", func(t *testing.T) {
@@ -544,7 +543,7 @@ func TestCreatePaymentForUserSerializesConcurrentRequests(t *testing.T) {
 
 	userID := int64(702)
 	price := 500
-	_, err = db.CreateUser(userID, "payer", "Payer", "uuid-702", &price, nil)
+	_, err = db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-702"), nil, &price, nil)
 	require.NoError(t, err)
 
 	plategaClient := platega.NewClientWithBaseURL("merchant", "secret", "https://platega.test")
@@ -570,7 +569,7 @@ func TestCreatePaymentForUserSerializesConcurrentRequests(t *testing.T) {
 		}),
 	})
 
-	remClient := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	remClient := newTestPanelClient()
 	remClient.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			return nil, assert.AnError
@@ -623,7 +622,7 @@ func TestHandleConfirmedRetriesActivationInBackground(t *testing.T) {
 		os.Remove(dbFile)
 	})
 
-	_, err = db.CreateUser(502, "payer", "Payer", "uuid-502", nil, nil)
+	_, err = db.CreateUser(502, "payer", "Payer", strPtrTest("uuid-502"), nil, nil, nil)
 	require.NoError(t, err)
 
 	txID := "tx-background-retry"
@@ -642,7 +641,7 @@ func TestHandleConfirmedRetriesActivationInBackground(t *testing.T) {
 	enabledCh := make(chan struct{}, 1)
 
 	cfg := &config.Config{AdminID: 999}
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
@@ -673,7 +672,7 @@ func TestHandleConfirmedRetriesActivationInBackground(t *testing.T) {
 			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/502":
 				return &http.Response{
 					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader(`{"response":{"uuid":"uuid-502","status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}}`)),
+					Body:       io.NopCloser(strings.NewReader(`{"response":[{"uuid":"uuid-502","telegramId":502,"status":"ACTIVE","expireAt":"2026-04-20T00:00:00Z"}]}`)),
 					Header:     make(http.Header),
 				}, nil
 			default:
@@ -718,7 +717,7 @@ func TestRetryConfirmedPaymentActivationMarksTerminalFailureWhenUserMissingInRem
 	})
 
 	userID := int64(590)
-	_, err = db.CreateUser(userID, "payer", "Payer", "uuid-590", nil, nil)
+	_, err = db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-590"), nil, nil, nil)
 	require.NoError(t, err)
 
 	payment := &database.Payment{
@@ -732,7 +731,7 @@ func TestRetryConfirmedPaymentActivationMarksTerminalFailureWhenUserMissingInRem
 	require.NoError(t, db.ConfirmPayment(id))
 	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-590" {

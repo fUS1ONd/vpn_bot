@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	tele "gopkg.in/telebot.v3"
 )
 
@@ -49,6 +49,16 @@ func (b *Bot) StartScheduler(ctx context.Context) {
 func (b *Bot) runSubscriptionSchedulerPass() {
 	now := time.Now().UTC()
 
+	// 0. Периодическая сверка версии панели. Владелец обновляет панель, не
+	// перезапуская бота: так апгрейд замечается даже без пользовательской
+	// активности, а не только по 400 на первом же вызове.
+	if version, err := b.remnawave.RefreshAPIVersion(); err != nil {
+		slog.Warn("Scheduler: не удалось перечитать версию панели", "error", err)
+		b.reportPanelAuthError(err, "сверка версии панели")
+	} else {
+		slog.Debug("Scheduler: версия панели подтверждена", "contract", version.String())
+	}
+
 	// 1. Протухание старых PENDING платежей
 	expired, err := b.db.ExpireOldPendingPayments()
 	if err != nil {
@@ -71,8 +81,10 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 	remUsers, err := b.remnawave.GetAllUsers()
 	if err != nil {
 		slog.Error("Scheduler failed to get users from Remnawave", "error", err)
+		b.reportPanelAuthError(err, "список пользователей панели")
 		return
 	}
+	b.reportPanelAuthError(nil, "список пользователей панели")
 
 	dbUsers, err := b.db.GetAllUsers()
 	if err != nil {
@@ -96,6 +108,10 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 			continue
 		}
 
+		// Проход по панели заодно доливает недостающий remnawave_id: список
+		// пользователей панели тут уже загружен, лишних запросов это не стоит.
+		ref := b.schedulerUserRef(dbUser, user)
+
 		invite, err := b.db.GetInviteByUsedBy(telegramID)
 		if err != nil {
 			slog.Warn("Scheduler: не удалось получить инвайт пользователя", "error", err, "telegram_id", telegramID)
@@ -118,16 +134,16 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 		isTrial := b.isTrialUser(telegramID)
 
 		if isTrial {
-			b.processTrialUser(telegramID, dbUser, user.ExpireAt, now)
+			b.processTrialUser(telegramID, ref, user.ExpireAt, now)
 		} else {
-			b.processPaidUser(telegramID, dbUser, user.ExpireAt, now)
+			b.processPaidUser(telegramID, ref, user.ExpireAt, now)
 		}
 	}
 }
 
 // processTrialUser обрабатывает триального пользователя.
 // Триал: уведомление за 1 день → кик при expireAt (без grace period).
-func (b *Bot) processTrialUser(telegramID int64, dbUser database.User, expireAt, now time.Time) {
+func (b *Bot) processTrialUser(telegramID int64, ref remnawave.UserRef, expireAt, now time.Time) {
 	// За 1 день до конца триала
 	if notificationWindow(now, expireAt, 0, 24*time.Hour) {
 		b.sendNotification(telegramID, notificationTrialExpire1d,
@@ -156,13 +172,13 @@ func (b *Bot) processTrialUser(telegramID int64, dbUser database.User, expireAt,
 
 		b.sendNotification(telegramID, notificationTrialExpired,
 			"❌ Ваш пробный период закончился.\n\nДля продолжения использования VPN оплатите подписку по новому приглашению.")
-		b.handleAutoKick(telegramID, dbUser.RemnawaveUUID)
+		b.handleAutoKick(telegramID, ref)
 	}
 }
 
 // processPaidUser обрабатывает пользователя с оплаченной подпиской.
 // Уведомления за 3д/1д → disable при expireAt → кик через 72ч grace.
-func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, now time.Time) {
+func (b *Bot) processPaidUser(telegramID int64, ref remnawave.UserRef, expireAt, now time.Time) {
 	// За 3 дня до конца
 	if notificationWindow(now, expireAt, 48*time.Hour, 72*time.Hour) {
 		b.sendNotification(telegramID, notificationExpire3d,
@@ -191,7 +207,7 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 
 		if !b.isMaintenanceMode() {
 			// Disable в Remnawave (если ещё не disabled)
-			if err := b.remnawave.DisableUser(dbUser.RemnawaveUUID); err != nil {
+			if err := b.remnawave.DisableUser(ref); err != nil {
 				slog.Warn("Scheduler: не удалось disable пользователя", "error", err, "telegram_id", telegramID)
 			}
 		}
@@ -220,7 +236,7 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 		}
 
 		// Перед киком проверяем свежий статус через API — вдруг callback прошёл
-		freshUser, err := b.remnawave.GetUser(dbUser.RemnawaveUUID)
+		freshUser, err := b.remnawave.GetUser(ref)
 		if err != nil {
 			slog.Warn("Scheduler: не удалось проверить свежий статус перед grace kick",
 				"error", err, "telegram_id", telegramID)
@@ -234,7 +250,7 @@ func (b *Bot) processPaidUser(telegramID int64, dbUser database.User, expireAt, 
 
 		b.sendNotification(telegramID, notificationGraceKick,
 			"❌ Ваш доступ удалён. Вы можете получить новое приглашение для повторного подключения.")
-		b.handleAutoKick(telegramID, dbUser.RemnawaveUUID)
+		b.handleAutoKick(telegramID, ref)
 	}
 }
 
@@ -307,12 +323,13 @@ func (b *Bot) sendNotification(telegramID int64, notificationType, message strin
 
 // isAutoKickNotFoundError проверяет, является ли ошибка признаком того,
 // что пользователь уже удалён из Remnawave (например, администратором вручную).
+// Признак — HTTP-статус 404 от панели, а не подстрока в тексте ошибки.
 func isAutoKickNotFoundError(err error) bool {
-	return strings.Contains(err.Error(), "API error 404")
+	return isRemnawaveNotFound(err)
 }
 
-func (b *Bot) handleAutoKick(telegramID int64, userUUID string) {
-	if err := b.remnawave.DeleteUser(userUUID); err != nil {
+func (b *Bot) handleAutoKick(telegramID int64, ref remnawave.UserRef) {
+	if err := b.remnawave.DeleteUser(ref); err != nil {
 		if isAutoKickNotFoundError(err) {
 			// Пользователь уже удалён из Remnawave (например, забанен вручную) — не шумим в логах.
 			slog.Debug("Scheduler auto-kick: user already absent in Remnawave", "telegram_id", telegramID)

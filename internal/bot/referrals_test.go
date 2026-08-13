@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tele "gopkg.in/telebot.v3"
@@ -45,7 +46,7 @@ func TestReferralInviteMessageUsesPriceSnapshotAndMoscowDeadline(t *testing.T) {
 func TestCanCreateReferralInviteRules(t *testing.T) {
 	t.Run("confirmed payment and active access", func(t *testing.T) {
 		b, db := setupTestBot(t)
-		_, err := db.CreateUser(101, "paid", "Paid", "uuid-paid-ref", nil, nil)
+		_, err := db.CreateUser(101, "paid", "Paid", strPtrTest("uuid-paid-ref"), nil, nil, nil)
 		require.NoError(t, err)
 		paymentID, err := db.CreatePayment(&database.Payment{TelegramID: 101, Amount: 400, PaymentMethod: "sbp", Status: "pending"})
 		require.NoError(t, err)
@@ -58,7 +59,7 @@ func TestCanCreateReferralInviteRules(t *testing.T) {
 
 	t.Run("legacy-paid active access", func(t *testing.T) {
 		b, db := setupTestBot(t)
-		_, err := db.CreateUser(102, "legacy", "Legacy", "uuid-legacy-ref", nil, nil)
+		_, err := db.CreateUser(102, "legacy", "Legacy", strPtrTest("uuid-legacy-ref"), nil, nil, nil)
 		require.NoError(t, err)
 		require.NoError(t, db.SetLegacyPaidMigrated(102, true))
 		setReferralEligibilityRemote(t, b, "uuid-legacy-ref", "ACTIVE", "2098-01-01T00:00:00Z")
@@ -69,7 +70,7 @@ func TestCanCreateReferralInviteRules(t *testing.T) {
 
 	t.Run("infinite access without payment", func(t *testing.T) {
 		b, db := setupTestBot(t)
-		_, err := db.CreateUser(104, "infinite", "Infinite", "uuid-infinite-ref", nil, nil)
+		_, err := db.CreateUser(104, "infinite", "Infinite", strPtrTest("uuid-infinite-ref"), nil, nil, nil)
 		require.NoError(t, err)
 		setReferralEligibilityRemote(t, b, "uuid-infinite-ref", "ACTIVE", "2099-01-01T00:00:00Z")
 		allowed, err := b.canCreateReferralInvite(104)
@@ -86,7 +87,7 @@ func TestCanCreateReferralInviteRules(t *testing.T) {
 		} {
 			t.Run(testCase.name, func(t *testing.T) {
 				b, db := setupTestBot(t)
-				_, err := db.CreateUser(103, "trial", "Trial", "uuid-trial-ref", nil, nil)
+				_, err := db.CreateUser(103, "trial", "Trial", strPtrTest("uuid-trial-ref"), nil, nil, nil)
 				require.NoError(t, err)
 				setReferralEligibilityRemote(t, b, "uuid-trial-ref", testCase.status, testCase.expire)
 				allowed, err := b.canCreateReferralInvite(103)
@@ -102,7 +103,7 @@ func TestAdminPriceChangeDoesNotRewriteInviteSnapshot(t *testing.T) {
 	invite, err := db.CreateReferralInvite(10, 450, time.Now().UTC())
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(invite.Code, 800))
-	_, err = db.CreateUserWithInviter(800, "guest", "Guest", "uuid-price-snapshot", invite.SubscriptionPrice, nil, &invite.CreatedBy)
+	_, err = db.CreateUserWithInviter(800, "guest", "Guest", strPtrTest("uuid-price-snapshot"), nil, invite.SubscriptionPrice, nil, &invite.CreatedBy)
 	require.NoError(t, err)
 
 	require.NoError(t, b.applyAdminChangePrice(800, 700, nil))
@@ -138,7 +139,7 @@ func TestProcessInviteCodeDistinguishesUsedAndUnknown(t *testing.T) {
 
 func TestReferralSectionRequiresCurrentRegistrationAndNoBan(t *testing.T) {
 	b, db := setupTestBot(t)
-	_, err := db.CreateUser(950, "member", "Member", "uuid-ref-access", nil, nil)
+	_, err := db.CreateUser(950, "member", "Member", strPtrTest("uuid-ref-access"), nil, nil, nil)
 	require.NoError(t, err)
 	accessible, err := b.canAccessReferralSection(950)
 	require.NoError(t, err)
@@ -179,7 +180,7 @@ func TestRegistrationRollbackKeepsClaimUntilRemoteDeletionIsConfirmed(t *testing
 				}, nil
 			})})
 
-			b.rollbackCreatedRemnawaveUser(invite.Code, 990, "uuid-partial")
+			b.rollbackCreatedRemnawaveUser(invite.Code, 990, remnawave.UserRef{UUID: "uuid-partial"})
 			stored, err := db.GetInviteByCode(invite.Code)
 			require.NoError(t, err)
 			if testCase.wantClaimed {

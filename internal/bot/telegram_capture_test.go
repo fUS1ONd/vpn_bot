@@ -1,6 +1,8 @@
 package bot
 
 import (
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
+
 	"encoding/json"
 	"fmt"
 	"io"
@@ -82,4 +84,26 @@ func (c *telegramCapture) matching(substr string) []sentMessage {
 		}
 	}
 	return out
+}
+
+// strPtrTest и i64PtrTest — короткие конструкторы указателей для тестов.
+func strPtrTest(s string) *string { return &s }
+func i64PtrTest(n int64) *int64   { return &n }
+
+// newTestPanelClient — клиент панели для тестов. Версия контракта задаётся явно
+// (2.8.x): иначе каждый фейк панели в тестах был бы обязан отвечать ещё и на
+// /api/system/metadata, хотя проверяет он совсем другое.
+func newTestPanelClient() *remnawave.Client {
+	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client.SetAPIVersion(remnawave.APIVersionV2)
+	return client
+}
+
+// errorResponseForTest собирает ответ панели с кодом ошибки.
+func errorResponseForTest(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+	}
 }

@@ -33,7 +33,7 @@ func setupSchedulerTestBot(t *testing.T) (*Bot, *database.DB) {
 		db:         db,
 		config:     cfg,
 		userStates: newStateMap(),
-		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
+		remnawave:  newTestPanelClient(),
 		shutdownCh: make(chan struct{}),
 	}
 	return b, db
@@ -60,17 +60,17 @@ func newOfflineTelegramBotForTest(t *testing.T, transport http.RoundTripper) *te
 func TestHandleAutoKick_404IsNotFatalError(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
-	_, err := db.CreateUser(700, "victim", "Victim", "uuid-700", nil, nil)
+	_, err := db.CreateUser(700, "victim", "Victim", strPtrTest("uuid-700"), nil, nil, nil)
 	require.NoError(t, err)
 	modID := int64(50)
-	_, err = db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err = db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	expireDays := 30
 	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv.Code, 700))
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodDelete {
@@ -85,7 +85,7 @@ func TestHandleAutoKick_404IsNotFatalError(t *testing.T) {
 	})
 	b.remnawave = client
 
-	b.handleAutoKick(700, "uuid-700")
+	b.handleAutoKick(700, remnawave.UserRef{UUID: "uuid-700"})
 
 	dbUser, err := db.GetUserByTelegramID(700)
 	require.NoError(t, err)
@@ -101,17 +101,17 @@ func TestHandleAutoKick_404IsNotFatalError(t *testing.T) {
 func TestHandleAutoKick_ContinuesCleanupOnRemnawaveDeleteError(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
-	_, err := db.CreateUser(701, "victim", "Victim", "uuid-701", nil, nil)
+	_, err := db.CreateUser(701, "victim", "Victim", strPtrTest("uuid-701"), nil, nil, nil)
 	require.NoError(t, err)
 	modID := int64(51)
-	_, err = db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err = db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	expireDays := 30
 	inv, err := db.CreateInviteWithExpiry(modID, &expireDays)
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv.Code, 701))
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodDelete {
@@ -126,7 +126,7 @@ func TestHandleAutoKick_ContinuesCleanupOnRemnawaveDeleteError(t *testing.T) {
 	})
 	b.remnawave = client
 
-	b.handleAutoKick(701, "uuid-701")
+	b.handleAutoKick(701, remnawave.UserRef{UUID: "uuid-701"})
 
 	// Даже при ошибке Remnawave — cleanup в БД продолжается, чтобы не было partial failure
 	dbUser, err := db.GetUserByTelegramID(701)
@@ -140,11 +140,14 @@ func TestHandleAutoKick_ContinuesCleanupOnRemnawaveDeleteError(t *testing.T) {
 }
 
 func TestHandleAutoKick_SkipsAlreadyDeletedInRemnawave(t *testing.T) {
-	err := fmt.Errorf("API error 404: not found")
+	// Признак «пользователя уже нет в панели» — типизированная ошибка клиента,
+	// а не подстрока «API error 404» в тексте.
+	err := fmt.Errorf("delete user: %w", remnawave.ErrUserNotFound)
 	assert.True(t, isAutoKickNotFoundError(err))
 
 	otherErr := fmt.Errorf("API error 500: internal server error")
 	assert.False(t, isAutoKickNotFoundError(otherErr))
+	assert.False(t, isAutoKickNotFoundError(nil))
 }
 
 func TestIsSchedulerForbiddenError(t *testing.T) {
@@ -170,13 +173,13 @@ func TestIsTrialUser(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(100)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(200)
 	price := 400
-	_, err = db.CreateUser(userID, "user", "User", "uuid-200", &price, &modID)
+	_, err = db.CreateUser(userID, "user", "User", strPtrTest("uuid-200"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -204,7 +207,7 @@ func TestIsTrialUser(t *testing.T) {
 
 	t.Run("админский инвайт — не триал", func(t *testing.T) {
 		adminUserID := int64(300)
-		_, err := db.CreateUser(adminUserID, "admin_user", "Admin User", "uuid-300", nil, nil)
+		_, err := db.CreateUser(adminUserID, "admin_user", "Admin User", strPtrTest("uuid-300"), nil, nil, nil)
 		require.NoError(t, err)
 
 		invAdmin, err := db.CreateInviteWithExpiry(999, nil)
@@ -219,13 +222,13 @@ func TestIsTrialUserTreatsLegacyPaidMigratedUserAsPaid(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(120)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod-120", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod-120"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(220)
 	price := 500
-	_, err = db.CreateUser(userID, "legacy_paid", "Legacy Paid", "uuid-220", &price, &modID)
+	_, err = db.CreateUser(userID, "legacy_paid", "Legacy Paid", strPtrTest("uuid-220"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -242,13 +245,13 @@ func TestSchedulerTrialKick(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(100)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(200)
 	price := 400
-	_, err = db.CreateUser(userID, "user", "User", "uuid-200", &price, &modID)
+	_, err = db.CreateUser(userID, "user", "User", strPtrTest("uuid-200"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 3
@@ -256,7 +259,7 @@ func TestSchedulerTrialKick(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv.Code, userID))
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			return &http.Response{
@@ -270,7 +273,7 @@ func TestSchedulerTrialKick(t *testing.T) {
 
 	// expireAt вчера — триал истёк
 	yesterday := time.Now().UTC().AddDate(0, 0, -1)
-	b.processTrialUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-200"}, yesterday, time.Now().UTC())
+	b.processTrialUser(userID, remnawave.UserRef{UUID: "uuid-200"}, yesterday, time.Now().UTC())
 
 	dbUser, err := db.GetUserByTelegramID(userID)
 	require.NoError(t, err)
@@ -281,13 +284,13 @@ func TestSchedulerTrialWaitsForExactExpireAt(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(110)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(210)
 	price := 400
-	_, err = db.CreateUser(userID, "trial_exact", "Trial", "uuid-210", &price, &modID)
+	_, err = db.CreateUser(userID, "trial_exact", "Trial", strPtrTest("uuid-210"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 3
@@ -296,7 +299,7 @@ func TestSchedulerTrialWaitsForExactExpireAt(t *testing.T) {
 	require.NoError(t, db.ClaimInvite(inv.Code, userID))
 
 	expireAt := time.Now().UTC().Add(2 * time.Hour)
-	b.processTrialUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-210"}, expireAt, time.Now().UTC())
+	b.processTrialUser(userID, remnawave.UserRef{UUID: "uuid-210"}, expireAt, time.Now().UTC())
 
 	dbUser, err := db.GetUserByTelegramID(userID)
 	require.NoError(t, err)
@@ -307,13 +310,13 @@ func TestSchedulerPaidReminderForLegacyPaidMigratedUser(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(130)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod-130", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod-130"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(230)
 	price := 500
-	_, err = db.CreateUser(userID, "legacy_paid", "Legacy Paid", "uuid-230", &price, &modID)
+	_, err = db.CreateUser(userID, "legacy_paid", "Legacy Paid", strPtrTest("uuid-230"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -324,7 +327,7 @@ func TestSchedulerPaidReminderForLegacyPaidMigratedUser(t *testing.T) {
 
 	expireAt := time.Now().UTC().Add(60 * time.Hour)
 
-	b.remnawave = remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	b.remnawave = newTestPanelClient()
 	b.remnawave.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
@@ -372,13 +375,13 @@ func TestSchedulerTrialNotKickedIfPaid(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(100)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(201)
 	price := 400
-	_, err = db.CreateUser(userID, "user_paid_trial", "User", "uuid-201", &price, &modID)
+	_, err = db.CreateUser(userID, "user_paid_trial", "User", strPtrTest("uuid-201"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 3
@@ -400,7 +403,7 @@ func TestSchedulerTrialNotKickedIfPaid(t *testing.T) {
 
 	// expireAt вчера
 	yesterday := time.Now().UTC().AddDate(0, 0, -1)
-	b.processTrialUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-201"}, yesterday, time.Now().UTC())
+	b.processTrialUser(userID, remnawave.UserRef{UUID: "uuid-201"}, yesterday, time.Now().UTC())
 
 	dbUser, err := db.GetUserByTelegramID(userID)
 	require.NoError(t, err)
@@ -411,13 +414,13 @@ func TestSchedulerTrialNotKickedIfPaymentConfirmedNotActivated(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(101)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(202)
 	price := 400
-	_, err = db.CreateUser(userID, "user_retry_trial", "User", "uuid-202", &price, &modID)
+	_, err = db.CreateUser(userID, "user_retry_trial", "User", strPtrTest("uuid-202"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 3
@@ -437,7 +440,7 @@ func TestSchedulerTrialNotKickedIfPaymentConfirmedNotActivated(t *testing.T) {
 	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
 
 	yesterday := time.Now().UTC().AddDate(0, 0, -1)
-	b.processTrialUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-202"}, yesterday, time.Now().UTC())
+	b.processTrialUser(userID, remnawave.UserRef{UUID: "uuid-202"}, yesterday, time.Now().UTC())
 
 	dbUser, err := db.GetUserByTelegramID(userID)
 	require.NoError(t, err)
@@ -448,7 +451,7 @@ func TestSchedulerSkipsLegacyUserWithoutInvite(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	userID := int64(260)
-	_, err := db.CreateUser(userID, "legacy_user", "Legacy", "uuid-260", nil, nil)
+	_, err := db.CreateUser(userID, "legacy_user", "Legacy", strPtrTest("uuid-260"), nil, nil, nil)
 	require.NoError(t, err)
 
 	invite, err := db.GetInviteByUsedBy(userID)
@@ -459,7 +462,7 @@ func TestSchedulerSkipsLegacyUserWithoutInvite(t *testing.T) {
 	var deleteCalled bool
 	expireAt := time.Now().UTC().Add(-2 * time.Hour)
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
@@ -506,13 +509,13 @@ func TestSchedulerPaidDisableAndGraceKick(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(100)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(300)
 	price := 400
-	_, err = db.CreateUser(userID, "paiduser", "PaidUser", "uuid-300", &price, &modID)
+	_, err = db.CreateUser(userID, "paiduser", "PaidUser", strPtrTest("uuid-300"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -535,7 +538,7 @@ func TestSchedulerPaidDisableAndGraceKick(t *testing.T) {
 
 	t.Run("disable при expireAt", func(t *testing.T) {
 		var disableCalled bool
-		client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+		client := newTestPanelClient()
 		client.SetHTTPClient(&http.Client{
 			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				if r.Method == http.MethodPatch {
@@ -552,14 +555,14 @@ func TestSchedulerPaidDisableAndGraceKick(t *testing.T) {
 		b.remnawave = client
 
 		yesterday := time.Now().UTC().AddDate(0, 0, -1)
-		b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-300"}, yesterday, time.Now().UTC())
+		b.processPaidUser(userID, remnawave.UserRef{UUID: "uuid-300"}, yesterday, time.Now().UTC())
 
 		assert.True(t, disableCalled, "DisableUser должен быть вызван при expireAt")
 	})
 
 	t.Run("кик через 72ч grace", func(t *testing.T) {
 		var deleteCalled bool
-		client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+		client := newTestPanelClient()
 		client.SetHTTPClient(&http.Client{
 			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/api/users/uuid-300") {
@@ -597,7 +600,7 @@ func TestSchedulerPaidDisableAndGraceKick(t *testing.T) {
 
 		// expireAt 4 дня назад — grace period (72ч) истёк
 		expireAt := time.Now().UTC().Add(-96 * time.Hour)
-		b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-300"}, expireAt, time.Now().UTC())
+		b.processPaidUser(userID, remnawave.UserRef{UUID: "uuid-300"}, expireAt, time.Now().UTC())
 
 		assert.True(t, deleteCalled, "пользователь должен быть удалён после grace period")
 	})
@@ -607,13 +610,13 @@ func TestSchedulerPaidWaitsForExactExpireAt(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(120)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(310)
 	price := 400
-	_, err = db.CreateUser(userID, "paid_exact", "Paid", "uuid-310", &price, &modID)
+	_, err = db.CreateUser(userID, "paid_exact", "Paid", strPtrTest("uuid-310"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -634,7 +637,7 @@ func TestSchedulerPaidWaitsForExactExpireAt(t *testing.T) {
 	require.NoError(t, err)
 
 	var disableCalled bool
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodPatch {
@@ -651,7 +654,7 @@ func TestSchedulerPaidWaitsForExactExpireAt(t *testing.T) {
 	b.remnawave = client
 
 	expireAt := time.Now().UTC().Add(2 * time.Hour)
-	b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-310"}, expireAt, time.Now().UTC())
+	b.processPaidUser(userID, remnawave.UserRef{UUID: "uuid-310"}, expireAt, time.Now().UTC())
 
 	assert.False(t, disableCalled, "оплаченный пользователь не должен disable-иться раньше точного expireAt")
 }
@@ -660,13 +663,13 @@ func TestSchedulerPaidDisableIgnoresPaymentsBeforeExpireAt(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(130)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(320)
 	price := 400
-	_, err = db.CreateUser(userID, "paid_before_expire", "Paid", "uuid-320", &price, &modID)
+	_, err = db.CreateUser(userID, "paid_before_expire", "Paid", strPtrTest("uuid-320"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -690,7 +693,7 @@ func TestSchedulerPaidDisableIgnoresPaymentsBeforeExpireAt(t *testing.T) {
 	require.NoError(t, err)
 
 	var disableCalled bool
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodPatch {
@@ -706,7 +709,7 @@ func TestSchedulerPaidDisableIgnoresPaymentsBeforeExpireAt(t *testing.T) {
 	})
 	b.remnawave = client
 
-	b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-320"}, expireAt, time.Now().UTC())
+	b.processPaidUser(userID, remnawave.UserRef{UUID: "uuid-320"}, expireAt, time.Now().UTC())
 
 	assert.True(t, disableCalled, "старый платёж до expireAt не должен блокировать disable после истечения подписки")
 }
@@ -715,13 +718,13 @@ func TestSchedulerPaidDisableSkippedIfPaymentConfirmedNotActivated(t *testing.T)
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(131)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(321)
 	price := 400
-	_, err = db.CreateUser(userID, "paid_retry_disable", "Paid", "uuid-321", &price, &modID)
+	_, err = db.CreateUser(userID, "paid_retry_disable", "Paid", strPtrTest("uuid-321"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -741,7 +744,7 @@ func TestSchedulerPaidDisableSkippedIfPaymentConfirmedNotActivated(t *testing.T)
 	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
 
 	var disableCalled bool
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodPatch {
@@ -758,7 +761,7 @@ func TestSchedulerPaidDisableSkippedIfPaymentConfirmedNotActivated(t *testing.T)
 	b.remnawave = client
 
 	expireAt := time.Now().UTC().Add(-30 * time.Minute)
-	b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-321"}, expireAt, time.Now().UTC())
+	b.processPaidUser(userID, remnawave.UserRef{UUID: "uuid-321"}, expireAt, time.Now().UTC())
 
 	assert.False(t, disableCalled, "confirmed_not_activated не должен приводить к disable как будто оплаты не было")
 }
@@ -767,13 +770,13 @@ func TestSchedulerGraceKickSkippedIfPaymentConfirmedNotActivated(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(132)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(322)
 	price := 400
-	_, err = db.CreateUser(userID, "paid_retry_grace", "Paid", "uuid-322", &price, &modID)
+	_, err = db.CreateUser(userID, "paid_retry_grace", "Paid", strPtrTest("uuid-322"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -793,7 +796,7 @@ func TestSchedulerGraceKickSkippedIfPaymentConfirmedNotActivated(t *testing.T) {
 	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
 
 	var deleteCalled bool
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/api/users/uuid-322") {
@@ -823,7 +826,7 @@ func TestSchedulerGraceKickSkippedIfPaymentConfirmedNotActivated(t *testing.T) {
 	b.remnawave = client
 
 	expireAt := time.Now().UTC().Add(-96 * time.Hour)
-	b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-322"}, expireAt, time.Now().UTC())
+	b.processPaidUser(userID, remnawave.UserRef{UUID: "uuid-322"}, expireAt, time.Now().UTC())
 
 	assert.False(t, deleteCalled, "confirmed_not_activated не должен приводить к grace kick как будто оплаты не было")
 }
@@ -832,13 +835,13 @@ func TestSchedulerGraceKickSkippedWhenFreshStatusCheckFails(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(133)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(323)
 	price := 400
-	_, err = db.CreateUser(userID, "paid_grace_error", "Paid", "uuid-323", &price, &modID)
+	_, err = db.CreateUser(userID, "paid_grace_error", "Paid", strPtrTest("uuid-323"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -859,7 +862,7 @@ func TestSchedulerGraceKickSkippedWhenFreshStatusCheckFails(t *testing.T) {
 	require.NoError(t, err)
 
 	var deleteCalled bool
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/api/users/uuid-323") {
@@ -883,7 +886,7 @@ func TestSchedulerGraceKickSkippedWhenFreshStatusCheckFails(t *testing.T) {
 	b.remnawave = client
 
 	expireAt := time.Now().UTC().Add(-96 * time.Hour)
-	b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-323"}, expireAt, time.Now().UTC())
+	b.processPaidUser(userID, remnawave.UserRef{UUID: "uuid-323"}, expireAt, time.Now().UTC())
 
 	assert.False(t, deleteCalled, "при ошибке свежей проверки статуса scheduler не должен идти в auto-kick")
 
@@ -898,14 +901,14 @@ func TestSchedulerMaintenanceMode(t *testing.T) {
 	b.setMaintenanceMode(true)
 
 	modID := int64(100)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	t.Run("триал: не кикает в maintenance mode", func(t *testing.T) {
 		userID := int64(400)
 		price := 400
-		_, err := db.CreateUser(userID, "trial_maint", "Trial", "uuid-400", &price, &modID)
+		_, err := db.CreateUser(userID, "trial_maint", "Trial", strPtrTest("uuid-400"), nil, &price, &modID)
 		require.NoError(t, err)
 
 		expireDays := 3
@@ -914,7 +917,7 @@ func TestSchedulerMaintenanceMode(t *testing.T) {
 		require.NoError(t, db.ClaimInvite(inv.Code, userID))
 
 		yesterday := time.Now().UTC().AddDate(0, 0, -1)
-		b.processTrialUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-400"}, yesterday, time.Now().UTC())
+		b.processTrialUser(userID, remnawave.UserRef{UUID: "uuid-400"}, yesterday, time.Now().UTC())
 
 		dbUser, err := db.GetUserByTelegramID(userID)
 		require.NoError(t, err)
@@ -924,7 +927,7 @@ func TestSchedulerMaintenanceMode(t *testing.T) {
 	t.Run("grace: не кикает в maintenance mode", func(t *testing.T) {
 		userID := int64(500)
 		price := 400
-		_, err := db.CreateUser(userID, "paid_maint", "Paid", "uuid-500", &price, &modID)
+		_, err := db.CreateUser(userID, "paid_maint", "Paid", strPtrTest("uuid-500"), nil, &price, &modID)
 		require.NoError(t, err)
 
 		expireDays := 30
@@ -946,7 +949,7 @@ func TestSchedulerMaintenanceMode(t *testing.T) {
 		require.NoError(t, err)
 
 		expireAt := time.Now().UTC().Add(-96 * time.Hour)
-		b.processPaidUser(userID, database.User{TelegramID: userID, RemnawaveUUID: "uuid-500"}, expireAt, time.Now().UTC())
+		b.processPaidUser(userID, remnawave.UserRef{UUID: "uuid-500"}, expireAt, time.Now().UTC())
 
 		dbUser, err := db.GetUserByTelegramID(userID)
 		require.NoError(t, err)
@@ -959,7 +962,7 @@ func TestSchedulerRetryConfirmedNotActivated(t *testing.T) {
 	b, db := setupSchedulerTestBot(t)
 
 	userID := int64(600)
-	_, err := db.CreateUser(userID, "retry_user", "Retry", "uuid-600", nil, nil)
+	_, err := db.CreateUser(userID, "retry_user", "Retry", strPtrTest("uuid-600"), nil, nil, nil)
 	require.NoError(t, err)
 
 	payment := &database.Payment{
@@ -977,7 +980,7 @@ func TestSchedulerRetryConfirmedNotActivated(t *testing.T) {
 	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
 
 	var enableCalled bool
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/api/users/uuid-600") {
@@ -1034,13 +1037,13 @@ func TestSchedulerPassDoesNotPunishConfirmedNotActivatedWhenRetryStillFails(t *t
 	b, db := setupSchedulerTestBot(t)
 
 	modID := int64(140)
-	_, err := db.CreateUser(modID, "mod", "Mod", "uuid-mod", nil, nil)
+	_, err := db.CreateUser(modID, "mod", "Mod", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	db.Conn().Exec(`INSERT INTO moderators (telegram_id, added_by) VALUES (?, ?)`, modID, 999)
 
 	userID := int64(630)
 	price := 400
-	_, err = db.CreateUser(userID, "retry_pass_user", "Retry", "uuid-630", &price, &modID)
+	_, err = db.CreateUser(userID, "retry_pass_user", "Retry", strPtrTest("uuid-630"), nil, &price, &modID)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -1067,7 +1070,7 @@ func TestSchedulerPassDoesNotPunishConfirmedNotActivatedWhenRetryStillFails(t *t
 	var disableCalled bool
 	var deleteCalled bool
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {

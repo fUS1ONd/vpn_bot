@@ -90,14 +90,14 @@ func TestProcessBanUser_PersistsBanAndKeepsInviteHistory(t *testing.T) {
 	adminID := int64(999999)
 	targetID := int64(12345)
 
-	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target", nil, nil)
+	_, err = db.CreateUser(targetID, "target", "Target", strPtrTest("uuid-target"), nil, nil, nil)
 	require.NoError(t, err)
 	inv, err := db.CreateInviteWithExpiry(adminID, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.ClaimInvite(inv.Code, targetID))
 	require.NoError(t, db.MarkNotificationSent(targetID, "expire_3d"))
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodDelete && r.URL.Path == "/api/users/uuid-target" {
@@ -157,11 +157,11 @@ func TestHandleAdminReferralLeaderboardMigratesModeratorHistory(t *testing.T) {
 	modID := int64(100)
 	subID := int64(200)
 
-	_, err = db.CreateUser(modID, "moderator", "Модератор", "uuid-mod", nil, nil)
+	_, err = db.CreateUser(modID, "moderator", "Модератор", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
 
-	_, err = db.CreateUser(subID, "sub", "Subscriber", "uuid-sub", nil, nil)
+	_, err = db.CreateUser(subID, "sub", "Subscriber", strPtrTest("uuid-sub"), nil, nil, nil)
 	require.NoError(t, err)
 	inv, err := db.CreateInviteWithExpiry(modID, intPtrAdmin(30))
 	require.NoError(t, err)
@@ -207,7 +207,7 @@ func TestHandleAdminReferralLeaderboardMigratesModeratorHistory(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && r.URL.Path == "/api/users" {
@@ -296,7 +296,7 @@ func TestProcessSwitchSubscriptionID_ValidationErrors(t *testing.T) {
 	adminID := int64(999999)
 	targetID := int64(12345)
 
-	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target", nil, nil)
+	_, err = db.CreateUser(targetID, "target", "Target", strPtrTest("uuid-target"), nil, nil, nil)
 	require.NoError(t, err)
 
 	b := &Bot{
@@ -322,7 +322,7 @@ func TestProcessSwitchSubscriptionID_ValidationErrors(t *testing.T) {
 
 	t.Run("забанен", func(t *testing.T) {
 		otherID := int64(22334)
-		_, err := db.CreateUser(otherID, "banned", "Banned", "uuid-banned", nil, nil)
+		_, err := db.CreateUser(otherID, "banned", "Banned", strPtrTest("uuid-banned"), nil, nil, nil)
 		require.NoError(t, err)
 		days := 30
 		invite, err := db.CreateInviteWithExpiry(777, &days)
@@ -354,9 +354,9 @@ func TestProcessSwitchSubscription_ConfirmFlow(t *testing.T) {
 	modID := int64(100)
 	targetID := int64(12345)
 
-	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod", nil, nil)
+	_, err = db.CreateUser(modID, "moderator", "Moderator", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
-	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target", nil, nil)
+	_, err = db.CreateUser(targetID, "target", "Target", strPtrTest("uuid-target"), nil, nil, nil)
 	require.NoError(t, err)
 
 	days := 30
@@ -368,7 +368,7 @@ func TestProcessSwitchSubscription_ConfirmFlow(t *testing.T) {
 	var patchCount int
 	var lastPatchReq remnawave.UpdateUserRequest
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
@@ -419,7 +419,8 @@ func TestProcessSwitchSubscription_ConfirmFlow(t *testing.T) {
 
 	// EnableUser (PATCH) + UpdateUser (PATCH) = 2 вызова
 	require.Equal(t, 2, patchCount)
-	require.Equal(t, "uuid-target", lastPatchReq.UUID)
+	// Идентификатор в тело подставляет клиент, а не вызывающий код.
+	require.NotNil(t, lastPatchReq.ExpireAt)
 	require.NotNil(t, lastPatchReq.ExpireAt)
 	assert.Equal(t, "2099-01-01T00:00:00Z", *lastPatchReq.ExpireAt)
 
@@ -454,18 +455,18 @@ func TestHandleAdminStats_ShowsFinanceAndConversion(t *testing.T) {
 	graceID := int64(202)
 	infiniteID := int64(203)
 
-	_, err = db.CreateUser(modID, "moderator", "Модератор", "uuid-mod", nil, nil)
+	_, err = db.CreateUser(modID, "moderator", "Модератор", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
 
 	price := 500
-	_, err = db.CreateUser(payingID, "paid", "Paid", "uuid-paid", &price, &modID)
+	_, err = db.CreateUser(payingID, "paid", "Paid", strPtrTest("uuid-paid"), nil, &price, &modID)
 	require.NoError(t, err)
-	_, err = db.CreateUser(trialID, "trial", "Trial", "uuid-trial", &price, &modID)
+	_, err = db.CreateUser(trialID, "trial", "Trial", strPtrTest("uuid-trial"), nil, &price, &modID)
 	require.NoError(t, err)
-	_, err = db.CreateUser(graceID, "grace", "Grace", "uuid-grace", &price, &modID)
+	_, err = db.CreateUser(graceID, "grace", "Grace", strPtrTest("uuid-grace"), nil, &price, &modID)
 	require.NoError(t, err)
-	_, err = db.CreateUser(infiniteID, "inf", "Infinite", "uuid-inf", nil, nil)
+	_, err = db.CreateUser(infiniteID, "inf", "Infinite", strPtrTest("uuid-inf"), nil, nil, nil)
 	require.NoError(t, err)
 
 	finiteInvite, err := db.CreateInviteWithExpiry(modID, intPtrAdmin(30))
@@ -506,7 +507,7 @@ func TestHandleAdminStats_ShowsFinanceAndConversion(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && r.URL.Path == "/api/users" {
@@ -602,17 +603,17 @@ func TestHandleAdminStats_IncludesAdminPaymentsAndModeratorPayouts(t *testing.T)
 	previousMonthPaymentUserID := int64(202)
 	notActivatedPaymentUserID := int64(203)
 
-	_, err = db.CreateUser(modID, "moderator", "Модератор", "uuid-mod", nil, nil)
+	_, err = db.CreateUser(modID, "moderator", "Модератор", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
 
-	_, err = db.CreateUser(moderatorPaymentUserID, "paid-mod", "Paid Mod", "uuid-paid-mod", nil, &modID)
+	_, err = db.CreateUser(moderatorPaymentUserID, "paid-mod", "Paid Mod", strPtrTest("uuid-paid-mod"), nil, nil, &modID)
 	require.NoError(t, err)
-	_, err = db.CreateUser(adminPaymentUserID, "paid-admin", "Paid Admin", "uuid-paid-admin", nil, nil)
+	_, err = db.CreateUser(adminPaymentUserID, "paid-admin", "Paid Admin", strPtrTest("uuid-paid-admin"), nil, nil, nil)
 	require.NoError(t, err)
-	_, err = db.CreateUser(previousMonthPaymentUserID, "paid-prev", "Paid Prev", "uuid-paid-prev", nil, &modID)
+	_, err = db.CreateUser(previousMonthPaymentUserID, "paid-prev", "Paid Prev", strPtrTest("uuid-paid-prev"), nil, nil, &modID)
 	require.NoError(t, err)
-	_, err = db.CreateUser(notActivatedPaymentUserID, "paid-pending", "Paid Pending", "uuid-paid-pending", nil, &modID)
+	_, err = db.CreateUser(notActivatedPaymentUserID, "paid-pending", "Paid Pending", strPtrTest("uuid-paid-pending"), nil, nil, &modID)
 	require.NoError(t, err)
 
 	moderatorPaymentID, err := db.CreatePayment(&database.Payment{
@@ -701,7 +702,7 @@ func TestHandleAdminStats_IncludesAdminPaymentsAndModeratorPayouts(t *testing.T)
 	})
 	require.NoError(t, err)
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodGet && r.URL.Path == "/api/users" && r.URL.Query().Get("size") == "1000" {
@@ -762,11 +763,11 @@ func TestProcessAdminUserInfo_ShowsFullCard(t *testing.T) {
 	targetID := int64(12345)
 	price := 500
 
-	_, err = db.CreateUser(modID, "petr", "Пётр", "uuid-mod", nil, nil)
+	_, err = db.CreateUser(modID, "petr", "Пётр", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
 
-	_, err = db.CreateUser(targetID, "ivan", "Иван", "uuid-target", &price, &modID)
+	_, err = db.CreateUser(targetID, "ivan", "Иван", strPtrTest("uuid-target"), nil, &price, &modID)
 	require.NoError(t, err)
 	invite, err := db.CreateInviteWithExpiry(modID, intPtrAdmin(30))
 	require.NoError(t, err)
@@ -781,7 +782,7 @@ func TestProcessAdminUserInfo_ShowsFullCard(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.ConfirmPayment(paymentID))
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
@@ -842,7 +843,7 @@ func TestAdminChangePriceFlow_UpdatesPaidUser(t *testing.T) {
 	targetID := int64(12345)
 	oldPrice := 500
 
-	_, err = db.CreateUser(targetID, "paid", "Paid", "uuid-target", &oldPrice, nil)
+	_, err = db.CreateUser(targetID, "paid", "Paid", strPtrTest("uuid-target"), nil, &oldPrice, nil)
 	require.NoError(t, err)
 	invite, err := db.CreateInviteWithExpiry(adminID, intPtrAdmin(30))
 	require.NoError(t, err)
@@ -903,11 +904,11 @@ func TestAdminChangePriceFlow_PromptsForLegacyPaidMigration(t *testing.T) {
 	modID := int64(54321)
 	targetID := int64(12346)
 
-	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod", nil, nil)
+	_, err = db.CreateUser(modID, "moderator", "Moderator", strPtrTest("uuid-mod"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
 
-	_, err = db.CreateUser(targetID, "legacy", "Legacy", "uuid-target", nil, nil)
+	_, err = db.CreateUser(targetID, "legacy", "Legacy", strPtrTest("uuid-target"), nil, nil, nil)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -919,7 +920,7 @@ func TestAdminChangePriceFlow_PromptsForLegacyPaidMigration(t *testing.T) {
 	// shouldPromptAdminChangePriceMigration (expireAt.After(now)) не
 	// сработает и тест начнёт падать просто от смены даты сборки.
 	expireAt := time.Now().UTC().AddDate(0, 0, 10)
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
@@ -992,11 +993,11 @@ func TestAdminChangePriceFlow_FailsClosedWhenMigrationLookupFails(t *testing.T) 
 	modID := int64(54325)
 	targetID := int64(12350)
 
-	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod-fail", nil, nil)
+	_, err = db.CreateUser(modID, "moderator", "Moderator", strPtrTest("uuid-mod-fail"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
 
-	_, err = db.CreateUser(targetID, "legacy_fail", "Legacy Fail", "uuid-target-fail", nil, nil)
+	_, err = db.CreateUser(targetID, "legacy_fail", "Legacy Fail", strPtrTest("uuid-target-fail"), nil, nil, nil)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -1006,7 +1007,7 @@ func TestAdminChangePriceFlow_FailsClosedWhenMigrationLookupFails(t *testing.T) 
 
 	b := &Bot{
 		db:         db,
-		remnawave:  remnawave.NewClient("https://panel.example.com", "test-token", nil),
+		remnawave:  newTestPanelClient(),
 		config:     &config.Config{AdminID: adminID, MinSubscriptionPrice: 400},
 		userStates: newStateMap(),
 	}
@@ -1044,11 +1045,11 @@ func TestAdminChangePriceFlow_MigrationNoLeavesTrial(t *testing.T) {
 	modID := int64(54323)
 	targetID := int64(12348)
 
-	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod-no", nil, nil)
+	_, err = db.CreateUser(modID, "moderator", "Moderator", strPtrTest("uuid-mod-no"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
 
-	_, err = db.CreateUser(targetID, "legacy_no", "Legacy No", "uuid-target-no", nil, nil)
+	_, err = db.CreateUser(targetID, "legacy_no", "Legacy No", strPtrTest("uuid-target-no"), nil, nil, nil)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -1057,7 +1058,7 @@ func TestAdminChangePriceFlow_MigrationNoLeavesTrial(t *testing.T) {
 	require.NoError(t, db.ClaimInvite(inv.Code, targetID))
 
 	expireAt := time.Now().UTC().AddDate(0, 0, 10)
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
@@ -1121,11 +1122,11 @@ func TestAdminChangePriceFlow_MigrationCancelClearsSession(t *testing.T) {
 	modID := int64(54324)
 	targetID := int64(12349)
 
-	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod-cancel", nil, nil)
+	_, err = db.CreateUser(modID, "moderator", "Moderator", strPtrTest("uuid-mod-cancel"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
 
-	_, err = db.CreateUser(targetID, "legacy_cancel", "Legacy Cancel", "uuid-target-cancel", nil, nil)
+	_, err = db.CreateUser(targetID, "legacy_cancel", "Legacy Cancel", strPtrTest("uuid-target-cancel"), nil, nil, nil)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -1134,7 +1135,7 @@ func TestAdminChangePriceFlow_MigrationCancelClearsSession(t *testing.T) {
 	require.NoError(t, db.ClaimInvite(inv.Code, targetID))
 
 	expireAt := time.Now().UTC().AddDate(0, 0, 10)
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
@@ -1192,11 +1193,11 @@ func TestAdminChangePriceFlow_DoesNotPromptForFreshTrial(t *testing.T) {
 	targetID := int64(12347)
 	invitePrice := 500
 
-	_, err = db.CreateUser(modID, "moderator", "Moderator", "uuid-mod-2", nil, nil)
+	_, err = db.CreateUser(modID, "moderator", "Moderator", strPtrTest("uuid-mod-2"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.AddModerator(modID, adminID))
 
-	_, err = db.CreateUser(targetID, "fresh", "Fresh", "uuid-target-2", &invitePrice, nil)
+	_, err = db.CreateUser(targetID, "fresh", "Fresh", strPtrTest("uuid-target-2"), nil, &invitePrice, nil)
 	require.NoError(t, err)
 
 	expireDays := 30
@@ -1210,7 +1211,7 @@ func TestAdminChangePriceFlow_DoesNotPromptForFreshTrial(t *testing.T) {
 	assert.Equal(t, invitePrice, *initialUser.SubscriptionPrice)
 
 	expireAt := time.Now().UTC().AddDate(0, 0, 10)
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
@@ -1269,10 +1270,10 @@ func TestProcessAdminUserInfo_ShowsNonSuccessStatusForGraceUser(t *testing.T) {
 	targetID := int64(22334)
 	price := 500
 
-	_, err = db.CreateUser(targetID, "grace", "Grace", "uuid-grace-user", &price, nil)
+	_, err = db.CreateUser(targetID, "grace", "Grace", strPtrTest("uuid-grace-user"), nil, &price, nil)
 	require.NoError(t, err)
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {

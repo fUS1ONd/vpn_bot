@@ -36,10 +36,13 @@ type InviteWithUser struct {
 // Subscriber содержит подписчика модератора.
 // Поля профиля могут быть nil, если пользователь удалён из users.
 type Subscriber struct {
-	TelegramID        int64
-	Username          *string
-	FirstName         *string
+	TelegramID int64
+	Username   *string
+	FirstName  *string
+	// RemnawaveUUID есть только у пользователей, созданных на панели 2.8.x;
+	// RemnawaveID заполнен в обеих версиях и единственный на 3.x.
 	RemnawaveUUID     *string
+	RemnawaveID       *int64
 	SubscriptionPrice *int
 }
 
@@ -675,7 +678,7 @@ func (db *DB) GetSubscribersByModerator(moderatorID int64) ([]Subscriber, error)
 		     FROM invites i
 		     WHERE i.created_by = ? AND i.used_by IS NOT NULL
 		 )
-		 SELECT r.used_by, u.username, u.first_name, u.remnawave_uuid,
+		 SELECT r.used_by, u.username, u.first_name, u.remnawave_uuid, u.remnawave_id,
 		        COALESCE(u.subscription_price, r.inv_price)
 		 FROM ranked r
 		 LEFT JOIN users u ON r.used_by = u.telegram_id
@@ -695,9 +698,10 @@ func (db *DB) GetSubscribersByModerator(moderatorID int64) ([]Subscriber, error)
 		var username sql.NullString
 		var firstName sql.NullString
 		var remnawaveUUID sql.NullString
+		var remnawaveID sql.NullInt64
 		var subscriptionPrice sql.NullInt64
 
-		if err := rows.Scan(&usedBy, &username, &firstName, &remnawaveUUID, &subscriptionPrice); err != nil {
+		if err := rows.Scan(&usedBy, &username, &firstName, &remnawaveUUID, &remnawaveID, &subscriptionPrice); err != nil {
 			return nil, fmt.Errorf("failed to scan subscriber: %w", err)
 		}
 
@@ -716,6 +720,10 @@ func (db *DB) GetSubscribersByModerator(moderatorID int64) ([]Subscriber, error)
 		if remnawaveUUID.Valid {
 			v := remnawaveUUID.String
 			sub.RemnawaveUUID = &v
+		}
+		if remnawaveID.Valid {
+			v := remnawaveID.Int64
+			sub.RemnawaveID = &v
 		}
 		if subscriptionPrice.Valid {
 			v := int(subscriptionPrice.Int64)

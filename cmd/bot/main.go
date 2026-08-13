@@ -89,6 +89,42 @@ func main() {
 		cfg.RemnawaveSquadUUIDs,
 	)
 
+	// Версия API панели определяется до любых обращений к ней: reconcile ниже уже
+	// ходит в панель, и к этому моменту контракт должен быть известен. Неуспех — не
+	// повод падать: панель может подняться позже, а часть функций бота (оплата в БД,
+	// багрепорты, админка) от неё не зависит.
+	panelVersion, err := remnawaveClient.DetectAPIVersion()
+	if err != nil {
+		slog.Warn("Failed to detect Remnawave panel version on startup", "error", err)
+	} else {
+		slog.Info("Remnawave panel contract detected", "contract", panelVersion.String())
+	}
+
+	// Заполнение users.remnawave_id. На 2.8.x это одна операция на всю базу, и она
+	// обязана отработать до обновления панели: после апгрейда UUID удаляется
+	// физически. На 3.x проход дороже (запрос на пользователя), поэтому уходит в фон
+	// и не задерживает старт — до него пользователя выручает ленивое восстановление.
+	switch panelVersion {
+	case remnawave.APIVersionV2:
+		if stats, err := bot.BackfillRemnawaveIDs(db, remnawaveClient); err != nil {
+			slog.Error("Backfill of remnawave_id failed", "error", err)
+		} else if stats.Linked > 0 || stats.Missing > 0 || stats.Failed > 0 {
+			slog.Warn("Backfill of remnawave_id completed",
+				"linked", stats.Linked, "missing", stats.Missing, "failed", stats.Failed)
+		}
+	case remnawave.APIVersionV3:
+		go func() {
+			if _, err := bot.BackfillRemnawaveIDs(db, remnawaveClient); err != nil {
+				slog.Error("Background backfill of remnawave_id failed", "error", err)
+			}
+		}()
+	default:
+		// Версия неизвестна — панель недоступна. Связки доберёт плановый проход
+		// scheduler (он сверяет весь список пользователей панели) и ленивое
+		// восстановление при первом обращении.
+		slog.Warn("Backfill of remnawave_id skipped: panel version is unknown, will rely on scheduler top-up")
+	}
+
 	// Восстановление регистраций, застрявших после краша между Remnawave и локальной БД.
 	if stats, err := bot.ReconcileOrphanedRegistrations(db, remnawaveClient); err != nil {
 		slog.Error("Failed to reconcile orphaned registrations", "error", err)

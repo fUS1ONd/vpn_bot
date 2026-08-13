@@ -110,7 +110,7 @@ func TestHandleAdminExtendConfirm_NotAdmin(t *testing.T) {
 	targetID := int64(12345)
 
 	var patchCount int
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodPatch {
@@ -149,7 +149,7 @@ func TestHandleAdminExtendConfirm_InvalidTargetID(t *testing.T) {
 	adminID := int64(999999)
 
 	var patchCount int
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method == http.MethodPatch {
@@ -189,7 +189,7 @@ func TestHandleAdminExtendConfirm_Success(t *testing.T) {
 	adminID := int64(999999)
 	targetID := int64(12345)
 
-	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target", nil, nil)
+	_, err = db.CreateUser(targetID, "target", "Target", strPtrTest("uuid-target"), nil, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, db.MarkNotificationSent(targetID, "expire_3d"))
 
@@ -201,19 +201,19 @@ func TestHandleAdminExtendConfirm_Success(t *testing.T) {
 	var patchCount int
 	var lastPatchReq remnawave.UpdateUserRequest
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
 			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-target":
-				payload := fmt.Sprintf(`{"response":{"uuid":"uuid-target","username":"target","status":"ACTIVE","expireAt":"%s"}}`, currentExpireAt.Format(time.RFC3339))
+				payload := fmt.Sprintf(`{"response":{"uuid":"uuid-target","telegramId":12345,"username":"target","status":"ACTIVE","expireAt":"%s"}}`, currentExpireAt.Format(time.RFC3339))
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(payload)),
 					Header:     make(http.Header),
 				}, nil
 			case r.Method == http.MethodGet && r.URL.Path == "/api/users/by-telegram-id/12345":
-				payload := fmt.Sprintf(`{"response":{"uuid":"uuid-target","username":"target","status":"ACTIVE","expireAt":"%s"}}`, wantExpireAt.Format(time.RFC3339))
+				payload := fmt.Sprintf(`{"response":[{"uuid":"uuid-target","telegramId":12345,"username":"target","status":"ACTIVE","expireAt":"%s"}]}`, wantExpireAt.Format(time.RFC3339))
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(payload)),
@@ -276,19 +276,19 @@ func TestHandleAdminExtendConfirm_DoubleClickCooldown(t *testing.T) {
 	adminID := int64(999999)
 	targetID := int64(12345)
 
-	_, err = db.CreateUser(targetID, "target", "Target", "uuid-target", nil, nil)
+	_, err = db.CreateUser(targetID, "target", "Target", strPtrTest("uuid-target"), nil, nil, nil)
 	require.NoError(t, err)
 
 	currentExpireAt := time.Now().UTC().AddDate(0, 0, 10)
 
 	var patchCount int
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
 			case r.Method == http.MethodGet && r.URL.Path == "/api/users/uuid-target":
-				payload := fmt.Sprintf(`{"response":{"uuid":"uuid-target","username":"target","status":"ACTIVE","expireAt":"%s"}}`, currentExpireAt.Format(time.RFC3339))
+				payload := fmt.Sprintf(`{"response":{"uuid":"uuid-target","telegramId":12345,"username":"target","status":"ACTIVE","expireAt":"%s"}}`, currentExpireAt.Format(time.RFC3339))
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(payload)),

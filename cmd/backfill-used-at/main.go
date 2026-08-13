@@ -109,8 +109,17 @@ func main() {
 			continue
 		}
 
-		// Получаем данные из Remnawave
-		remnawaveUser, err := client.GetUser(user.RemnawaveUUID)
+		// Получаем данные из Remnawave. Ссылка собирается из обеих половин связки:
+		// клиент сам выберет нужную по версии панели.
+		ref := remnawave.UserRef{}
+		if user.RemnawaveUUID != nil {
+			ref.UUID = *user.RemnawaveUUID
+		}
+		if user.RemnawaveID != nil {
+			ref.ID = *user.RemnawaveID
+		}
+
+		remnawaveUser, err := client.GetUser(ref)
 		if err != nil {
 			fmt.Printf("❌ Код %s: ошибка Remnawave API: %v\n", inv.Code, err)
 			errors++

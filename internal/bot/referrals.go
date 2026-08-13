@@ -62,7 +62,7 @@ func (b *Bot) canCreateReferralInvite(telegramID int64) (bool, error) {
 	if err != nil || user == nil {
 		return false, err
 	}
-	remUser, err := b.remnawave.GetUser(user.RemnawaveUUID)
+	remUser, err := b.remnawaveUser(telegramID)
 	if err != nil || remUser == nil {
 		return false, err
 	}

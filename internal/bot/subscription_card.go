@@ -80,7 +80,7 @@ func (b *Bot) buildSubscriptionCard(telegramID int64, remUser *remnawave.User) (
 	}
 
 	var devicesCount *int
-	count, err := b.remnawave.GetUserHwidDevicesCount(remUser.UUID)
+	count, err := b.remnawave.GetUserHwidDevicesCount(remUser.Ref())
 	if err != nil {
 		slog.Warn("Failed to get user HWID devices for status", "error", err, "telegram_id", telegramID)
 	} else {
@@ -128,12 +128,12 @@ func editWithInlineFallback(c tele.Context, msg string, markup *tele.ReplyMarkup
 func (b *Bot) handleSubscriptionCard(c tele.Context) error {
 	telegramID := c.Sender().ID
 
-	user, err := b.db.GetUserByTelegramID(telegramID)
-	if err != nil || user == nil {
+	ref, ok := b.resolveUserRef(telegramID)
+	if !ok {
 		return c.RespondAlert("Сначала активируйте подписку")
 	}
 
-	remUser, err := b.remnawave.GetUser(user.RemnawaveUUID)
+	remUser, err := b.remnawave.GetUser(ref)
 	if err != nil {
 		slog.Error("Failed to get user from Remnawave for card", "error", err, "telegram_id", telegramID)
 		return c.RespondAlert("Ошибка получения статуса. Попробуйте позже.")
@@ -148,7 +148,7 @@ func (b *Bot) handleSubscriptionCard(c tele.Context) error {
 
 // handleSubRevoke показывает экран подтверждения перевыпуска ссылки.
 func (b *Bot) handleSubRevoke(c tele.Context) error {
-	if _, ok := b.resolveUserUUID(c.Sender().ID); !ok {
+	if _, ok := b.resolveUserRef(c.Sender().ID); !ok {
 		return c.RespondAlert("Сначала активируйте подписку")
 	}
 
@@ -202,7 +202,7 @@ func (b *Bot) applyRevoke(telegramID int64) (*remnawave.User, error) {
 		}
 	}
 
-	uuid, ok := b.resolveUserUUID(telegramID)
+	ref, ok := b.resolveUserRef(telegramID)
 	if !ok {
 		return nil, errRevokeUserNotFound
 	}
@@ -212,7 +212,7 @@ func (b *Bot) applyRevoke(telegramID int64) (*remnawave.User, error) {
 	// пользователя в grace или триал упёрся в лимит трафика. Перечитываем
 	// состояние и отказываем там же, где кнопки не должно быть видно, — иначе
 	// перевыпуск сбросил бы устройства в состоянии, где спека его запрещает.
-	current, err := b.remnawave.GetUser(uuid)
+	current, err := b.remnawave.GetUser(ref)
 	if err != nil {
 		slog.Error("Failed to reload Remnawave user before revoke", "error", err, "telegram_id", telegramID)
 		return nil, errRevokeLoadFailed
@@ -221,19 +221,19 @@ func (b *Bot) applyRevoke(telegramID int64) (*remnawave.User, error) {
 		return nil, errRevokeUnavailable
 	}
 
-	if err := b.remnawave.DeleteAllUserHwidDevices(uuid); err != nil {
+	if err := b.remnawave.DeleteAllUserHwidDevices(ref); err != nil {
 		slog.Error("Failed to reset devices before revoke", "error", err, "telegram_id", telegramID)
 		return nil, fmt.Errorf("%w: %v", errRevokeDevicesFailed, err)
 	}
 
-	remUser, err := b.remnawave.RevokeUserSubscription(uuid)
+	remUser, err := b.remnawave.RevokeUserSubscription(ref)
 	if err != nil {
 		slog.Error("Failed to revoke subscription", "error", err, "telegram_id", telegramID)
 
 		// Ответ мог потеряться уже после того, как панель выполнила перевыпуск
 		// (таймаут, разрыв соединения). Утверждать про состояние доступа то,
 		// чего не проверяли, нельзя: перечитываем и сравниваем ссылку.
-		actual, getErr := b.remnawave.GetUser(uuid)
+		actual, getErr := b.remnawave.GetUser(ref)
 		switch {
 		case getErr != nil:
 			return nil, fmt.Errorf("%w: %v", errRevokeUnknown, err)

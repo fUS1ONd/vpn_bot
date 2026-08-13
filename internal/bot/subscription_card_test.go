@@ -28,12 +28,12 @@ func setupRevokeBot(t *testing.T, telegramID int64, deleteAllErr, revokeErr bool
 	t.Helper()
 
 	b, db := setupTestBot(t)
-	_, err := db.CreateUser(telegramID, "user", "User", "uuid-sub", nil, nil)
+	_, err := db.CreateUser(telegramID, "user", "User", strPtrTest("uuid-sub"), nil, nil, nil)
 	require.NoError(t, err)
 
 	counters := &revokeStubCounters{}
 
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			jsonResp := func(payload any) (*http.Response, error) {
@@ -238,11 +238,11 @@ func TestRevokeCooldownAlertNamesRemainingTime(t *testing.T) {
 func TestApplyRevokeTreatsChangedURLAsSuccessWhenResponseLost(t *testing.T) {
 	const telegramID = int64(4010)
 	b, db := setupTestBot(t)
-	_, err := db.CreateUser(telegramID, "user", "User", "uuid-sub", nil, nil)
+	_, err := db.CreateUser(telegramID, "user", "User", strPtrTest("uuid-sub"), nil, nil, nil)
 	require.NoError(t, err)
 
 	revoked := false
-	client := remnawave.NewClient("https://panel.example.com", "test-token", nil)
+	client := newTestPanelClient()
 	client.SetHTTPClient(&http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			jsonResp := func(payload any) (*http.Response, error) {

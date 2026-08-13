@@ -5,17 +5,93 @@ import (
 	"fmt"
 )
 
+// userColumns — список колонок в порядке, в котором его ждёт scanUser.
+const userColumns = `telegram_id, username, first_name, remnawave_uuid, remnawave_id,
+	subscription_price, moderator_id, invited_by, legacy_paid_migrated, created_at`
+
+// rowScanner объединяет *sql.Row и *sql.Rows — оба умеют Scan.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanUser читает строку users. Все nullable-колонки идут через sql.Null*:
+// remnawave_uuid стал nullable вместе с переходом на 3.x, и прямой Scan в string
+// падал бы с «converting NULL to string is unsupported» на каждом пользователе,
+// зарегистрированном после апгрейда панели.
+func scanUser(scanner rowScanner) (*User, error) {
+	var user User
+	var firstName sql.NullString
+	var remnawaveUUID sql.NullString
+	var remnawaveID sql.NullInt64
+	var subPrice sql.NullInt64
+	var modID sql.NullInt64
+	var invitedBy sql.NullInt64
+	var legacyPaidMigrated sql.NullInt64
+
+	err := scanner.Scan(
+		&user.TelegramID, &user.Username, &firstName, &remnawaveUUID, &remnawaveID,
+		&subPrice, &modID, &invitedBy, &legacyPaidMigrated, &user.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if firstName.Valid {
+		user.FirstName = firstName.String
+	}
+	if remnawaveUUID.Valid && remnawaveUUID.String != "" {
+		uuid := remnawaveUUID.String
+		user.RemnawaveUUID = &uuid
+	}
+	if remnawaveID.Valid && remnawaveID.Int64 != 0 {
+		id := remnawaveID.Int64
+		user.RemnawaveID = &id
+	}
+	if subPrice.Valid {
+		v := int(subPrice.Int64)
+		user.SubscriptionPrice = &v
+	}
+	if modID.Valid {
+		user.ModeratorID = &modID.Int64
+	}
+	if invitedBy.Valid {
+		user.InvitedBy = &invitedBy.Int64
+	}
+	user.LegacyPaidMigrated = legacyPaidMigrated.Valid && legacyPaidMigrated.Int64 != 0
+
+	return &user, nil
+}
+
+// nullableUUID приводит пустой UUID к NULL. Колонка remnawave_uuid объявлена
+// UNIQUE: SQLite допускает сколько угодно NULL, но не две пустые строки, —
+// иначе второй же зарегистрировавшийся на 3.x пользователь получил бы
+// UNIQUE constraint failed.
+func nullableUUID(uuid *string) any {
+	if uuid == nil || *uuid == "" {
+		return nil
+	}
+	return *uuid
+}
+
+// nullableID приводит нулевой id к NULL по той же причине, что и UUID.
+func nullableID(id *int64) any {
+	if id == nil || *id == 0 {
+		return nil
+	}
+	return *id
+}
+
 // CreateUser создаёт нового пользователя
-func (db *DB) CreateUser(telegramID int64, username, firstName, remnawaveUUID string, subscriptionPrice *int, moderatorID *int64) (*User, error) {
-	return db.CreateUserWithInviter(telegramID, username, firstName, remnawaveUUID, subscriptionPrice, moderatorID, moderatorID)
+func (db *DB) CreateUser(telegramID int64, username, firstName string, remnawaveUUID *string, remnawaveID *int64, subscriptionPrice *int, moderatorID *int64) (*User, error) {
+	return db.CreateUserWithInviter(telegramID, username, firstName, remnawaveUUID, remnawaveID, subscriptionPrice, moderatorID, moderatorID)
 }
 
 // CreateUserWithInviter создаёт пользователя с раздельными архивным moderator_id
 // и нейтральным first-touch invited_by.
-func (db *DB) CreateUserWithInviter(telegramID int64, username, firstName, remnawaveUUID string, subscriptionPrice *int, moderatorID, invitedBy *int64) (*User, error) {
+func (db *DB) CreateUserWithInviter(telegramID int64, username, firstName string, remnawaveUUID *string, remnawaveID *int64, subscriptionPrice *int, moderatorID, invitedBy *int64) (*User, error) {
 	_, err := db.conn.Exec(
-		`INSERT INTO users (telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, invited_by, legacy_paid_migrated) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
-		telegramID, username, firstName, remnawaveUUID, subscriptionPrice, moderatorID, invitedBy,
+		`INSERT INTO users (telegram_id, username, first_name, remnawave_uuid, remnawave_id, subscription_price, moderator_id, invited_by, legacy_paid_migrated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		telegramID, username, firstName, nullableUUID(remnawaveUUID), nullableID(remnawaveID), subscriptionPrice, moderatorID, invitedBy,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
@@ -26,85 +102,71 @@ func (db *DB) CreateUserWithInviter(telegramID int64, username, firstName, remna
 
 // GetUserByTelegramID получает пользователя по Telegram ID
 func (db *DB) GetUserByTelegramID(telegramID int64) (*User, error) {
-	var user User
-	var firstName sql.NullString
-	var subPrice sql.NullInt64
-	var modID sql.NullInt64
-	var invitedBy sql.NullInt64
-	var legacyPaidMigrated sql.NullInt64
-	err := db.conn.QueryRow(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, invited_by, legacy_paid_migrated, created_at FROM users WHERE telegram_id = ?`,
-		telegramID,
-	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &invitedBy, &legacyPaidMigrated, &user.CreatedAt)
-
+	user, err := scanUser(db.conn.QueryRow(
+		`SELECT `+userColumns+` FROM users WHERE telegram_id = ?`, telegramID,
+	))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
-
-	if firstName.Valid {
-		user.FirstName = firstName.String
-	}
-	if subPrice.Valid {
-		v := int(subPrice.Int64)
-		user.SubscriptionPrice = &v
-	}
-	if modID.Valid {
-		user.ModeratorID = &modID.Int64
-	}
-	if invitedBy.Valid {
-		user.InvitedBy = &invitedBy.Int64
-	}
-	user.LegacyPaidMigrated = legacyPaidMigrated.Valid && legacyPaidMigrated.Int64 != 0
-
-	return &user, nil
+	return user, nil
 }
 
-// GetUserByRemnawaveUUID получает пользователя по Remnawave UUID
+// GetUserByRemnawaveUUID получает пользователя по Remnawave UUID.
+// Работает только для записей, созданных на панели 2.8.x.
 func (db *DB) GetUserByRemnawaveUUID(uuid string) (*User, error) {
-	var user User
-	var firstName sql.NullString
-	var subPrice sql.NullInt64
-	var modID sql.NullInt64
-	var invitedBy sql.NullInt64
-	var legacyPaidMigrated sql.NullInt64
-	err := db.conn.QueryRow(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, invited_by, legacy_paid_migrated, created_at FROM users WHERE remnawave_uuid = ?`,
-		uuid,
-	).Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &invitedBy, &legacyPaidMigrated, &user.CreatedAt)
-
+	user, err := scanUser(db.conn.QueryRow(
+		`SELECT `+userColumns+` FROM users WHERE remnawave_uuid = ?`, uuid,
+	))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
+	return user, nil
+}
 
-	if firstName.Valid {
-		user.FirstName = firstName.String
+// GetUserByRemnawaveID получает пользователя по числовому идентификатору панели.
+func (db *DB) GetUserByRemnawaveID(id int64) (*User, error) {
+	user, err := scanUser(db.conn.QueryRow(
+		`SELECT `+userColumns+` FROM users WHERE remnawave_id = ?`, id,
+	))
+	if err == sql.ErrNoRows {
+		return nil, nil
 	}
-	if subPrice.Valid {
-		v := int(subPrice.Int64)
-		user.SubscriptionPrice = &v
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
-	if modID.Valid {
-		user.ModeratorID = &modID.Int64
-	}
-	if invitedBy.Valid {
-		user.InvitedBy = &invitedBy.Int64
-	}
-	user.LegacyPaidMigrated = legacyPaidMigrated.Valid && legacyPaidMigrated.Int64 != 0
+	return user, nil
+}
 
-	return &user, nil
+// SetRemnawaveID сохраняет числовой идентификатор пользователя панели.
+// Уникальный индекс не даст привязать один и тот же id к двум Telegram ID:
+// такая ошибка означает рассинхрон с панелью, и молчать о ней нельзя.
+func (db *DB) SetRemnawaveID(telegramID, remnawaveID int64) error {
+	_, err := db.conn.Exec(`UPDATE users SET remnawave_id = ? WHERE telegram_id = ?`, remnawaveID, telegramID)
+	if err != nil {
+		return fmt.Errorf("failed to set remnawave_id for telegram_id=%d: %w", telegramID, err)
+	}
+	return nil
+}
+
+// UsersMissingRemnawaveID возвращает пользователей без связки с числовым id —
+// то, что добирают backfill при старте и плановая доливка scheduler.
+func (db *DB) UsersMissingRemnawaveID() ([]User, error) {
+	return db.queryUsers(`SELECT ` + userColumns + ` FROM users WHERE remnawave_id IS NULL ORDER BY created_at`)
 }
 
 // GetAllUsers получает всех пользователей
 func (db *DB) GetAllUsers() ([]User, error) {
-	rows, err := db.conn.Query(
-		`SELECT telegram_id, username, first_name, remnawave_uuid, subscription_price, moderator_id, invited_by, legacy_paid_migrated, created_at FROM users ORDER BY created_at`,
-	)
+	return db.queryUsers(`SELECT ` + userColumns + ` FROM users ORDER BY created_at`)
+}
+
+func (db *DB) queryUsers(query string, args ...any) ([]User, error) {
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query users: %w", err)
 	}
@@ -112,30 +174,11 @@ func (db *DB) GetAllUsers() ([]User, error) {
 
 	var users []User
 	for rows.Next() {
-		var user User
-		var firstName sql.NullString
-		var subPrice sql.NullInt64
-		var modID sql.NullInt64
-		var invitedBy sql.NullInt64
-		var legacyPaidMigrated sql.NullInt64
-		if err := rows.Scan(&user.TelegramID, &user.Username, &firstName, &user.RemnawaveUUID, &subPrice, &modID, &invitedBy, &legacyPaidMigrated, &user.CreatedAt); err != nil {
+		user, err := scanUser(rows)
+		if err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
 		}
-		if firstName.Valid {
-			user.FirstName = firstName.String
-		}
-		if subPrice.Valid {
-			v := int(subPrice.Int64)
-			user.SubscriptionPrice = &v
-		}
-		if modID.Valid {
-			user.ModeratorID = &modID.Int64
-		}
-		if invitedBy.Valid {
-			user.InvitedBy = &invitedBy.Int64
-		}
-		user.LegacyPaidMigrated = legacyPaidMigrated.Valid && legacyPaidMigrated.Int64 != 0
-		users = append(users, user)
+		users = append(users, *user)
 	}
 
 	if err := rows.Err(); err != nil {
