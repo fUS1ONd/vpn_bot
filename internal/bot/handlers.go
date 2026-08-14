@@ -31,39 +31,43 @@ const (
 
 // Bot представляет Telegram бота
 type Bot struct {
-	bot                    *tele.Bot
-	db                     *database.DB
-	remnawave              *remnawave.Client
-	config                 *config.Config
-	userStates             *stateMap
-	metricsClient          *monitoring.MetricsClient // клиент метрик VM
-	dashboardMgr           *dashboardManager         // менеджер сессий дашборда
-	sdConfigsPath          string                    // путь к sd_configs (для чтения targets)
-	render                 *render.Client            // клиент render-сервиса (nil если не настроен)
-	platega                *platega.Client           // Platega API клиент (nil если не настроен)
-	yookassa               *yookassa.Client          // ЮKassa API клиент (nil если не настроен)
-	moynalog               *moynalog.Client          // Клиент кабинета «Мой налог» (nil если не настроен)
-	maintenanceMode        atomic.Bool               // Режим обслуживания (сбрасывается при перезапуске)
-	paymentRetryDelays     []time.Duration           // Тестовые override-задержки для короткого background retry активации
-	paymentRetryInFlight   sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
-	shutdownCh             chan struct{}             // Закрывается при Stop() для отмены фоновых горутин
-	userLimiter            *userRateLimiter          // per-user rate limiter для команд бота
-	adminSwitchMu          sync.RWMutex
-	adminSwitchData        map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
-	adminPriceMu           sync.RWMutex
-	adminPriceData         map[int64]adminChangePriceSession // pending-данные изменения цены для админа
-	bugReportMu            sync.RWMutex
-	bugReportData          map[int64]bugReportSession // pending-данные багрепорта
-	bugReportCooldown      sync.Map                   // telegram_id -> time.Time последней отправки
-	adminExtendCooldown    sync.Map                   // telegram_id -> time.Time последнего продления (защита от дабл-клика)
-	unmatchedEventReported sync.Map                   // object_id -> struct{}, чтобы повторные доставки не спамили владельца
-	receiptsInFlight       sync.WaitGroup             // Запущенные пробития чеков — чтобы дождаться их при остановке
-	receiptsStopMu         sync.RWMutex               // Закрывает приём новых пробитий, чтобы Add не гонялся с Wait
-	receiptsStopped        bool                       // true после Stop(): новые пробития не начинаем
-	receiptAuthBlocked     atomic.Bool                // Кабинет не принял вход — проход по чекам прерывается до следующего раза
-	receiptAlerted         sync.Map                   // ключ алерта по чекам -> struct{}, защита от повторов
-	subRevokeCooldown      sync.Map                   // telegram_id -> time.Time последнего перевыпуска ссылки
-	panelAuthAlerted       sync.Map                   // ключ алерта про токен панели -> struct{}, защита от повторов
+	bot                      *tele.Bot
+	db                       *database.DB
+	remnawave                *remnawave.Client
+	config                   *config.Config
+	userStates               *stateMap
+	metricsClient            *monitoring.MetricsClient // клиент метрик VM
+	dashboardMgr             *dashboardManager         // менеджер сессий дашборда
+	sdConfigsPath            string                    // путь к sd_configs (для чтения targets)
+	render                   *render.Client            // клиент render-сервиса (nil если не настроен)
+	platega                  *platega.Client           // Platega API клиент (nil если не настроен)
+	yookassa                 *yookassa.Client          // ЮKassa API клиент (nil если не настроен)
+	moynalog                 *moynalog.Client          // Клиент кабинета «Мой налог» (nil если не настроен)
+	maintenanceMode          atomic.Bool               // Режим обслуживания (сбрасывается при перезапуске)
+	paymentRetryDelays       []time.Duration           // Тестовые override-задержки для короткого background retry активации
+	paymentRetryInFlight     sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
+	shutdownCh               chan struct{}             // Закрывается при Stop() для отмены фоновых горутин
+	userLimiter              *userRateLimiter          // per-user rate limiter для команд бота
+	adminSwitchMu            sync.RWMutex
+	adminSwitchData          map[int64]adminSwitchSession // pending-данные перевода тарифа для админа
+	adminPriceMu             sync.RWMutex
+	adminPriceData           map[int64]adminChangePriceSession // pending-данные изменения цены для админа
+	bugReportMu              sync.RWMutex
+	bugReportData            map[int64]bugReportSession // pending-данные багрепорта
+	bugReportCooldown        sync.Map                   // telegram_id -> time.Time последней отправки
+	adminExtendCooldown      sync.Map                   // telegram_id -> time.Time последнего продления (защита от дабл-клика)
+	unmatchedEventReported   sync.Map                   // object_id -> struct{}, чтобы повторные доставки не спамили владельца
+	receiptsInFlight         sync.WaitGroup             // Запущенные пробития чеков — чтобы дождаться их при остановке
+	receiptsStopMu           sync.RWMutex               // Закрывает приём новых пробитий, чтобы Add не гонялся с Wait
+	receiptsStopped          bool                       // true после Stop(): новые пробития не начинаем
+	receiptAuthBlocked       atomic.Bool                // Кабинет не принял вход — проход по чекам прерывается до следующего раза
+	receiptAlerted           sync.Map                   // ключ алерта по чекам -> struct{}, защита от повторов
+	subRevokeCooldown        sync.Map                   // telegram_id -> time.Time последнего перевыпуска ссылки
+	communityDeclineMu       sync.Mutex                 // Делает «проверить кулдаун и занять его» одной операцией
+	communityDeclineCooldown sync.Map                   // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
+	communityMentionMu       sync.Mutex                 // Делает «прочитать кулдаун приписки и занять его» одной операцией
+	communityPendingAlerted  sync.Map                   // telegram_id -> struct{}, защита от потока алертов о зависших заявках
+	panelAuthAlerted         sync.Map                   // ключ алерта про токен панели -> struct{}, защита от повторов
 }
 
 // buildBotSettings собирает настройки telebot.
@@ -158,6 +162,13 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	if cfg.MoynalogEnabled() {
 		bot.moynalog = moynalog.NewClient(cfg.MoynalogINN, cfg.MoynalogPassword)
 		slog.Info("Moynalog client initialized", "service_name", cfg.MoynalogServiceName)
+	}
+
+	// Канал подключается двумя переменными окружения. Без них обработчик заявок
+	// не регистрируется вовсе — бот ведёт себя ровно как раньше.
+	if cfg.CommunityEnabled() {
+		b.Handle(tele.OnChatJoinRequest, bot.handleChatJoinRequest)
+		slog.Info("Community channel enabled", "chat_id", cfg.CommunityChatID)
 	}
 
 	// Регистрация обработчиков
