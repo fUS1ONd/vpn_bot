@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -63,6 +64,19 @@ type Config struct {
 	MoynalogINN         string
 	MoynalogPassword    string
 	MoynalogServiceName string // Базовая часть наименования услуги, к ней приписывается метка
+
+	// Канал — форум-супергруппа сообщества (опционально). Фича включается
+	// только когда заданы обе переменные: без ID бот не знает, чьи заявки
+	// обрабатывать, без ссылки — некуда звать.
+	CommunityChatID     int64  // Числовой ID супергруппы (обычно отрицательный, -100…)
+	CommunityInviteLink string // Постоянная инвайт-ссылка с одобрением заявок
+}
+
+// CommunityEnabled сообщает, подключён ли Канал. Без обеих переменных бот
+// работает ровно как раньше: обработчик заявок не регистрируется, упоминания
+// Канала не показываются.
+func (c *Config) CommunityEnabled() bool {
+	return c != nil && c.CommunityChatID != 0 && c.CommunityInviteLink != ""
 }
 
 // MoynalogEnabled сообщает, настроена ли интеграция с кабинетом «Мой налог».
@@ -108,6 +122,8 @@ func Load() (*Config, error) {
 		MoynalogINN:              strings.TrimSpace(os.Getenv("MOYNALOG_INN")),
 		MoynalogPassword:         os.Getenv("MOYNALOG_PASSWORD"),
 		MoynalogServiceName:      getEnvOrDefault("MOYNALOG_SERVICE_NAME", "Sarvizza - Подписка на месяц"),
+		CommunityChatID:          getOptionalInt64("COMMUNITY_CHAT_ID"),
+		CommunityInviteLink:      strings.TrimSpace(os.Getenv("COMMUNITY_INVITE_LINK")),
 	}
 
 	// Парсинг AdminID
@@ -135,6 +151,13 @@ func Load() (*Config, error) {
 	}
 	if cfg.SupportContact == "" {
 		return nil, fmt.Errorf("SUPPORT_CONTACT is required")
+	}
+
+	// Половина настройки Канала — почти наверняка опечатка, а не решение
+	// обойтись без фичи. Молчаливое выключение владелец заметит нескоро:
+	// заявки просто повиснут неразобранными, — поэтому падаем на старте.
+	if err := validateCommunityEnv(cfg); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
@@ -180,6 +203,49 @@ func getOptionalPositiveInt(key string) int {
 		return 0
 	}
 	return value
+}
+
+// getOptionalInt64 читает необязательный числовой идентификатор. Пустое и
+// некорректное значения дают 0 — то есть «не задано».
+func getOptionalInt64(key string) int64 {
+	value, err := strconv.ParseInt(strings.TrimSpace(os.Getenv(key)), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
+// validateCommunityEnv ловит недонастроенный Канал: заданный, но нечисловой ID
+// и заданную половину пары. Ни то, ни другое не должно выглядеть как «фича
+// выключена» — иначе опечатка в ID тихо оставляет заявки без разбора.
+func validateCommunityEnv(cfg *Config) error {
+	rawChatID := strings.TrimSpace(os.Getenv("COMMUNITY_CHAT_ID"))
+	if rawChatID != "" && cfg.CommunityChatID == 0 {
+		return fmt.Errorf("invalid COMMUNITY_CHAT_ID: %q is not a chat id", rawChatID)
+	}
+	if cfg.CommunityChatID != 0 && cfg.CommunityInviteLink == "" {
+		return fmt.Errorf("COMMUNITY_INVITE_LINK is required when COMMUNITY_CHAT_ID is set")
+	}
+	if cfg.CommunityInviteLink != "" && cfg.CommunityChatID == 0 {
+		return fmt.Errorf("COMMUNITY_CHAT_ID is required when COMMUNITY_INVITE_LINK is set")
+	}
+	// ID супергруппы всегда отрицательный. Потерянный при копировании минус —
+	// самая вероятная опечатка, и она хуже любой другой: фича считается
+	// включённой, обработчик регистрируется, но ни одна заявка не совпадёт с
+	// чужим ID и все они повиснут неразобранными.
+	if cfg.CommunityChatID > 0 {
+		return fmt.Errorf("invalid COMMUNITY_CHAT_ID: supergroup id must be negative, got %d", cfg.CommunityChatID)
+	}
+	// Ссылка подставляется в <a href="…"> сообщения «Информация», которое видят
+	// все. Неподдерживаемую схему Telegram отвергает вместе со всем сообщением,
+	// то есть опечатка здесь ломает кнопку далеко за пределами фичи.
+	if cfg.CommunityInviteLink != "" {
+		parsed, err := url.Parse(cfg.CommunityInviteLink)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return fmt.Errorf("invalid COMMUNITY_INVITE_LINK: %q must be an http(s) URL", cfg.CommunityInviteLink)
+		}
+	}
+	return nil
 }
 
 // getEnvOrDefault возвращает значение переменной окружения или значение по умолчанию

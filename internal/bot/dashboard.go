@@ -82,6 +82,14 @@ func (b *Bot) handleDashboard(c tele.Context) error {
 	// Запускаем горутину обновлений
 	go b.runDashboardLoop(ctx, chatID, msg.ID, session.startedAt)
 
+	// Приписка про Канал уходит отдельным сообщением: текст дашборда
+	// перерисовывается каждые несколько секунд и затёр бы её.
+	if mention := b.claimCommunityMention(c.Sender().ID); mention != "" {
+		if _, err := b.bot.Send(c.Chat(), mention, &tele.SendOptions{ParseMode: tele.ModeHTML}); err != nil {
+			slog.Warn("Failed to send community mention with dashboard", "error", err, "telegram_id", c.Sender().ID)
+		}
+	}
+
 	return nil
 }
 

@@ -197,6 +197,14 @@ func migrate(conn *sql.DB) error {
 			updated_at TIMESTAMP
 		)`,
 
+		// Знания бота о Канале: одобренная заявка и последний показ приписки.
+		// Отдельно от notifications_sent — эти пометки не должна стирать оплата.
+		`CREATE TABLE IF NOT EXISTS community_members (
+			telegram_id INTEGER PRIMARY KEY,
+			joined_at TIMESTAMP,
+			mention_sent_at TIMESTAMP
+		)`,
+
 		// Индексы. Индексы по users создаются после возможной перестройки таблицы:
 		// DROP TABLE уносит их вместе со старой таблицей.
 		`CREATE INDEX IF NOT EXISTS idx_invites_used_by ON invites(used_by)`,

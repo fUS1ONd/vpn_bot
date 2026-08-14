@@ -3,6 +3,7 @@ package config
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -178,4 +179,36 @@ func TestLoadInfoEnvRead(t *testing.T) {
 	require.Equal(t, "https://legal.example.com/privacy", cfg.PrivacyPolicyURL)
 	require.Equal(t, "https://legal.example.com/terms", cfg.TermsOfServiceURL)
 	require.Equal(t, "@fus1ond", cfg.SupportContact)
+}
+
+// Недонастроенный Канал должен ронять старт, а не выглядеть как «фича выключена».
+func TestLoadRejectsHalfConfiguredCommunity(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		chatID  string
+		link    string
+		wantErr string
+	}{
+		{name: "not a number", chatID: "не число", link: "https://t.me/+x", wantErr: "invalid COMMUNITY_CHAT_ID"},
+		{name: "link without id", chatID: "", link: "https://t.me/+x", wantErr: "COMMUNITY_CHAT_ID is required"},
+		{name: "id without link", chatID: "-100123", link: "", wantErr: "COMMUNITY_INVITE_LINK is required"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("COMMUNITY_CHAT_ID", testCase.chatID)
+			t.Setenv("COMMUNITY_INVITE_LINK", testCase.link)
+
+			_, err := Load()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), testCase.wantErr)
+		})
+	}
+}
+
+// Обе заданы — фича включается; ни одной — бот работает как раньше.
+func TestCommunityEnabledRequiresBothVariables(t *testing.T) {
+	assert.True(t, (&Config{CommunityChatID: -100, CommunityInviteLink: "https://t.me/+x"}).CommunityEnabled())
+	assert.False(t, (&Config{}).CommunityEnabled())
+	assert.False(t, (&Config{CommunityChatID: -100}).CommunityEnabled())
+	assert.False(t, (&Config{CommunityInviteLink: "https://t.me/+x"}).CommunityEnabled())
 }

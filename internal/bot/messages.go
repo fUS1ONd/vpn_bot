@@ -83,6 +83,15 @@ const (
 
 	MsgSubtitlesUnavailable = `❌ Сервис временно недоступен. Попробуйте позже.`
 
+	// MsgCommunityDeclined уходит в личку тому, чью заявку в Канал бот отклонил.
+	// Отказ не приговор: путь внутрь назван прямо, повторная заявка по той же
+	// ссылке проходит сразу после оплаты.
+	MsgCommunityDeclined = `<b>💬 Сообщество недоступно</b>
+
+Заявка отклонена: в сообщество попадают пользователи с действующей оплаченной подпиской.
+
+Оплатите подписку в боте и подайте заявку по той же ссылке снова — бот одобрит её автоматически.`
+
 	MsgGraceWarning = `⚠️ <b>Ваша подписка истекла. VPN деактивирован.</b>
 
 Осталось <b>%s</b> чтобы оплатить и восстановить доступ.
@@ -123,6 +132,38 @@ const (
 ❌ Ошибок: %d`
 )
 
+// Тексты про Канал — самостоятельные блоки без ведущих переводов строки:
+// отступ добавляет тот, кто приписывает блок к своему сообщению, иначе формат
+// приписки оказался бы размазан по местам показа.
+const (
+	// communityInfoBlock показывается в «Информации» всем и всегда при
+	// включённой фиче: знать о существовании сообщества должен любой, условие
+	// входа названо честно.
+	communityInfoBlock = "💬 Сообщество: <a href=\"%s\">релизы, баги и идеи</a>\nВступление — по заявке, доступно с оплаченной подпиской."
+
+	// communityMentionBlock — приписка внизу ответов бота для Платящих.
+	communityMentionBlock = "💬 <a href=\"%s\">Сообщество</a>: релизы, баги и идеи. Заходите — заявка одобряется автоматически."
+)
+
+// buildCommunityText подставляет инвайт-ссылку в шаблон или возвращает пустую
+// строку при выключенной фиче — единая форма для всех текстов про Канал.
+func buildCommunityText(cfg *config.Config, template string) string {
+	if !cfg.CommunityEnabled() {
+		return ""
+	}
+	return fmt.Sprintf(template, html.EscapeString(cfg.CommunityInviteLink))
+}
+
+// BuildCommunityInfoBlock возвращает блок про Канал для «Информации».
+func BuildCommunityInfoBlock(cfg *config.Config) string {
+	return buildCommunityText(cfg, communityInfoBlock)
+}
+
+// BuildCommunityMention возвращает приписку про Канал для ответов бота.
+func BuildCommunityMention(cfg *config.Config) string {
+	return buildCommunityText(cfg, communityMentionBlock)
+}
+
 // BuildInfoMessage собирает HTML-текст для кнопки «Информация».
 // URL политики и оферты экранируются (httpa-значения берутся из env и
 // не должны ломать HTML-структуру), контакт поддержки вставляется как
@@ -130,7 +171,7 @@ const (
 // или уже готовый тег <a href="...">. Ответственность за корректность
 // значения SUPPORT_CONTACT лежит на админе (аналогично DonateText).
 func BuildInfoMessage(cfg *config.Config) string {
-	return fmt.Sprintf(`<b>💡 Помощь и контакты</b>
+	msg := fmt.Sprintf(`<b>💡 Помощь и контакты</b>
 
 Если есть вопросы — пишите %s
 
@@ -140,6 +181,10 @@ func BuildInfoMessage(cfg *config.Config) string {
 		html.EscapeString(cfg.PrivacyPolicyURL),
 		html.EscapeString(cfg.TermsOfServiceURL),
 	)
+	if block := BuildCommunityInfoBlock(cfg); block != "" {
+		msg += "\n\n" + block
+	}
+	return msg
 }
 
 // determineSubscriptionType определяет тип подписки на основе данных из Remnawave и БД
