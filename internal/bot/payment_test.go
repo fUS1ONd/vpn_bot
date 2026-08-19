@@ -14,7 +14,9 @@ import (
 
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/fus1ond/vpn_bot/internal/platega"
+	"github.com/fus1ond/vpn_bot/internal/yookassa"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tele "gopkg.in/telebot.v3"
@@ -759,4 +761,133 @@ func TestRetryConfirmedPaymentActivationMarksTerminalFailureWhenUserMissingInRem
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, "confirmed_activation_failed", stored.Status)
+}
+
+// Сценарий инцидента 19.08.2026: первый вызов кассы сорвался, не дойдя до
+// сохранения ссылки. Повторное нажатие обязано переиспользовать ту же запись,
+// оставив её живой: ссылку по ней мы отдадим пользователю, и оплата по ней
+// должна подтверждаться, а не отвергаться как «неактуальная».
+func TestCreatePaymentForProviderKeepsReusedPendingAlive(t *testing.T) {
+	db, err := database.New(t.TempDir() + "/payment_reuse.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	userID := int64(810)
+	price := 500
+	_, err = db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-810"), nil, &price, nil)
+	require.NoError(t, err)
+
+	var attempts atomic.Int32
+	yooClient := yookassa.NewClientWithBaseURL("shop", "secret", "https://yookassa.test")
+	yooClient.SetRetryBackoff(0)
+	yooClient.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			// Первый поход в кассу обрывается вместе со всеми повторами клиента —
+			// ссылка не сохраняется.
+			if attempts.Add(1) <= 3 {
+				return nil, assert.AnError
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body: io.NopCloser(strings.NewReader(
+					`{"id":"yoo-810","status":"pending","amount":{"value":"500.00","currency":"RUB"},` +
+						`"confirmation":{"confirmation_url":"https://pay.example/yoo-810"},"recipient":{"account_id":"shop"}}`)),
+				Header: make(http.Header),
+			}, nil
+		}),
+	})
+
+	remClient := newTestPanelClient()
+	remClient.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return nil, assert.AnError
+		}),
+	})
+
+	b := &Bot{
+		db:         db,
+		config:     &config.Config{AdminID: 999},
+		userStates: newStateMap(),
+		remnawave:  remClient,
+		yookassa:   yooClient,
+		bot:        &tele.Bot{Me: &tele.User{Username: "testbot"}},
+	}
+
+	_, _, err = b.createPaymentForProvider(userID, paymentprovider.YooKassa)
+	require.Error(t, err, "первый вызов падает вместе с кассой")
+
+	payment, url, err := b.createPaymentForProvider(userID, paymentprovider.YooKassa)
+	require.NoError(t, err)
+	assert.Equal(t, "https://pay.example/yoo-810", url)
+
+	stored, err := db.GetPaymentByID(payment.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", stored.Status, "переиспользованный платёж не должен закрываться")
+	require.NotNil(t, stored.RedirectURL)
+	assert.Equal(t, url, *stored.RedirectURL)
+
+	var total int
+	require.NoError(t, db.Conn().QueryRow(`SELECT COUNT(*) FROM payments WHERE telegram_id = ?`, userID).Scan(&total))
+	assert.Equal(t, 1, total, "вторая попытка переиспользует запись, а не создаёт новую")
+}
+
+// Оплату по локально закрытому платежу нельзя терять: если её подтвердил сам
+// провайдер своим ответом API, платёж принимается, а владелец получает алерт.
+func TestHandleConfirmedFromProviderStateRevivesExpiredPayment(t *testing.T) {
+	db, err := database.New(t.TempDir() + "/payment_revive.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	userID := int64(811)
+	_, err = db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-811"), nil, nil, nil)
+	require.NoError(t, err)
+	id, err := db.CreatePayment(&database.Payment{
+		TelegramID: userID, Amount: 500, PaymentMethod: "sberbank", Status: "expired", Provider: "yookassa",
+	})
+	require.NoError(t, err)
+	payment, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+
+	remClient := newTestPanelClient()
+	remClient.SetHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return nil, assert.AnError
+		}),
+	})
+
+	b := &Bot{db: db, config: &config.Config{AdminID: 999}, userStates: newStateMap(), remnawave: remClient}
+	h := &paymentCallbackHandler{bot: b}
+	require.NoError(t, h.handleConfirmedFromProviderState(payment))
+
+	stored, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	// Панель в тесте недоступна, поэтому активация уходит в retry — но деньги
+	// зафиксированы: платёж больше не «неактуальный».
+	assert.Equal(t, "confirmed_not_activated", stored.Status)
+	require.NotNil(t, stored.ConfirmedAt)
+}
+
+// Chargeback остаётся терминальным: деньги уже вернули, воскрешать нечего.
+func TestHandleConfirmedFromProviderStateKeepsChargebackTerminal(t *testing.T) {
+	db, err := database.New(t.TempDir() + "/payment_chargeback.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	userID := int64(812)
+	_, err = db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-812"), nil, nil, nil)
+	require.NoError(t, err)
+	id, err := db.CreatePayment(&database.Payment{
+		TelegramID: userID, Amount: 500, PaymentMethod: "sberbank", Status: "chargebacked", Provider: "yookassa",
+	})
+	require.NoError(t, err)
+	payment, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+
+	b := &Bot{db: db, config: &config.Config{AdminID: 999}, userStates: newStateMap()}
+	h := &paymentCallbackHandler{bot: b}
+	require.NoError(t, h.handleConfirmedFromProviderState(payment))
+
+	stored, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	assert.Equal(t, "chargebacked", stored.Status)
 }

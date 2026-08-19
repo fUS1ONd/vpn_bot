@@ -70,7 +70,7 @@ func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 	h := &paymentCallbackHandler{bot: b}
 	switch verified.Status {
 	case paymentprovider.StatusSucceeded:
-		return h.handleConfirmed(payment)
+		return h.handleConfirmedFromProviderState(payment)
 	case paymentprovider.StatusCanceled:
 		return h.handleCanceled(payment)
 	default:
@@ -98,6 +98,35 @@ func (b *Bot) reportUnmatchedYooKassaEvent(event, objectID string) {
 		"⚠️ Событие ЮKassa <b>%s</b> не сопоставлено с платежом (объект <code>%s</code>).\n\n"+
 			"Так приходят возвраты: в теле лежит идентификатор возврата, а не платежа. Проверьте операцию в кабинете ЮKassa.",
 		html.EscapeString(eventText), html.EscapeString(objectID),
+	))
+}
+
+// reportIgnoredPaymentConfirmation доносит до владельца оплату, которую бот
+// принять не смог: локальный статус платежа не допускает подтверждения.
+// Провайдеру мы отвечаем успехом (повтор доставки ничего не изменит), поэтому
+// без этого сообщения деньги остались бы принятыми втихую.
+func (b *Bot) reportIgnoredPaymentConfirmation(payment *database.Payment) {
+	if _, alreadyReported := b.ignoredConfirmationReported.LoadOrStore(payment.ID, struct{}{}); alreadyReported {
+		return
+	}
+	b.sendAdminAlert(fmt.Sprintf(
+		"⚠️ Платёж #%d (%d ₽, пользователь %d) подтверждён провайдером, но локальный статус <b>%s</b> не допускает подтверждения.\n\n"+
+			"Подписка не выдана и чек не пробит — разберите операцию вручную.",
+		payment.ID, payment.Amount, payment.TelegramID, html.EscapeString(payment.Status),
+	))
+}
+
+// reportRevivedPayment сообщает владельцу о принятой оплате по локально закрытому
+// платежу. Клиент своё получает автоматически, но событие аномальное: закрытый
+// платёж, по которому прошли деньги, — повод посмотреть, почему он закрылся.
+func (b *Bot) reportRevivedPayment(payment *database.Payment) {
+	if _, alreadyReported := b.revivedPaymentReported.LoadOrStore(payment.ID, struct{}{}); alreadyReported {
+		return
+	}
+	b.sendAdminAlert(fmt.Sprintf(
+		"ℹ️ Платёж #%d (%d ₽, пользователь %d) был локально закрыт со статусом <b>%s</b>, но провайдер подтвердил оплату.\n\n"+
+			"Платёж принят по ответу провайдера: подписка продлевается, чек пробивается.",
+		payment.ID, payment.Amount, payment.TelegramID, html.EscapeString(payment.Status),
 	))
 }
 
@@ -132,17 +161,37 @@ func (h *paymentCallbackHandler) HandlePaymentCallback(payload platega.CallbackP
 }
 
 // handleConfirmed обрабатывает успешный платёж и уведомляет пользователя.
+// Источник — тело callback провайдера, а не его ответ по API, поэтому
+// воскрешать неактуальный локальный статус этот путь не имеет права.
 func (h *paymentCallbackHandler) handleConfirmed(payment *database.Payment) error {
-	return h.handleConfirmedWithNotification(payment, true)
+	return h.handleConfirmedWithNotification(payment, true, false)
+}
+
+// handleConfirmedFromProviderState обрабатывает платёж, оплату которого
+// подтвердил сам провайдер своим ответом по API (и этот ответ уже сверен с
+// локальной записью). Такому источнику доверия хватает, чтобы принять оплату
+// даже по платежу, локально закрытому раньше времени.
+func (h *paymentCallbackHandler) handleConfirmedFromProviderState(payment *database.Payment) error {
+	return h.handleConfirmedWithNotification(payment, true, true)
 }
 
 // handleConfirmedSilently обрабатывает успешный платёж без отдельного push-уведомления.
 // Используется для ручной проверки оплаты, чтобы не дублировать финальное сообщение.
+// Статус там тоже получен ответом API провайдера и сверен с локальной записью.
 func (h *paymentCallbackHandler) handleConfirmedSilently(payment *database.Payment) error {
-	return h.handleConfirmedWithNotification(payment, false)
+	return h.handleConfirmedWithNotification(payment, false, true)
 }
 
-func (h *paymentCallbackHandler) handleConfirmedWithNotification(payment *database.Payment, notifyUser bool) error {
+// revivablePaymentStatuses — локальные статусы, из которых платёж возвращается к
+// жизни, если провайдер своим ответом API подтвердил оплату. Сюда намеренно не
+// входят chargebacked (деньги уже вернули) и confirmed_activation_failed
+// (активация признана невозможной — разбор ручной).
+var revivablePaymentStatuses = map[string]bool{
+	"expired":  true,
+	"canceled": true,
+}
+
+func (h *paymentCallbackHandler) handleConfirmedWithNotification(payment *database.Payment, notifyUser, providerVerified bool) error {
 	freshPayment, err := h.bot.db.GetPaymentByID(payment.ID)
 	if err != nil {
 		return fmt.Errorf("reload payment before confirm: %w", err)
@@ -158,8 +207,18 @@ func (h *paymentCallbackHandler) handleConfirmedWithNotification(payment *databa
 		return nil
 	}
 	if payment.Status != "pending" && payment.Status != "confirmed_not_activated" {
-		slog.Warn("Подтверждение неактуального платежа проигнорировано", "payment_id", payment.ID, "status", payment.Status)
-		return nil
+		// Локально платёж закрыт, а провайдер говорит «оплачен». Молчать здесь
+		// нельзя ни в одном из исходов: деньги приняты, и если услугу не оказать,
+		// про это не узнает никто, кроме клиента.
+		if !providerVerified || !revivablePaymentStatuses[payment.Status] {
+			slog.Warn("Подтверждение неактуального платежа проигнорировано", "payment_id", payment.ID, "status", payment.Status)
+			h.bot.reportIgnoredPaymentConfirmation(payment)
+			return nil
+		}
+
+		slog.Warn("Платёж оплачен, но локально был закрыт — подтверждаем по ответу провайдера",
+			"payment_id", payment.ID, "status", payment.Status, "telegram_id", payment.TelegramID)
+		h.bot.reportRevivedPayment(payment)
 	}
 
 	alreadyMarkedForRetry := payment.Status == "confirmed_not_activated"
@@ -557,10 +616,15 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 			if url != "" {
 				return pending, url, nil
 			}
+			// Ссылки ещё нет: прошлый вызов провайдера сорвался, не дойдя до
+			// сохранения confirmation_url. Переиспользуем ту же запись и тот же
+			// ключ идемпотентности — провайдер вернёт по нему тот же платёж.
+			// Помечать её expired здесь нельзя: ссылку по ней мы всё равно
+			// выдадим, а оплату по expired-платежу подтверждение отвергнет как
+			// неактуальную — деньги приняты, услуга не оказана.
 			payment = pending
-		}
-		// Другой способ — помечаем старый как expired
-		if err := b.db.UpdatePaymentStatus(pending.ID, "expired"); err != nil {
+		} else if err := b.db.UpdatePaymentStatus(pending.ID, "expired"); err != nil {
+			// Другой способ оплаты — старый pending помечаем expired
 			return nil, "", fmt.Errorf("expire previous pending: %w", err)
 		}
 	}
