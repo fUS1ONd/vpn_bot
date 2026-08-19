@@ -2,6 +2,7 @@ package yookassa
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -18,19 +19,47 @@ import (
 
 const defaultBaseURL = "https://api.yookassa.ru"
 
+// Сетевой сбой на пути к кассе стоит дорого: сорвавшийся запрос — это либо
+// пользователь без ссылки на оплату, либо вебхук, который не смог сверить уже
+// оплаченный платёж. Поэтому запрос повторяется. Повтор безопасен для обеих
+// операций: GET идемпотентен по определению, а POST /v3/payments защищён
+// ключом идемпотентности — по нему касса вернёт тот же платёж, а не создаст второй.
+const (
+	maxAttempts           = 3
+	defaultAttemptTimeout = 15 * time.Second
+	defaultRetryBackoff   = time.Second
+)
+
 var rubleAmount = regexp.MustCompile(`^([0-9]+)\.00$`)
 
 type Client struct {
 	shopID, secret, baseURL string
 	http                    *http.Client
+	// Бюджет одной попытки и пауза перед следующей. Их сумма ограничена сверху
+	// не ради красоты: ответ вебхуку пишется с WriteTimeout 65 секунд, и серия
+	// повторов обязана уложиться в него, иначе касса получит обрыв вместо ответа.
+	attemptTimeout time.Duration
+	retryBackoff   time.Duration
 }
 
 func NewClient(shopID, secret string) *Client {
 	return NewClientWithBaseURL(shopID, secret, defaultBaseURL)
 }
 func NewClientWithBaseURL(shopID, secret, baseURL string) *Client {
-	return &Client{shopID: shopID, secret: secret, baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 30 * time.Second}}
+	return &Client{
+		shopID:         shopID,
+		secret:         secret,
+		baseURL:        strings.TrimRight(baseURL, "/"),
+		http:           &http.Client{Timeout: 30 * time.Second},
+		attemptTimeout: defaultAttemptTimeout,
+		retryBackoff:   defaultRetryBackoff,
+	}
 }
+
+// SetRetryBackoff задаёт паузу между повторами. Нужен тестам: с боевой паузой
+// каждый сценарий со сбоем кассы стоил бы секунды ожидания.
+func (c *Client) SetRetryBackoff(d time.Duration) { c.retryBackoff = d }
+
 func (c *Client) SetHTTPClient(client *http.Client) {
 	if client != nil {
 		c.http = client
@@ -63,35 +92,78 @@ func (c *Client) GetPayment(id string) (*paymentprovider.Payment, error) {
 }
 
 func (c *Client) doPayment(method, path string, body any, idempotenceKey string) (*paymentprovider.Payment, error) {
-	var reader io.Reader
+	var payload []byte
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("marshal request: %w", err)
 		}
-		reader = bytes.NewReader(data)
+		payload = data
 	}
-	req, err := http.NewRequest(method, c.baseURL+path, reader)
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			time.Sleep(c.retryBackoff * time.Duration(attempt-1))
+		}
+
+		data, statusCode, err := c.sendOnce(method, path, payload, idempotenceKey)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		// 5xx — сбой на стороне кассы, повтор осмыслен. Остальные неуспешные
+		// коды (401, 400, 404) повтором не лечатся: ответ будет тем же.
+		if statusCode >= 500 {
+			lastErr = fmt.Errorf("yookassa API error %d: %s", statusCode, string(data))
+			continue
+		}
+		if statusCode < 200 || statusCode >= 300 {
+			return nil, fmt.Errorf("yookassa API error %d: %s", statusCode, string(data))
+		}
+		return parsePayment(data)
+	}
+
+	return nil, lastErr
+}
+
+// sendOnce выполняет одну попытку запроса и отдаёт тело с кодом ответа.
+func (c *Client) sendOnce(method, path string, payload []byte, idempotenceKey string) ([]byte, int, error) {
+	ctx := context.Background()
+	if c.attemptTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.attemptTimeout)
+		defer cancel()
+	}
+
+	var reader io.Reader
+	if payload != nil {
+		reader = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, 0, fmt.Errorf("create request: %w", err)
 	}
 	req.SetBasicAuth(c.shopID, c.secret)
 	req.Header.Set("Content-Type", "application/json")
 	if idempotenceKey != "" {
 		req.Header.Set("Idempotence-Key", idempotenceKey)
 	}
+
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+		return nil, 0, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
+
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, resp.StatusCode, fmt.Errorf("read response: %w", err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("yookassa API error %d: %s", resp.StatusCode, string(data))
-	}
+	return data, resp.StatusCode, nil
+}
+
+func parsePayment(data []byte) (*paymentprovider.Payment, error) {
 	var raw struct {
 		ID, Status    string
 		Amount        struct{ Value, Currency string }

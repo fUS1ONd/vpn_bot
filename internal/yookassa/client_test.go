@@ -2,6 +2,7 @@ package yookassa
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"testing"
@@ -84,8 +85,12 @@ func TestGetPaymentReturnsAPIError(t *testing.T) {
 	_, err := c.GetPayment("bad")
 	require.ErrorContains(t, err, "yookassa API error 401")
 }
-func response(body string) *http.Response {
-	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(stringReader(body)), Header: make(http.Header)}
+func response(body string, code ...int) *http.Response {
+	statusCode := http.StatusOK
+	if len(code) > 0 {
+		statusCode = code[0]
+	}
+	return &http.Response{StatusCode: statusCode, Body: io.NopCloser(stringReader(body)), Header: make(http.Header)}
 }
 
 type stringReader string
@@ -96,4 +101,71 @@ func (s stringReader) Read(p []byte) (int, error) {
 	}
 	n := copy(p, string(s))
 	return n, io.EOF
+}
+
+func TestDoPaymentRetriesTransportFailure(t *testing.T) {
+	c := NewClientWithBaseURL("shop", "secret", "https://yookassa.test")
+	c.retryBackoff = 0
+	var attempts int
+	c.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("net/http: TLS handshake timeout")
+		}
+		return response(`{"id":"yo-retry","status":"succeeded","amount":{"value":"500.00","currency":"RUB"},"recipient":{"account_id":"shop"}}`), nil
+	})})
+
+	p, err := c.GetPayment("yo-retry")
+	require.NoError(t, err)
+	require.Equal(t, 2, attempts, "сорвавшийся запрос должен быть повторён")
+	require.Equal(t, paymentprovider.StatusSucceeded, p.Status)
+}
+
+// Повтор POST безопасен ровно потому, что уходит с тем же ключом идемпотентности:
+// касса вернёт по нему исходный платёж, а не создаст второй.
+func TestCreatePaymentRetriesWithSameIdempotenceKey(t *testing.T) {
+	c := NewClientWithBaseURL("shop", "secret", "https://yookassa.test")
+	c.retryBackoff = 0
+	var keys []string
+	c.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		keys = append(keys, r.Header.Get("Idempotence-Key"))
+		if len(keys) == 1 {
+			return response(`{"code":"internal_server_error"}`, http.StatusInternalServerError), nil
+		}
+		return response(`{"id":"yo-1","status":"pending","amount":{"value":"500.00","currency":"RUB"},"confirmation":{"confirmation_url":"https://pay/yo-1"},"recipient":{"account_id":"shop"}}`), nil
+	})})
+
+	p, err := c.CreatePayment(paymentprovider.CreateRequest{Amount: 500, Currency: "RUB", LocalPaymentID: 1, IdempotenceKey: "persisted-key"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"persisted-key", "persisted-key"}, keys)
+	require.Equal(t, "https://pay/yo-1", p.ConfirmationURL)
+}
+
+// 401 повтором не лечится: ответ будет тем же, а лишние попытки только тянут время.
+func TestDoPaymentDoesNotRetryClientError(t *testing.T) {
+	c := NewClientWithBaseURL("shop", "secret", "https://yookassa.test")
+	c.retryBackoff = 0
+	var attempts int
+	c.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		return response(`{"code":"invalid_credentials"}`, http.StatusUnauthorized), nil
+	})})
+
+	_, err := c.GetPayment("yo-1")
+	require.ErrorContains(t, err, "yookassa API error 401")
+	require.Equal(t, 1, attempts)
+}
+
+func TestDoPaymentGivesUpAfterMaxAttempts(t *testing.T) {
+	c := NewClientWithBaseURL("shop", "secret", "https://yookassa.test")
+	c.retryBackoff = 0
+	var attempts int
+	c.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		return nil, errors.New("net/http: TLS handshake timeout")
+	})})
+
+	_, err := c.GetPayment("yo-1")
+	require.ErrorContains(t, err, "TLS handshake timeout")
+	require.Equal(t, maxAttempts, attempts)
 }
