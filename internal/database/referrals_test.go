@@ -18,7 +18,9 @@ func TestCreateReferralInviteStoresSnapshotAndEnforcesLimits(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	// Точка отсчёта относительная: ClaimInvite сверяет срок с реальным «сейчас»,
+	// поэтому от фиксированной даты тест начинал падать через 30 суток после неё.
+	now := time.Now().UTC()
 	for index := 0; index < MaxActiveReferralInvites; index++ {
 		invite, createErr := db.CreateReferralInvite(100, 450+index, now.Add(time.Duration(index)*time.Second))
 		require.NoError(t, createErr)
