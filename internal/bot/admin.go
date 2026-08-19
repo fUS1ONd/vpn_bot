@@ -656,6 +656,11 @@ func (b *Bot) processBanUser(c tele.Context, text string) error {
 		return c.Send("Ошибка сохранения бана", &tele.SendOptions{ReplyMarkup: AdminManageKeyboard()})
 	}
 
+	// Выгоняем из Канала. Только перманентный бан выгоняет из сообщества:
+	// прекращение оплаты и автокик членства не лишают. Кик идёт в фоне —
+	// недоступность Telegram API не должна задерживать и тем более срывать бан.
+	go b.kickFromCommunity(telegramID)
+
 	// Удаляем из Remnawave (отключаем доступ к серверам)
 	err = b.deleteRemnawaveUser(telegramID)
 	if err != nil {

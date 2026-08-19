@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/database"
-	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	tele "gopkg.in/telebot.v3"
 )
 
@@ -53,29 +52,11 @@ func (b *Bot) referralInviteMessage(invite *database.Invite) string {
 	)
 }
 
+// canCreateReferralInvite — право создавать referral-приглашения. Совпадает с
+// предикатом «Платящий» (см. isPayingUser) и остаётся отдельным именем, потому
+// что это правило раздела приглашений, а не свойство пользователя.
 func (b *Bot) canCreateReferralInvite(telegramID int64) (bool, error) {
-	accessible, err := b.canAccessReferralSection(telegramID)
-	if err != nil || !accessible {
-		return false, err
-	}
-	user, err := b.db.GetUserByTelegramID(telegramID)
-	if err != nil || user == nil {
-		return false, err
-	}
-	remUser, err := b.remnawaveUser(telegramID)
-	if err != nil || remUser == nil {
-		return false, err
-	}
-	now := time.Now().UTC()
-	accessActive := remUser.ExpireAt.Year() >= 2099 ||
-		((remUser.Status == remnawave.StatusActive || remUser.Status == remnawave.StatusLimited) && remUser.ExpireAt.After(now))
-	if !accessActive {
-		return false, nil
-	}
-	if remUser.ExpireAt.Year() >= 2099 || user.LegacyPaidMigrated {
-		return true, nil
-	}
-	return b.db.HasConfirmedPayment(telegramID)
+	return b.isPayingUser(telegramID)
 }
 
 func (b *Bot) canAccessReferralSection(telegramID int64) (bool, error) {

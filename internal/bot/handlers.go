@@ -65,6 +65,10 @@ type Bot struct {
 	receiptAuthBlocked          atomic.Bool                // Кабинет не принял вход — проход по чекам прерывается до следующего раза
 	receiptAlerted              sync.Map                   // ключ алерта по чекам -> struct{}, защита от повторов
 	subRevokeCooldown           sync.Map                   // telegram_id -> time.Time последнего перевыпуска ссылки
+	communityDeclineMu          sync.Mutex                 // Делает «проверить кулдаун и занять его» одной операцией
+	communityDeclineCooldown    sync.Map                   // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
+	communityMentionMu          sync.Mutex                 // Делает «прочитать кулдаун приписки и занять его» одной операцией
+	communityPendingAlerted     sync.Map                   // telegram_id -> struct{}, защита от потока алертов о зависших заявках
 	panelAuthAlerted            sync.Map                   // ключ алерта про токен панели -> struct{}, защита от повторов
 }
 
@@ -160,6 +164,13 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	if cfg.MoynalogEnabled() {
 		bot.moynalog = moynalog.NewClient(cfg.MoynalogINN, cfg.MoynalogPassword)
 		slog.Info("Moynalog client initialized", "service_name", cfg.MoynalogServiceName)
+	}
+
+	// Канал подключается двумя переменными окружения. Без них обработчик заявок
+	// не регистрируется вовсе — бот ведёт себя ровно как раньше.
+	if cfg.CommunityEnabled() {
+		b.Handle(tele.OnChatJoinRequest, bot.handleChatJoinRequest)
+		slog.Info("Community channel enabled", "chat_id", cfg.CommunityChatID)
 	}
 
 	// Регистрация обработчиков

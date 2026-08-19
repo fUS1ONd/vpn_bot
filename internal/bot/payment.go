@@ -265,14 +265,23 @@ func (h *paymentCallbackHandler) handleConfirmedWithNotification(payment *databa
 	return nil
 }
 
+// paymentActivatedMessage — сообщение об успешной оплате. Момент оплаты лучшая
+// точка для приписки про Канал: предикат «Платящий» пользователь проходит
+// именно сейчас. Приписка живёт здесь, а не у вызывающих, потому что путей к
+// этому сообщению два — вебхук провайдера и кнопка «Проверить оплату», — и
+// расходиться они не должны.
 func (b *Bot) paymentActivatedMessage(telegramID int64) string {
 	remUser, _ := b.remnawave.GetUserByTelegramID(telegramID)
 
+	msg := "✅ Оплата прошла! Подписка активирована."
 	if remUser != nil {
 		expireDate := remUser.ExpireAt.Format("02.01.2006")
-		return fmt.Sprintf("✅ Оплата прошла! Ваша подписка активна до <b>%s</b>.\n\nЛимит трафика снят — пользуйтесь без ограничений.\n\nБлиже к концу подписки мы напомним о продлении.", expireDate)
+		msg = fmt.Sprintf("✅ Оплата прошла! Ваша подписка активна до <b>%s</b>.\n\nЛимит трафика снят — пользуйтесь без ограничений.\n\nБлиже к концу подписки мы напомним о продлении.", expireDate)
 	}
-	return "✅ Оплата прошла! Подписка активирована."
+	if mention := b.claimCommunityMention(telegramID); mention != "" {
+		msg += "\n\n" + mention
+	}
+	return msg
 }
 
 func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Payment, notifyUser bool) {
@@ -522,6 +531,10 @@ func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) err
 	if err := h.bot.db.BanUser(payment.TelegramID, 0); err != nil {
 		return fmt.Errorf("chargeback ban user: %w", err)
 	}
+
+	// Кик из Канала — часть перманентного бана, а не админского действия:
+	// забаненный за chargeback не должен остаться в сообществе.
+	go h.bot.kickFromCommunity(payment.TelegramID)
 
 	// Удаляем из Remnawave (полное удаление, не просто disable)
 	user, err := h.bot.db.GetUserByTelegramID(payment.TelegramID)
