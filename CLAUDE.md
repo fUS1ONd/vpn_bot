@@ -88,6 +88,13 @@ PLATEGA_FEE_SBP=11
 PLATEGA_FEE_CARD=12
 PLATEGA_FEE_CRYPTO=5
 PLATEGA_FEE_WITHDRAWAL=2
+ADMIN_TEST_PAYMENT_PRICE=10  # тестовая цена для оплаты от ADMIN_ID; 0 или отсутствие выключает кнопку
+
+# Платежи ЮKassa (опционально; включается парой shop id + секретный ключ)
+YOOKASSA_SHOP_ID=...
+YOOKASSA_SECRET_KEY=...
+YOOKASSA_RETURN_URL=https://t.me/your_bot
+YOOKASSA_FEE_PERCENT=3.5  # фактическая договорная комиссия, допускается дробная
 
 # Чеки «Мой налог» (опционально; включается наличием ИНН и пароля)
 MOYNALOG_INN=...
@@ -333,7 +340,6 @@ Single-context: `CONTEXT.md` и `docs/adr/` в корне репозитория
 
 Если тебе нужен контекст по конкретной фиче, прочитай соответствующий файл перед написанием кода:
 
-- **План миграции**: `docs/plans/2026-01-17-remnawave-migration-design.md`
 - **Совместимость с Remnawave 2.8.x и 3.x**: `docs/specs/2026-08-13-remnawave-3x-compat-design.md` — различия API, обоснования решений и порядок выката
 - **Канал сообщества**: `docs/specs/2026-08-14-community-channel-design.md` — гейт заявок по предикату «Платящий», дискавери и обоснования решений
 - **Чеки «Мой налог»**: `docs/specs/2026-08-06-moynalog-receipts-design.md` — дизайн и обоснования решений

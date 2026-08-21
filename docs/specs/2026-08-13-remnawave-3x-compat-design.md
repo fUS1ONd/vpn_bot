@@ -22,7 +22,8 @@
 - `docs/api-remnawave3.2.3.json` — OpenAPI 3.2.3 (1.2 МБ, 147 путей, 224 схемы),
   забран с `https://cdn.remna.st/docs/openapi.json`. Это тот же файл, что показывает
   `https://docs.rw/api`: бэкенд по тегу релиза генерирует спеку и пушит её в R2
-  (`.github/workflows/push-openapi-specs.yml`), а docs.rw рендерит её Scalar'ом.
+  (workflow `push-openapi-specs.yml` в репозитории `remnawave/backend`, не в нашем),
+  а docs.rw рендерит её Scalar'ом.
   Лежит рядом с `docs/api-remnawave2.8.1.json` — старая спека остаётся в репозитории,
   она нужна ровно столько, сколько мы поддерживаем 2.8.x.
 - Разбор различий двух спек и релиз-нот `remnawave/backend` за 2.8.1 → 3.2.3.
