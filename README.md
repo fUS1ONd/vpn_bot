@@ -66,7 +66,39 @@ REMNAWAVE_DEFAULT_SQUAD_UUIDS=uuid-1,uuid-2,uuid-3
 
 Platega и ЮKassa независимы: можно включить любой один провайдер или оба. При обоих включённых ЮKassa показывает карту/СБП/SberPay, а Platega — криптовалюту. Callback-сервер поднимается, если настроен хотя бы один провайдер.
 Перед production-включением ЮKassa владелец магазина обязан подтвердить фискализацию и выдачу чеков в своём юридическом сценарии (чеки ЮKassa, внешняя касса или отдельный процесс). Эта интеграция не создаёт `receipt` без подтверждённых реквизитов.
-Подробности по интеграции Platega и настройке callback-сервера: [docs/platega/README.md](docs/platega/README.md) и [docs/plans/2026-03-22-deployment-checklist.md](docs/plans/2026-03-22-deployment-checklist.md).
+Подробности по интеграции Platega: [docs/platega/README.md](docs/platega/README.md).
+
+### Публикация callback-сервера
+
+Провайдеры доставляют уведомления об оплате только по HTTPS, поэтому встроенный
+callback-сервер (`CALLBACK_PORT`, дефолт `8080`) публикуется наружу обратным прокси.
+Отдельный домен не нужен — достаточно path-префикса на любом уже обслуживаемом домене:
+внутренние роуты бота (`/platega/callback`, `/yookassa/webhook`, `/health`) при этом
+не меняются. Пример для nginx:
+
+```nginx
+location = /vpn-bot/platega/callback {
+    proxy_pass http://vpn-bot:8080/platega/callback;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # Платёжные заголовки Platega (X-MerchantId, X-Secret) должны дойти до бота
+    proxy_pass_request_headers on;
+
+    # Бот отвечает вебхуку до 65 секунд (повторы запросов к кассе уложены в этот бюджет)
+    proxy_read_timeout 70s;
+    proxy_send_timeout 70s;
+}
+```
+
+Требования к прокси: не резать кастомные заголовки провайдера, держать таймаут не
+меньше `WriteTimeout` бота (65 секунд) и уметь достучаться до контейнера — либо общей
+docker-сетью (`proxy_pass http://vpn-bot:8080`), либо пробросом порта на хост
+(`ports: - "127.0.0.1:8080:8080"` и `proxy_pass http://172.17.0.1:8080`).
+Полученный публичный адрес идёт в `PLATEGA_CALLBACK_URL` и в настройки вебхука ЮKassa.
+Проверка после настройки: `/health` отвечает `OK`, а POST на callback без заголовков — `401`.
 
 ## Версии панели Remnawave
 
@@ -394,7 +426,6 @@ vpn_bot/
 
 - [Remnawave](https://remnawave.com)
 - [Документация Platega](docs/platega/README.md)
-- [Чеклист деплоя платежей](docs/plans/2026-03-22-deployment-checklist.md)
 - [Совместимость с Remnawave 2.8.x и 3.x](docs/specs/2026-08-13-remnawave-3x-compat-design.md) — различия API и обоснования решений
 - [Дизайн чеков «Мой налог»](docs/specs/2026-08-06-moynalog-receipts-design.md) — обоснования решений по интеграции
 - [Канал сообщества](docs/specs/2026-08-14-community-channel-design.md) — гейт по заявкам, дискавери и обоснования решений
