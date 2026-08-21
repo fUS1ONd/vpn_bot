@@ -38,10 +38,14 @@ func (b *Bot) shouldInviteToCommunity(telegramID int64) (bool, error) {
 // пустую строку, если показывать её сейчас не нужно. Имя с claim не случайно:
 // функция и решает, и забирает право на показ, записывая его в базу.
 //
-// Решение и фиксация вместе проверяются тестом без telebot-контекста. Приписка
-// не показывается никогда, если фича выключена, пользователь не Платящий
-// (дразнить недоступным нельзя — единственное исключение это «Информация») или
-// он уже в Канале.
+// Приписка не показывается никогда, если фича выключена, пользователь не
+// Платящий (дразнить недоступным нельзя — единственное исключение это
+// «Информация») или он уже в Канале.
+//
+// Порядок шагов задан ценой каждого: сначала бесплатные проверки, затем кулдаун,
+// и только последним — поход в Telegram за составом Канала. Спрашивать состав
+// раньше кулдауна значило бы дёргать getChatMember на каждое открытие карточки
+// вместо одного раза в неделю на человека.
 func (b *Bot) claimCommunityMention(telegramID int64) string {
 	if !b.config.CommunityEnabled() {
 		return ""
@@ -56,32 +60,95 @@ func (b *Bot) claimCommunityMention(telegramID int64) string {
 		return ""
 	}
 
-	// Мьютекс по той же причине, что и в кулдауне отказов: «прочитать кулдаун и
-	// занять его» обязано быть одной операцией. Иначе оплата и открытая карточка
-	// подписки, совпавшие по времени, обе увидят пустой кулдаун и покажут
-	// приписку дважды подряд. Берётся после проверки права: она ходит в панель, и
-	// держать на её время общий замок значило бы выстроить всех пользователей в
-	// очередь за медленной Remnawave.
+	if !b.claimMentionCooldown(telegramID) {
+		return ""
+	}
+
+	// Кулдаун уже занят, и походом в Telegram он не отменяется. Участнику Канала
+	// эта занятая неделя не стоит ничего: пометка ниже гасит приписку навсегда,
+	// и кулдаун ему больше не понадобится. Зато так сетевой вызов остаётся вне
+	// общего мьютекса — иначе одна медленная сеть выстроила бы за замком всех
+	// пользователей сразу.
+	if b.alreadyInCommunity(telegramID) {
+		b.markCommunityJoined(telegramID)
+		return ""
+	}
+	return BuildCommunityMention(b.config)
+}
+
+// claimMentionCooldown проверяет недельный кулдаун приписки и сразу занимает его.
+//
+// Мьютекс по той же причине, что и в кулдауне отказов: «прочитать кулдаун и
+// занять его» обязано быть одной операцией. Иначе оплата и открытая карточка
+// подписки, совпавшие по времени, обе увидят пустой кулдаун и покажут приписку
+// дважды подряд. Отдельный метод — чтобы замок жил ровно на две операции с
+// базой и не растягивался на весь claimCommunityMention.
+func (b *Bot) claimMentionCooldown(telegramID int64) bool {
 	b.communityMentionMu.Lock()
 	defer b.communityMentionMu.Unlock()
 
 	sentAt, err := b.db.CommunityMentionSentAt(telegramID)
 	if err != nil {
 		slog.Error("Failed to read community mention timestamp", "error", err, "telegram_id", telegramID)
-		return ""
+		return false
 	}
 	now := time.Now().UTC()
 	if sentAt != nil && now.Sub(sentAt.UTC()) < communityMentionCooldown {
-		return ""
+		return false
 	}
 
 	if err := b.db.MarkCommunityMentionSent(telegramID, now); err != nil {
 		// Показ не зафиксировался — приписку не показываем: без записи кулдаун
 		// не работает, и пользователь увидит её в каждом следующем ответе.
 		slog.Error("Failed to mark community mention", "error", err, "telegram_id", telegramID)
-		return ""
+		return false
 	}
-	return BuildCommunityMention(b.config)
+	return true
+}
+
+// alreadyInCommunity спрашивает Telegram, состоит ли пользователь в Канале.
+//
+// База знает только тех, чью заявку одобрил сам бот, — а вступить можно и по
+// прямой ссылке владельца, и до появления гейта. Такие участники годами
+// получали приглашение туда, где давно сидят; getChatMember — единственный
+// способ узнать правду, списка участников группы Bot API не отдаёт.
+//
+// Неизвестность трактуется как «снаружи»: молчать при недоступном Telegram или
+// разжалованном из админов боте значило бы перестать звать в Канал вообще и не
+// узнать об этом. Цена ошибки в эту сторону — один лишний абзац раз в неделю.
+func (b *Bot) alreadyInCommunity(telegramID int64) bool {
+	if b.chatMemberOf == nil {
+		return false
+	}
+
+	member, err := b.chatMemberOf(b.config.CommunityChatID, telegramID)
+	if err != nil {
+		slog.Warn("Failed to check community membership in Telegram", "error", err, "telegram_id", telegramID)
+		return false
+	}
+	return isInsideCommunity(member)
+}
+
+// isInsideCommunity переводит ответ getChatMember в ответ на единственный
+// нужный вопрос: человек сейчас в чате или нет.
+//
+// Отдельная чистая функция — чтобы все шесть статусов проверялись таблицей без
+// сети и без мока.
+func isInsideCommunity(member *tele.ChatMember) bool {
+	if member == nil {
+		return false
+	}
+	switch member.Role {
+	case tele.Creator, tele.Administrator, tele.Member:
+		return true
+	case tele.Restricted:
+		// Замьюченный участник физически в чате, только пока стоит is_member:
+		// без флага это «ограничен и при этом вышел».
+		return member.Member
+	default:
+		// left и kicked — снаружи.
+		return false
+	}
 }
 
 // joinRequestOutcome — решение бота по заявке на вступление в Канал.
@@ -130,11 +197,16 @@ func (b *Bot) resolveJoinRequest(telegramID int64) joinRequestOutcome {
 	return joinRequestOutcome{approve: true}
 }
 
-// markCommunityJoined ставит пометку «в Канале» после успешного одобрения.
+// markCommunityJoined ставит пометку «в Канале».
 //
-// Порядок важен: пометка гасит упоминания Канала навсегда, поэтому поставить её
-// до одобрения значит при упавшем вызове Telegram оставить человека вне Канала и
-// без единого напоминания о нём — расхождение, которое уже ничем не лечится.
+// Два входа: успешно одобренная заявка и живая проверка состава
+// (alreadyInCommunity). Общее у них то, что человек в Канале уже находится, —
+// именно это пометка и означает.
+//
+// Со стороны заявки порядок важен: пометка гасит упоминания Канала навсегда,
+// поэтому поставить её до одобрения значит при упавшем вызове Telegram оставить
+// человека вне Канала и без единого напоминания о нём — расхождение, которое уже
+// ничем не лечится.
 func (b *Bot) markCommunityJoined(telegramID int64) {
 	if err := b.db.MarkCommunityJoined(telegramID, time.Now().UTC()); err != nil {
 		slog.Error("Failed to mark community membership", "error", err, "telegram_id", telegramID)

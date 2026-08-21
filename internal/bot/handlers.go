@@ -69,8 +69,16 @@ type Bot struct {
 	communityDeclineCooldown    sync.Map                   // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
 	communityMentionMu          sync.Mutex                 // Делает «прочитать кулдаун приписки и занять его» одной операцией
 	communityPendingAlerted     sync.Map                   // telegram_id -> struct{}, защита от потока алертов о зависших заявках
+	chatMemberOf                chatMemberFunc             // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
 	panelAuthAlerted            sync.Map                   // ключ алерта про токен панели -> struct{}, защита от повторов
 }
+
+// chatMemberFunc — единственный поход бота за составом Канала.
+//
+// Отдельный тип, а не прямой вызов b.bot.ChatMemberOf: telebot.Bot — конкретная
+// структура с живым HTTP внутри, подменить её в тесте нечем, а решение «звать ли
+// человека в Канал» обязано проверяться без сети.
+type chatMemberFunc func(chatID, userID int64) (*tele.ChatMember, error)
 
 // buildBotSettings собирает настройки telebot.
 //
@@ -109,6 +117,9 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		adminSwitchData: make(map[int64]adminSwitchSession),
 		adminPriceData:  make(map[int64]adminChangePriceSession),
 		bugReportData:   make(map[int64]bugReportSession),
+	}
+	bot.chatMemberOf = func(chatID, userID int64) (*tele.ChatMember, error) {
+		return b.ChatMemberOf(&tele.Chat{ID: chatID}, &tele.User{ID: userID})
 	}
 	bot.userLimiter = newUserRateLimiter(3, 5, bot.shutdownCh) // 3 req/s, burst 5
 
