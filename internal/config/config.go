@@ -24,9 +24,6 @@ type Config struct {
 	// База данных
 	DBPath string
 
-	// Донат
-	DonateText string
-
 	// Юридические страницы и контакт поддержки (показываются в кнопке «Информация»).
 	// Все три поля обязательны — значения подставляются в HTML-шаблон MsgInfo.
 	PrivacyPolicyURL  string // URL страницы политики конфиденциальности
@@ -95,7 +92,6 @@ func Load() (*Config, error) {
 		RemnawaveAPIToken:        os.Getenv("REMNAWAVE_API_TOKEN"),
 		RemnawaveSquadUUIDs:      getRemnawaveSquadUUIDs(),
 		DBPath:                   getEnvOrDefault("DB_PATH", "/app/data/bot.db"),
-		DonateText:               os.Getenv("DONATE_TEXT"),
 		SDConfigsPath:            getEnvOrDefault("SD_CONFIGS_PATH", "/app/sd_configs"),
 		VictoriaMetricsURL:       getEnvOrDefault("VICTORIA_METRICS_URL", "http://victoriametrics:8428"),
 		RenderURL:                os.Getenv("RENDER_URL"),

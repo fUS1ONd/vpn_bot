@@ -169,7 +169,7 @@ func BuildCommunityMention(cfg *config.Config) string {
 // не должны ломать HTML-структуру), контакт поддержки вставляется как
 // есть — это позволяет админу положить туда @username, t.me/..., email
 // или уже готовый тег <a href="...">. Ответственность за корректность
-// значения SUPPORT_CONTACT лежит на админе (аналогично DonateText).
+// значения SUPPORT_CONTACT лежит на админе.
 func BuildInfoMessage(cfg *config.Config) string {
 	msg := fmt.Sprintf(`<b>💡 Помощь и контакты</b>
 
