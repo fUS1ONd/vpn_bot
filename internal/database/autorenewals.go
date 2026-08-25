@@ -6,30 +6,19 @@ import (
 	"time"
 )
 
-// Автопродление живёт в двух таблицах, потому что описывает два независимых
-// факта. `autorenewals` — согласие пользователя (Автопродление) и сохранённый у
-// кассы инструмент (Способ автосписания). Они разъезжаются постоянно: карта
-// отвалилась, а согласие осталось; способ сохранён у того, кто автопродление не
-// включал. Сводить их к одному полю нельзя — «выключено» стало бы сразу тремя
-// разными состояниями.
-//
-// `autorenew_attempts` — попытки списания, привязанные к конкретному значению
-// expireAt. Не в notifications_sent: ClearNotifications зовётся при каждой
-// успешной активации платежа и стёрла бы историю попыток ровно тогда, когда она
-// нужнее всего.
+// Две таблицы на два независимых факта: `autorenewals` — согласие и Способ
+// (они разъезжаются постоянно, сводить к одному полю нельзя), `autorenew_attempts` —
+// попытки, привязанные к конкретному expireAt. Попытки не в notifications_sent:
+// ClearNotifications стёрла бы их историю при каждой успешной оплате.
 
 // Исходы попытки автосписания.
 const (
-	// AutorenewOutcomeSuccess — касса списала, подписка продлена.
 	AutorenewOutcomeSuccess = "success"
-	// AutorenewOutcomeDeclined — касса отказала (нет денег, отклонено банком).
-	// Способ при этом жив.
+	// AutorenewOutcomeDeclined — отказ кассы; Способ при этом жив.
 	AutorenewOutcomeDeclined = "declined"
-	// AutorenewOutcomeMethodGone — способа у кассы больше нет. Гасит Способ,
-	// но не согласие.
+	// AutorenewOutcomeMethodGone — гасит Способ, но не согласие.
 	AutorenewOutcomeMethodGone = "method_gone"
-	// AutorenewOutcomeUnknown — исход неизвестен: pending или сетевой сбой без
-	// ответа. Попытка израсходована, пользователю не пишем.
+	// AutorenewOutcomeUnknown — pending или сетевой сбой: попытка израсходована.
 	AutorenewOutcomeUnknown = "unknown"
 )
 
@@ -39,20 +28,17 @@ type Autorenewal struct {
 	Enabled         bool
 	PaymentMethodID *string
 	MethodTitle     *string
-	// PeriodMonths сегодня всегда 1: покупка более одного месяца за раз в объём
-	// не входит. Поле заведено заранее, но ветвлений под другие значения в коде
-	// нет и быть не должно.
-	PeriodMonths int
-	CreatedAt    time.Time
-	UpdatedAt    *time.Time
+	PeriodMonths    int // сегодня всегда 1, ветвлений под другие значения нет
+	CreatedAt       time.Time
+	UpdatedAt       *time.Time
 }
 
-// HasMethod сообщает, есть ли у пользователя Способ автосписания.
+// HasMethod — есть ли Способ автосписания.
 func (a *Autorenewal) HasMethod() bool {
 	return a != nil && a.PaymentMethodID != nil && *a.PaymentMethodID != ""
 }
 
-// IsEnabled сообщает, дал ли пользователь согласие на автосписание.
+// IsEnabled — дал ли пользователь согласие на автосписание.
 func (a *Autorenewal) IsEnabled() bool {
 	return a != nil && a.Enabled
 }
@@ -60,18 +46,15 @@ func (a *Autorenewal) IsEnabled() bool {
 // AutorenewAttempt — одно обращение к кассе в рамках одного цикла подписки.
 type AutorenewAttempt struct {
 	TelegramID int64
-	// ExpireAt — цикл подписки, к которому привязана попытка. Сдвинулся
-	// expireAt — новый цикл, попытки свежие.
-	ExpireAt  time.Time
-	AttemptNo int // 1 (T−24ч) или 2 (T−0)
-	Outcome   string
-	PaymentID *int64
-	CreatedAt time.Time
+	ExpireAt   time.Time // цикл подписки: сдвинулся — попытки свежие
+	AttemptNo  int       // 1 (T−24ч) или 2 (T−0)
+	Outcome    string
+	PaymentID  *int64
+	CreatedAt  time.Time
 }
 
-// autorenewCycleKey приводит момент окончания подписки к стабильному виду:
-// попытки ищутся по точному равенству, и лишние наносекунды из ответа панели
-// развалили бы поиск.
+// autorenewCycleKey: попытки ищутся по точному равенству, и наносекунды из
+// ответа панели развалили бы поиск.
 func autorenewCycleKey(expireAt time.Time) time.Time {
 	return expireAt.UTC().Truncate(time.Second)
 }
@@ -105,8 +88,7 @@ func (db *DB) GetAutorenewal(telegramID int64) (*Autorenewal, error) {
 	return a, nil
 }
 
-// SaveAutorenewMethod записывает Способ автосписания. Согласие при этом не
-// трогается: сохранение способа при обычной оплате не включает Автопродление.
+// SaveAutorenewMethod записывает Способ. Согласие не трогается.
 func (db *DB) SaveAutorenewMethod(telegramID int64, paymentMethodID, methodTitle string) error {
 	_, err := db.conn.Exec(
 		`INSERT INTO autorenewals (telegram_id, enabled, payment_method_id, method_title, period_months, updated_at)
@@ -123,8 +105,8 @@ func (db *DB) SaveAutorenewMethod(telegramID int64, paymentMethodID, methodTitle
 	return nil
 }
 
-// ClearAutorenewMethod гасит Способ, оставляя согласие как было: при следующей
-// ручной оплате картой автопродление оживает само, без повторного вопроса.
+// ClearAutorenewMethod гасит Способ, оставляя согласие: при следующей оплате
+// картой автопродление оживает само.
 func (db *DB) ClearAutorenewMethod(telegramID int64) error {
 	_, err := db.conn.Exec(
 		`UPDATE autorenewals
@@ -154,9 +136,7 @@ func (db *DB) SetAutorenewEnabled(telegramID int64, enabled bool) error {
 	return nil
 }
 
-// ListEnabledAutorenewals возвращает всех, кто дал согласие и у кого есть
-// Способ. Согласие без Способа — нормальное состояние, но списывать по нему
-// нечем.
+// ListEnabledAutorenewals — те, у кого есть и согласие, и Способ.
 func (db *DB) ListEnabledAutorenewals() ([]*Autorenewal, error) {
 	rows, err := db.conn.Query(
 		`SELECT telegram_id, enabled, payment_method_id, method_title, period_months, created_at, updated_at
@@ -191,9 +171,8 @@ func (db *DB) ListEnabledAutorenewals() ([]*Autorenewal, error) {
 	return result, rows.Err()
 }
 
-// DeleteAutorenewal убирает согласие, Способ и историю попыток. Зовётся при
-// удалении пользователя: хранить платёжный токен человека, которого мы сами
-// отключили, оснований нет.
+// DeleteAutorenewal убирает согласие, Способ и попытки: хранить платёжный
+// токен отключённого нами человека оснований нет.
 func (db *DB) DeleteAutorenewal(telegramID int64) error {
 	if _, err := db.conn.Exec(`DELETE FROM autorenewals WHERE telegram_id = ?`, telegramID); err != nil {
 		return fmt.Errorf("failed to delete autorenewal: %w", err)
@@ -204,9 +183,9 @@ func (db *DB) DeleteAutorenewal(telegramID int64) error {
 	return nil
 }
 
-// RecordAutorenewAttempt фиксирует израсходованную попытку. Первичный ключ
-// (telegram_id, expire_at, attempt_no) — физический барьер против второй записи
-// той же попытки; повторный вызов дописывает исход, а не заводит строку.
+// RecordAutorenewAttempt фиксирует израсходованную попытку. PK
+// (telegram_id, expire_at, attempt_no) — барьер против дубля: повторный вызов
+// дописывает исход, а не заводит строку.
 func (db *DB) RecordAutorenewAttempt(a *AutorenewAttempt) error {
 	_, err := db.conn.Exec(
 		`INSERT INTO autorenew_attempts (telegram_id, expire_at, attempt_no, outcome, payment_id)
@@ -222,7 +201,7 @@ func (db *DB) RecordAutorenewAttempt(a *AutorenewAttempt) error {
 	return nil
 }
 
-// HasAutorenewAttempt сообщает, была ли уже попытка с этим номером в этом цикле.
+// HasAutorenewAttempt — была ли уже попытка с этим номером в этом цикле.
 func (db *DB) HasAutorenewAttempt(telegramID int64, expireAt time.Time, attemptNo int) (bool, error) {
 	var exists bool
 	err := db.conn.QueryRow(
@@ -235,12 +214,9 @@ func (db *DB) HasAutorenewAttempt(telegramID int64, expireAt time.Time, attemptN
 	return exists, nil
 }
 
-// IsAutorenewPayment сообщает, был ли платёж создан шагом автосписаний.
-//
-// Нужна ручному flow оплаты: висящий pending без ссылки он переиспользует
-// вместе с ключом идемпотентности, а ключ автосписания выписан под запрос с
-// `payment_method_id` и без `confirmation` — касса отвергнет по нему обычный
-// платёж, и человек не сможет оплатить вовсе.
+// IsAutorenewPayment — создан ли платёж шагом автосписаний. Нужна ручному
+// flow: он переиспользует висящий pending вместе с ключом идемпотентности, а по
+// ключу автосписания касса отвергнет обычный платёж.
 func (db *DB) IsAutorenewPayment(paymentID int64) (bool, error) {
 	var exists bool
 	err := db.conn.QueryRow(
@@ -252,12 +228,9 @@ func (db *DB) IsAutorenewPayment(paymentID int64) (bool, error) {
 	return exists, nil
 }
 
-// UnresolvedAutorenewAttempt возвращает попытку цикла с неизвестным исходом, по
-// которой касса так и не назвала свой платёж.
-//
-// Такая попытка — единственный случай, когда следующая обязана пойти в кассу с
-// **тем же** ключом идемпотентности: если прошлое обращение всё-таки дошло и
-// деньги списаны, новый ключ означал бы второе списание за месяц.
+// UnresolvedAutorenewAttempt — попытка цикла с неизвестным исходом, по которой
+// касса не назвала свой платёж. Следующая обязана пойти с тем же ключом
+// идемпотентности: новый означал бы второе списание за месяц.
 func (db *DB) UnresolvedAutorenewAttempt(telegramID int64, expireAt time.Time) (*AutorenewAttempt, error) {
 	a := &AutorenewAttempt{}
 	var paymentID sql.NullInt64
@@ -282,9 +255,8 @@ func (db *DB) UnresolvedAutorenewAttempt(telegramID int64, expireAt time.Time) (
 	return a, nil
 }
 
-// HasFailedAutorenewAttempt сообщает, была ли в этом цикле попытка, не
-// закончившаяся успехом. Нужна уведомлениям: подавлять предупреждение о конце
-// подписки можно, только пока автопродление ещё обещает сработать.
+// HasFailedAutorenewAttempt — была ли в цикле неуспешная попытка. Подавлять
+// предупреждение о конце подписки можно, лишь пока автопродление обещает сработать.
 func (db *DB) HasFailedAutorenewAttempt(telegramID int64, expireAt time.Time) (bool, error) {
 	var exists bool
 	err := db.conn.QueryRow(
@@ -298,9 +270,8 @@ func (db *DB) HasFailedAutorenewAttempt(telegramID int64, expireAt time.Time) (b
 	return exists, nil
 }
 
-// LastAutorenewChargeAmount возвращает сумму прошлого успешного автосписания.
-// Нужна, чтобы заметить рост цены: молча списать больше, чем в прошлый раз, —
-// кратчайший путь к chargeback.
+// LastAutorenewChargeAmount — сумма прошлого успешного списания: молча списать
+// больше, чем в прошлый раз, — кратчайший путь к chargeback.
 func (db *DB) LastAutorenewChargeAmount(telegramID int64) (int, bool, error) {
 	var amount int
 	err := db.conn.QueryRow(
@@ -320,7 +291,7 @@ func (db *DB) LastAutorenewChargeAmount(telegramID int64) (int, bool, error) {
 	return amount, true, nil
 }
 
-// ListAutorenewAttempts возвращает все попытки цикла в порядке номеров.
+// ListAutorenewAttempts — все попытки цикла в порядке номеров.
 func (db *DB) ListAutorenewAttempts(telegramID int64, expireAt time.Time) ([]*AutorenewAttempt, error) {
 	rows, err := db.conn.Query(
 		`SELECT telegram_id, expire_at, attempt_no, outcome, payment_id, created_at

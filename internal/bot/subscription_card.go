@@ -89,8 +89,7 @@ func (b *Bot) buildSubscriptionCard(telegramID int64, remUser *remnawave.User) (
 
 	isTrial := b.isTrialUser(telegramID)
 	msg := FormatUserStatus(remUser, dbUser, isTrial, devicesCount)
-	// Строка автопродления живёт между статусом и приписками: её состояние
-	// определяет и текст, и наличие кнопки — они обязаны совпадать.
+	// Одно состояние на текст и на кнопку: они обязаны совпадать.
 	autorenew := b.autorenewViewFor(telegramID, remUser, dbUser)
 	msg += autorenew.cardLine()
 	if mention := b.claimCommunityMention(telegramID); mention != "" {
