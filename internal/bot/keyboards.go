@@ -34,6 +34,9 @@ const (
 	cbAutorenewDisable     = "ar_off"     // выключить автопродление (один тап)
 	cbAutorenewDismiss     = "ar_dismiss" // «Не сейчас» в предложении включить
 	cbAutorenewPayManually = "ar_pay"     // подсказка продлить вручную после провала
+	cbPaymentMethod        = "pm_open"    // экран сохранённого способа оплаты
+	cbPaymentMethodUnlink  = "pm_unlink"  // запрос отвязки способа
+	cbPaymentMethodConfirm = "pm_unlink_ok"
 )
 
 // Unique-идентификаторы inline-кнопок багрепорта
@@ -354,7 +357,7 @@ func isValidSubscriptionURL(subURL string) bool {
 // showConnect включает кнопки перехода на страницу подписки и перевыпуска ссылки:
 // они показываются там же, где показывается сама ссылка (активный доступ).
 // «Мои устройства» доступны всегда, пока пользователь зарегистрирован.
-func SubscriptionCardKeyboard(subURL string, showConnect, showAutorenew bool) *tele.ReplyMarkup {
+func SubscriptionCardKeyboard(subURL string, showConnect, showAutorenew, showMethod bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
 
@@ -365,11 +368,38 @@ func SubscriptionCardKeyboard(subURL string, showConnect, showAutorenew bool) *t
 	if showAutorenew {
 		rows = append(rows, menu.Row(menu.Data("🔄 Автопродление", cbAutorenewOpen)))
 	}
+	// Своя точка входа, а не пункт внутри автопродления: отвязать сохранённый
+	// способ человек должен мочь, ничего не зная про автосписания.
+	if showMethod {
+		rows = append(rows, menu.Row(menu.Data("💳 Способ оплаты", cbPaymentMethod)))
+	}
 	if showConnect {
 		rows = append(rows, menu.Row(menu.Data("🔄 Перевыпустить ссылку", cbSubRevoke)))
 	}
 
 	menu.Inline(rows...)
+	return menu
+}
+
+// SavedMethodKeyboard — экран сохранённого способа оплаты.
+func SavedMethodKeyboard(hasMethod bool) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+	if hasMethod {
+		rows = append(rows, menu.Row(menu.Data("🗑 Отвязать", cbPaymentMethodUnlink)))
+	}
+	rows = append(rows, menu.Row(menu.Data("🔙 Назад", cbSubCard)))
+	menu.Inline(rows...)
+	return menu
+}
+
+// SavedMethodUnlinkKeyboard — подтверждение отвязки.
+func SavedMethodUnlinkKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(
+		menu.Row(menu.Data("✅ Да, отвязать", cbPaymentMethodConfirm)),
+		menu.Row(menu.Data("🔙 Отмена", cbPaymentMethod)),
+	)
 	return menu
 }
 

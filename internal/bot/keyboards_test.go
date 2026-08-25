@@ -10,7 +10,7 @@ import (
 )
 
 func TestSubscriptionCardKeyboardWithActiveAccess(t *testing.T) {
-	kb := SubscriptionCardKeyboard("https://sub.example.com:8443/abc123", true, false)
+	kb := SubscriptionCardKeyboard("https://sub.example.com:8443/abc123", true, false, false)
 	require.NotNil(t, kb)
 	require.Len(t, kb.InlineKeyboard, 3)
 
@@ -21,7 +21,7 @@ func TestSubscriptionCardKeyboardWithActiveAccess(t *testing.T) {
 
 func TestSubscriptionCardKeyboardWithoutActiveAccess(t *testing.T) {
 	// Нет доступа — остаются только устройства: ни перехода, ни перевыпуска.
-	kb := SubscriptionCardKeyboard("https://sub.example.com/abc123", false, false)
+	kb := SubscriptionCardKeyboard("https://sub.example.com/abc123", false, false, false)
 	require.Len(t, kb.InlineKeyboard, 1)
 	assert.Equal(t, cbDevicesManage, kb.InlineKeyboard[0][0].Unique)
 }
@@ -30,7 +30,7 @@ func TestSubscriptionCardKeyboardSkipsInvalidURL(t *testing.T) {
 	// Битую ссылку Telegram отверг бы вместе со всем сообщением, поэтому
 	// URL-кнопки быть не должно, а остальные кнопки остаются на месте.
 	for _, subURL := range []string{"", "vless://example", "не ссылка", "://broken", "https://"} {
-		kb := SubscriptionCardKeyboard(subURL, true, false)
+		kb := SubscriptionCardKeyboard(subURL, true, false, false)
 		require.Len(t, kb.InlineKeyboard, 2, "subURL=%q", subURL)
 		assert.Equal(t, cbDevicesManage, kb.InlineKeyboard[0][0].Unique, "subURL=%q", subURL)
 		assert.Equal(t, cbSubRevoke, kb.InlineKeyboard[1][0].Unique, "subURL=%q", subURL)
