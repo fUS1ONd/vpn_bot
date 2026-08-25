@@ -96,7 +96,8 @@ func (b *Bot) buildSubscriptionCard(telegramID int64, remUser *remnawave.User) (
 		msg += "\n\n" + mention
 	}
 	markup := SubscriptionCardKeyboard(remUser.SubscriptionURL,
-		SubscriptionLinkVisible(remUser, isTrial), autorenew.state != autorenewHidden)
+		SubscriptionLinkVisible(remUser, isTrial), autorenew.state != autorenewHidden,
+		autorenew.methodTitle != "")
 
 	return msg, markup
 }

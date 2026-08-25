@@ -233,6 +233,16 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	btnArPay := arMenu.Data("", cbAutorenewPayManually)
 	b.Handle(&btnArPay, bot.handleAutorenewPayManually)
 
+	// Inline-кнопки сохранённого способа оплаты
+	pmMenu := &tele.ReplyMarkup{}
+	btnPmOpen := pmMenu.Data("", cbPaymentMethod)
+	btnPmUnlink := pmMenu.Data("", cbPaymentMethodUnlink)
+	btnPmUnlinkOK := pmMenu.Data("", cbPaymentMethodConfirm)
+
+	b.Handle(&btnPmOpen, bot.handlePaymentMethod)
+	b.Handle(&btnPmUnlink, bot.handlePaymentMethodUnlink)
+	b.Handle(&btnPmUnlinkOK, bot.handlePaymentMethodUnlinkConfirm)
+
 	// Inline-кнопки багрепорта (роутинг по Unique)
 	bugMenu := &tele.ReplyMarkup{}
 	btnBugServer := bugMenu.Data("", cbBugServer)

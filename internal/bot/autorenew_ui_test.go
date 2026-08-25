@@ -119,10 +119,10 @@ func TestAutorenewEnabledWithoutMethodShowsUnavailable(t *testing.T) {
 
 // Кнопка автопродления появляется в карточке ровно тогда, когда есть строка.
 func TestSubscriptionCardKeyboardShowsAutorenew(t *testing.T) {
-	withAutorenew := SubscriptionCardKeyboard("https://sub.example.com/a", true, true)
+	withAutorenew := SubscriptionCardKeyboard("https://sub.example.com/a", true, true, false)
 	require.True(t, keyboardHasCallback(withAutorenew, cbAutorenewOpen))
 
-	without := SubscriptionCardKeyboard("https://sub.example.com/a", true, false)
+	without := SubscriptionCardKeyboard("https://sub.example.com/a", true, false, false)
 	require.False(t, keyboardHasCallback(without, cbAutorenewOpen))
 }
 
