@@ -316,9 +316,16 @@ func (b *Bot) buildAdminUserInfo(targetID int64) (string, *tele.ReplyMarkup, err
 	fmt.Fprintf(&msg, "📊 Трафик за месяц: %s\n", trafficLabel)
 	fmt.Fprintf(&msg, "📡 Устройства: %s\n", devicesLabel)
 	fmt.Fprintf(&msg, "🏷 Тип: %s\n", typeLabel)
+	// Состояние автопродления считается один раз: строка и кнопка обязаны
+	// говорить одно и то же.
+	autorenew := b.autorenewViewFor(targetID, remUser, dbUser)
+	msg.WriteString(adminAutorenewLine(autorenew))
 	fmt.Fprintf(&msg, "%s Статус: %s", statusEmoji, statusLabel)
 
-	return msg.String(), AdminUserInfoKeyboardWithReferrals(targetID, remUser, referralSummary.Active), nil
+	// Кнопка привязана к живому согласию, а не к состоянию карточки: согласие
+	// переживает и пропавший Способ, и истёкшую подписку, а человек, попросивший
+	// поддержку выключить списания, обязан получить это выключение.
+	return msg.String(), AdminUserInfoKeyboardWithReferrals(targetID, remUser, referralSummary.Active, autorenew.consent), nil
 }
 
 func (b *Bot) editAdminUserInfo(c tele.Context, targetID int64) error {
