@@ -197,10 +197,9 @@ func migrate(conn *sql.DB) error {
 			updated_at TIMESTAMP
 		)`,
 
-		// Автопродление: согласие пользователя и Способ автосписания. Поля
-		// enabled и payment_method_id независимы намеренно — согласие без
-		// Способа и Способ без согласия оба нормальны, CHECK их связывать нельзя.
-		// period_months сегодня всегда 1: мультимесяц в объём не входит.
+		// Автопродление. enabled и payment_method_id независимы намеренно:
+		// согласие без Способа и Способ без согласия оба нормальны, CHECK их
+		// связывать нельзя. period_months сегодня всегда 1.
 		`CREATE TABLE IF NOT EXISTS autorenewals (
 			telegram_id INTEGER PRIMARY KEY,
 			enabled INTEGER NOT NULL DEFAULT 0,
@@ -211,10 +210,8 @@ func migrate(conn *sql.DB) error {
 			updated_at TIMESTAMP
 		)`,
 
-		// Попытки автосписания. Ключ (telegram_id, expire_at, attempt_no) —
-		// барьер против второй записи той же попытки; привязка к expire_at, а не
-		// к календарю, означает, что сдвинувшийся expireAt открывает новый цикл
-		// со свежими попытками.
+		// Попытки автосписания. Ключ — барьер против дубля, привязка к
+		// expire_at означает, что сдвинувшийся expireAt открывает новый цикл.
 		`CREATE TABLE IF NOT EXISTS autorenew_attempts (
 			telegram_id INTEGER NOT NULL,
 			expire_at TIMESTAMP NOT NULL,
@@ -286,7 +283,7 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE payments ADD COLUMN provider_fee_percent INTEGER`,
 		// Тестовые платежи администратора не влияют на доступ и финансовые отчёты.
 		`ALTER TABLE payments ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`,
-		// Длительность оплаченного периода. Сегодня всегда 1 — мультимесяц в объём не входит.
+		// Длительность оплаченного периода; сегодня всегда 1.
 		`ALTER TABLE payments ADD COLUMN period_months INTEGER NOT NULL DEFAULT 1`,
 	}
 	for _, m := range alterMigrations {

@@ -84,18 +84,16 @@ func (c *Client) CreatePayment(req paymentprovider.CreateRequest) (*paymentprovi
 		"description":  req.Description,
 		"metadata":     map[string]string{"local_payment_id": fmt.Sprintf("%d", req.LocalPaymentID)},
 	}
-	// Параметр ставится только по явной просьбе: у большинства способов касса
-	// сохраняет безусловно, не спрашивая человека, — согласие берётся на нашей
-	// стороне, до редиректа.
+	// Только по явной просьбе: касса сохраняет безусловно, не спрашивая
+	// человека, — согласие берётся на нашей стороне, до редиректа.
 	if req.SavePaymentMethod {
 		body["save_payment_method"] = true
 	}
 	return c.doPayment(http.MethodPost, "/v3/payments", body, key)
 }
 
-// ChargeSavedMethod списывает по сохранённому Способу. Ответ синхронный:
-// succeeded или canceled приходят прямо здесь, вебхук остаётся страховкой.
-// Ключ идемпотентности обязателен — по нему повтор вернёт тот же платёж.
+// ChargeSavedMethod списывает по сохранённому Способу. Ответ синхронный,
+// вебхук остаётся страховкой; по ключу идемпотентности повтор вернёт тот же платёж.
 func (c *Client) ChargeSavedMethod(req paymentprovider.ChargeRequest) (*paymentprovider.Payment, error) {
 	if req.PaymentMethodID == "" {
 		return nil, fmt.Errorf("charge saved method: empty payment method id")
@@ -244,8 +242,7 @@ func parsePayment(data []byte) (*paymentprovider.Payment, error) {
 		CancellationReason: raw.CancellationDetails.Reason,
 		MethodGone:         methodGone(raw.CancellationDetails.Reason),
 	}
-	// Способ считается сохранённым только когда касса сказала об этом сама:
-	// saved: false и пустой id — это «не сохранён», а не «сохранён неизвестно что».
+	// Сохранён — только когда касса сказала об этом сама.
 	if raw.PaymentMethod.Saved && raw.PaymentMethod.ID != "" {
 		p.SavedMethodID = raw.PaymentMethod.ID
 		p.SavedMethodTitle = methodTitle(raw.PaymentMethod.Type, raw.PaymentMethod.Card.Last4, raw.PaymentMethod.Title)
@@ -253,23 +250,18 @@ func parsePayment(data []byte) (*paymentprovider.Payment, error) {
 	return p, nil
 }
 
-// methodGoneReasons — отказы, означающие, что списывать больше нечем.
-// Список намеренно узкий: обычный отказ карты Способ не гасит (Р1), и ошибочно
-// погашенный Способ стоит пользователю повторного включения автопродления.
+// methodGoneReasons — отказы, после которых списывать нечем. Список намеренно
+// узкий: обычный отказ карты Способ не гасит.
 var methodGoneReasons = map[string]bool{
-	// Пользователь отозвал разрешение на автоплатежи.
-	"permission_revoked": true,
-	// Карта просрочена — этим инструментом уже не списать.
-	"card_expired": true,
-	// Номер карты недействителен.
-	"invalid_card_number": true,
-	// Способ оплаты запрещён для этого магазина или платежа.
+	"permission_revoked":        true, // пользователь отозвал разрешение на автоплатежи
+	"card_expired":              true,
+	"invalid_card_number":       true,
 	"payment_method_restricted": true,
 }
 
 func methodGone(reason string) bool { return methodGoneReasons[reason] }
 
-// methodTitle — что показать пользователю вместо технического типа способа.
+// methodTitle — что показать пользователю вместо технического типа.
 func methodTitle(methodType, last4, apiTitle string) string {
 	switch methodType {
 	case "bank_card":

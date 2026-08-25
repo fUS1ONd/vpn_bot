@@ -19,9 +19,7 @@ type Payment struct {
 	ProviderRequestKey     *string
 	ProviderFeeBasisPoints *int // сотые доли процента, например 350 = 3.5%
 	IsTest                 bool
-	// PeriodMonths — длительность оплаченного периода. Сегодня всегда 1:
-	// покупка более одного месяца за раз в объём не входит, ветвлений под
-	// другие значения в коде нет.
+	// PeriodMonths — длительность оплаченного периода; сегодня всегда 1.
 	PeriodMonths int
 	RedirectURL  *string
 	ExpiresAt    *time.Time
@@ -188,9 +186,8 @@ func (db *DB) SetProviderPaymentDetails(id int64, providerPaymentID, redirectURL
 	return err
 }
 
-// SetPaymentExpiry сдвигает срок жизни незакрытого платежа. Нужен повторному
-// обращению автосписания: запись оживает вместе со своим ключом идемпотентности
-// и обязана получить новый срок, иначе протухнет тем же проходом.
+// SetPaymentExpiry сдвигает срок жизни незакрытого платежа: оживлённая запись
+// автосписания иначе протухнет тем же проходом.
 func (db *DB) SetPaymentExpiry(id int64, expiresAt time.Time) error {
 	_, err := db.conn.Exec(`UPDATE payments SET expires_at = ? WHERE id = ?`, expiresAt, id)
 	return err

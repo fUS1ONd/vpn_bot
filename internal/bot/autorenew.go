@@ -7,29 +7,24 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 )
 
-// Автопродление — согласие пользователя списывать плату за следующий период без
-// его участия. Способ автосписания — сохранённый у кассы инструмент, которым
-// списание проводится. Это две сущности: согласие может пережить пропавшую
-// карту, а Способ может быть сохранён у того, кто согласия не давал.
+// Автопродление (согласие пользователя) и Способ автосписания (инструмент у
+// кассы) — две независимые сущности: согласие переживает пропавшую карту, а
+// Способ сохраняется и у того, кто согласия не давал.
 
-// autorenewAvailable сообщает, жива ли фича вообще: рубильник включён и касса
-// настроена. Один предикат на все места — абзац согласия, save_payment_method,
-// кнопки и шаг scheduler гаснут вместе.
+// autorenewAvailable — один предикат на все места: абзац согласия,
+// save_payment_method, кнопки и шаг scheduler гаснут вместе.
 func (b *Bot) autorenewAvailable() bool {
 	return b.config.AutorenewingEnabled() && b.yookassa != nil
 }
 
 // shouldSavePaymentMethod решает, просить ли кассу запомнить способ оплаты.
-// Тестовый платёж админа сюда не попадает (Р16): activateSubscription для
-// IsTest вообще ничего не делает, и тестовая кнопка не должна вести себя иначе,
-// чем боевая. Крипта проходит мимо: save_payment_method — параметр ЮKassa.
+// Тестовый платёж админа не участвует, крипта — тоже: это параметр ЮKassa.
 func (b *Bot) shouldSavePaymentMethod(providerName string, isTest bool) bool {
 	return b.autorenewAvailable() && providerName == paymentprovider.YooKassa && !isTest
 }
 
-// rememberAutorenewMethod записывает Способ автосписания по сверенному ответу
-// кассы. Согласие при этом не включается: сохранённый способ и согласие — две
-// разные сущности, и записать первое не значит получить второе.
+// rememberAutorenewMethod записывает Способ по сверенному ответу кассы.
+// Согласие при этом не включается.
 func (b *Bot) rememberAutorenewMethod(payment *database.Payment, verified *paymentprovider.Payment) {
 	if !b.autorenewAvailable() || payment == nil || verified == nil {
 		return
@@ -38,8 +33,7 @@ func (b *Bot) rememberAutorenewMethod(payment *database.Payment, verified *payme
 		return
 	}
 	if err := b.db.SaveAutorenewMethod(payment.TelegramID, verified.SavedMethodID, verified.SavedMethodTitle); err != nil {
-		// Не сохранился Способ — не повод рушить подтверждение оплаты: подписка
-		// важнее автопродления, а Способ вернётся при следующей оплате.
+		// Подписка важнее автопродления: Способ вернётся при следующей оплате.
 		slog.Error("Не удалось сохранить Способ автосписания",
 			"error", err, "telegram_id", payment.TelegramID, "payment_id", payment.ID)
 		return
@@ -49,9 +43,8 @@ func (b *Bot) rememberAutorenewMethod(payment *database.Payment, verified *payme
 }
 
 // autorenewConsentNote — абзац согласия на экране выбора способа оплаты. Живёт
-// до редиректа в кассу, а не в сообщении после оплаты: у большинства способов
-// касса сохраняет инструмент безусловно и человека ни о чём не спрашивает, так
-// что наш экран — единственное место, где он об этом узнаёт.
+// до редиректа: касса сохраняет инструмент безусловно, ни о чём не спрашивая,
+// и наш экран — единственное место, где человек об этом узнаёт.
 func (b *Bot) autorenewConsentNote() string {
 	if !b.autorenewAvailable() {
 		return ""

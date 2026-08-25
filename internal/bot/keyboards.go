@@ -374,16 +374,14 @@ func SubscriptionCardKeyboard(subURL string, showConnect, showAutorenew bool) *t
 }
 
 // AutorenewScreenKeyboard — кнопки экрана автопродления. «🔙 Назад» ведёт на
-// cbSubCard: экран редактирует сообщение карточки, и возврат обязан вернуть
-// карточку на место, а не удалить сообщение.
+// cbSubCard: экран редактирует сообщение карточки и обязан вернуть её на место.
 func AutorenewScreenKeyboard(view autorenewView) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
 	switch {
 	case view.consent:
-		// Выключить можно всегда, пока согласие живо, — в том числе у
-		// истёкшей подписки: иначе человек, передумавший в grace, остался бы
-		// без кнопки и пошёл бы в поддержку.
+		// Пока согласие живо — в том числе у истёкшей подписки: передумавший в
+		// grace иначе остался бы без кнопки.
 		rows = append(rows, menu.Row(menu.Data("Выключить", cbAutorenewDisable, autorenewDisableFromCard)))
 	case view.state == autorenewOff:
 		rows = append(rows, menu.Row(menu.Data("✅ Включить", cbAutorenewEnable)))
@@ -393,10 +391,8 @@ func AutorenewScreenKeyboard(view autorenewView) *tele.ReplyMarkup {
 	return menu
 }
 
-// autorenewDisableFromCard помечает нажатие «Выключить», пришедшее с экрана
-// автопродления. Та же кнопка висит на сообщениях об автосписании, но там
-// возвращать нечего: карточки в этом сообщении никогда не было, и «🔙 Назад»
-// превратил бы уведомление в чужой экран.
+// autorenewDisableFromCard помечает нажатие «Выключить» с экрана автопродления.
+// Та же кнопка висит на сообщениях об автосписании, но там возвращаться некуда.
 const autorenewDisableFromCard = "card"
 
 // AutorenewOfferKeyboard — экран условий, открытый из сообщения об оплате.
@@ -410,17 +406,15 @@ func AutorenewOfferKeyboard() *tele.ReplyMarkup {
 }
 
 // AutorenewOfferPromptKeyboard — предложение включить автопродление в сообщении
-// об успешной ручной оплате. Сообщение уходит с inline-разметкой вместо
-// reply-клавиатуры: Telegram не позволяет приложить обе к одному сообщению, а
-// reply-клавиатура липкая — она уже показана и никуда не денется.
+// об оплате. Уходит вместо reply-клавиатуры: обе Telegram не позволяет, а
+// reply-клавиатура липкая и уже показана.
 func AutorenewOfferPromptKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	menu.Inline(menu.Row(menu.Data("🔄 Включить автопродление", cbAutorenewOffer)))
 	return menu
 }
 
-// AutorenewDisableKeyboard — одиночная кнопка выключения для сообщений
-// scheduler об автосписании.
+// AutorenewDisableKeyboard — кнопка выключения для сообщений об автосписании.
 func AutorenewDisableKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	menu.Inline(menu.Row(menu.Data("Выключить автопродление", cbAutorenewDisable)))
@@ -581,8 +575,8 @@ func AdminUserInfoKeyboard(targetID int64, remUser *remnawave.User) *tele.ReplyM
 }
 
 // AdminUserInfoKeyboardWithReferrals собирает карточку пользователя.
-// autorenewOn добавляет кнопку выключения автопродления: выключить админ
-// может, включить — нет, согласие на списание денег даёт только сам человек.
+// autorenewOn добавляет кнопку выключения: включить админ не может, согласие на
+// списание денег даёт только сам человек.
 func AdminUserInfoKeyboardWithReferrals(targetID int64, remUser *remnawave.User, activeInvites int, autorenewOn bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row

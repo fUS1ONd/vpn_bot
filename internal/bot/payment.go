@@ -301,19 +301,14 @@ func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Paym
 	h.bot.issueReceiptAsync(payment.ID)
 }
 
-// paymentSuccessMarkup выбирает разметку сообщения об успешной оплате.
-//
-// Обычно это reply-клавиатура главного меню. Но когда есть что предложить —
-// Способ сохранён, автопродление выключено, — сообщение уходит с inline-кнопкой
-// вместо неё: Telegram не позволяет приложить к одному сообщению обе разметки,
-// а второе сообщение на ту же оплату было бы шумом. Reply-клавиатура при этом
-// липкая: она уже показана пользователю и никуда не денется.
+// paymentSuccessMarkup выбирает разметку сообщения об успешной оплате: обычно
+// reply-клавиатуру меню, но при наличии предложения — inline-кнопку вместо неё.
+// Обе Telegram не позволяет, а второе сообщение на ту же оплату было бы шумом.
 func (b *Bot) paymentSuccessMarkup(payment *database.Payment) *tele.ReplyMarkup {
 	return b.paymentSuccessMarkupFor(payment.TelegramID, payment.IsTest)
 }
 
-// paymentSuccessMarkupFor — та же логика для пути ручной проверки оплаты, где
-// на руках только telegram_id.
+// paymentSuccessMarkupFor — то же для пути ручной проверки оплаты.
 func (b *Bot) paymentSuccessMarkupFor(telegramID int64, isTest bool) *tele.ReplyMarkup {
 	if !isTest {
 		if offer := b.autorenewOfferMarkup(telegramID); offer != nil {
@@ -323,9 +318,8 @@ func (b *Bot) paymentSuccessMarkupFor(telegramID int64, isTest bool) *tele.Reply
 	return b.userKeyboard(telegramID)
 }
 
-// isTestPaymentUser повторяет условие, по которому платёж помечается тестовым
-// при создании. Один предикат на оба места: разойдясь, они дали бы админу
-// предложение включить автопродление после тестовой кнопки.
+// isTestPaymentUser — то же условие, по которому платёж помечается тестовым при
+// создании. Один предикат на оба места, иначе они разойдутся.
 func (b *Bot) isTestPaymentUser(telegramID int64) bool {
 	return b.config != nil && telegramID == b.config.AdminID && b.config.AdminTestPaymentPrice > 0
 }
@@ -334,11 +328,9 @@ func (b *Bot) paymentConfirmationMessage(payment *database.Payment) string {
 	if payment.IsTest {
 		return "✅ Платёжная система работает."
 	}
-	// Платёж автосписания сюда доходит только одним путём — через retry
-	// активации, когда панель полежала и дожала его плановым проходом. Текст
-	// обязан остаться текстом автосписания: «Оплата прошла» подразумевает
-	// действие пользователя, а он ничего не делал, и «я не платил» на сообщение
-	// о списанных деньгах — прямая дорога к chargeback.
+	// Платёж автосписания доходит сюда через retry активации, и текст обязан
+	// остаться текстом автосписания: «я не платил» на сообщение о списанных
+	// деньгах — прямая дорога к chargeback.
 	if fromAutorenew, err := b.db.IsAutorenewPayment(payment.ID); err != nil {
 		slog.Warn("Не удалось определить происхождение платежа", "error", err, "payment_id", payment.ID)
 	} else if fromAutorenew {
@@ -676,10 +668,8 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 			// выдадим, а оплату по expired-платежу подтверждение отвергнет как
 			// неактуальную — деньги приняты, услуга не оказана.
 			//
-			// Кроме одного случая: запись автосписания. Её ключ выписан под
-			// запрос с payment_method_id и без confirmation, и по нему касса
-			// откажет обычному платежу — человек не смог бы оплатить вовсе.
-			// Такую запись оставляем жить своей жизнью и заводим новую.
+			// Кроме записи автосписания: по её ключу касса откажет обычному
+			// платежу. Оставляем её жить своей жизнью и заводим новую.
 			fromAutorenew, autorenewErr := b.db.IsAutorenewPayment(pending.ID)
 			if autorenewErr != nil {
 				return nil, "", fmt.Errorf("check autorenew payment: %w", autorenewErr)

@@ -24,17 +24,12 @@ type Payment struct {
 	ExpiresAt       *time.Time
 	RecipientID     string
 
-	// SavedMethodID заполняется, только когда касса подтвердила сохранение
-	// способа (`payment_method.saved: true`). Пустая строка означает «способ не
-	// сохранён», а не «сохранён неизвестно какой».
-	SavedMethodID string
-	// SavedMethodTitle — что показать пользователю: «•••• 4242» или «СБП».
-	SavedMethodTitle string
-	// CancellationReason — причина отказа кассы, как её назвал провайдер.
-	// Хранится сырой: нужна логам и разбору инцидентов.
+	// SavedMethodID непуст, только когда касса подтвердила сохранение способа.
+	SavedMethodID    string
+	SavedMethodTitle string // «•••• 4242» или «СБП»
+	// CancellationReason — сырая причина отказа: нужна логам и разбору инцидентов.
 	CancellationReason string
-	// MethodGone — касса сказала, что способа больше нет. Гасит Способ
-	// автосписания, но не согласие пользователя: это разные сущности.
+	// MethodGone — способа у кассы больше нет. Гасит Способ, но не согласие.
 	MethodGone bool
 }
 
@@ -47,14 +42,13 @@ type CreateRequest struct {
 	CallbackURL    string
 	LocalPaymentID int64
 	IdempotenceKey string
-	// SavePaymentMethod просит кассу запомнить способ оплаты. Параметр, а не
-	// константа: тестовый платёж админа его не ставит, и выключенный рубильник
-	// автопродления гасит его целиком.
+	// SavePaymentMethod просит кассу запомнить способ. Параметр, а не константа:
+	// тестовый платёж его не ставит, выключенный рубильник гасит целиком.
 	SavePaymentMethod bool
 }
 
-// ChargeRequest — списание по сохранённому Способу автосписания. Подтверждения
-// от пользователя такой платёж не требует и отвечает синхронно.
+// ChargeRequest — списание по сохранённому Способу: подтверждения от
+// пользователя не требует, отвечает синхронно.
 type ChargeRequest struct {
 	Amount          int
 	Currency        string
@@ -71,9 +65,8 @@ type Provider interface {
 	GetPayment(string) (*Payment, error)
 }
 
-// RecurringProvider умеет списывать по ранее сохранённому способу. Отдельный
-// интерфейс, а не метод в Provider: списание по сохранённому способу умеет
-// только ЮKassa, и Platega возвращала бы здесь заглушку.
+// RecurringProvider умеет списывать по сохранённому способу. Отдельный
+// интерфейс, а не метод в Provider: Platega возвращала бы здесь заглушку.
 type RecurringProvider interface {
 	Provider
 	ChargeSavedMethod(ChargeRequest) (*Payment, error)
