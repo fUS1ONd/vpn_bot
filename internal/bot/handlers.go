@@ -217,6 +217,22 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnSubRevokeOK, bot.handleSubRevokeConfirm)
 	b.Handle(&btnSubRevokeCancel, bot.handleSubRevokeCancel)
 
+	// Inline-кнопки автопродления (роутинг по Unique)
+	arMenu := &tele.ReplyMarkup{}
+	btnArOpen := arMenu.Data("", cbAutorenewOpen)
+	btnArOffer := arMenu.Data("", cbAutorenewOffer)
+	btnArEnable := arMenu.Data("", cbAutorenewEnable)
+	btnArDisable := arMenu.Data("", cbAutorenewDisable)
+	btnArDismiss := arMenu.Data("", cbAutorenewDismiss)
+
+	b.Handle(&btnArOpen, bot.handleAutorenewOpen)
+	b.Handle(&btnArOffer, bot.handleAutorenewOffer)
+	b.Handle(&btnArEnable, bot.handleAutorenewEnable)
+	b.Handle(&btnArDisable, bot.handleAutorenewDisable)
+	b.Handle(&btnArDismiss, bot.handleAutorenewDismiss)
+	btnArPay := arMenu.Data("", cbAutorenewPayManually)
+	b.Handle(&btnArPay, bot.handleAutorenewPayManually)
+
 	// Inline-кнопки багрепорта (роутинг по Unique)
 	bugMenu := &tele.ReplyMarkup{}
 	btnBugServer := bugMenu.Data("", cbBugServer)
@@ -264,6 +280,8 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnAdminRefRevoke, bot.handleAdminReferralRevoke)
 	b.Handle(&btnAdminRefRevokeOK, bot.handleAdminReferralRevokeConfirm)
 	b.Handle(&btnAdminRefBack, bot.handleAdminReferralBack)
+	btnAdminArOff := adminRefMenu.Data("", cbAdminAutorenewOff)
+	b.Handle(&btnAdminArOff, bot.handleAdminAutorenewDisable)
 
 	return bot, nil
 }

@@ -26,6 +26,16 @@ const (
 	cbSubCard          = "sub_card"          // возврат к карточке подписки
 )
 
+// Unique-идентификаторы inline-кнопок автопродления
+const (
+	cbAutorenewOpen        = "ar_open"    // экран автопродления из карточки
+	cbAutorenewOffer       = "ar_offer"   // экран условий из сообщения об оплате
+	cbAutorenewEnable      = "ar_on"      // включить автопродление
+	cbAutorenewDisable     = "ar_off"     // выключить автопродление (один тап)
+	cbAutorenewDismiss     = "ar_dismiss" // «Не сейчас» в предложении включить
+	cbAutorenewPayManually = "ar_pay"     // подсказка продлить вручную после провала
+)
+
 // Unique-идентификаторы inline-кнопок багрепорта
 const (
 	cbBugServer     = "bug_server"      // переключение выбора сервера (Data = индекс хоста)
@@ -50,6 +60,7 @@ const (
 	cbAdminReferralRevoke   = "adm_ref_revoke"
 	cbAdminReferralRevokeOK = "adm_ref_revoke_ok"
 	cbAdminReferralBack     = "adm_ref_back"
+	cbAdminAutorenewOff     = "adm_ar_off" // выключение автопродления админом (Data = targetID)
 )
 
 // Текстовые константы кнопок
@@ -343,7 +354,7 @@ func isValidSubscriptionURL(subURL string) bool {
 // showConnect включает кнопки перехода на страницу подписки и перевыпуска ссылки:
 // они показываются там же, где показывается сама ссылка (активный доступ).
 // «Мои устройства» доступны всегда, пока пользователь зарегистрирован.
-func SubscriptionCardKeyboard(subURL string, showConnect bool) *tele.ReplyMarkup {
+func SubscriptionCardKeyboard(subURL string, showConnect, showAutorenew bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
 
@@ -351,11 +362,85 @@ func SubscriptionCardKeyboard(subURL string, showConnect bool) *tele.ReplyMarkup
 		rows = append(rows, menu.Row(menu.URL("🔗 Подключить устройство", subURL)))
 	}
 	rows = append(rows, menu.Row(menu.Data("📱 Мои устройства", cbDevicesManage)))
+	if showAutorenew {
+		rows = append(rows, menu.Row(menu.Data("🔄 Автопродление", cbAutorenewOpen)))
+	}
 	if showConnect {
 		rows = append(rows, menu.Row(menu.Data("🔄 Перевыпустить ссылку", cbSubRevoke)))
 	}
 
 	menu.Inline(rows...)
+	return menu
+}
+
+// AutorenewScreenKeyboard — кнопки экрана автопродления. «🔙 Назад» ведёт на
+// cbSubCard: экран редактирует сообщение карточки, и возврат обязан вернуть
+// карточку на место, а не удалить сообщение.
+func AutorenewScreenKeyboard(view autorenewView) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+	switch {
+	case view.consent:
+		// Выключить можно всегда, пока согласие живо, — в том числе у
+		// истёкшей подписки: иначе человек, передумавший в grace, остался бы
+		// без кнопки и пошёл бы в поддержку.
+		rows = append(rows, menu.Row(menu.Data("Выключить", cbAutorenewDisable, autorenewDisableFromCard)))
+	case view.state == autorenewOff:
+		rows = append(rows, menu.Row(menu.Data("✅ Включить", cbAutorenewEnable)))
+	}
+	rows = append(rows, menu.Row(menu.Data("🔙 Назад", cbSubCard)))
+	menu.Inline(rows...)
+	return menu
+}
+
+// autorenewDisableFromCard помечает нажатие «Выключить», пришедшее с экрана
+// автопродления. Та же кнопка висит на сообщениях об автосписании, но там
+// возвращать нечего: карточки в этом сообщении никогда не было, и «🔙 Назад»
+// превратил бы уведомление в чужой экран.
+const autorenewDisableFromCard = "card"
+
+// AutorenewOfferKeyboard — экран условий, открытый из сообщения об оплате.
+func AutorenewOfferKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(menu.Row(
+		menu.Data("✅ Включить", cbAutorenewEnable),
+		menu.Data("Не сейчас", cbAutorenewDismiss),
+	))
+	return menu
+}
+
+// AutorenewOfferPromptKeyboard — предложение включить автопродление в сообщении
+// об успешной ручной оплате. Сообщение уходит с inline-разметкой вместо
+// reply-клавиатуры: Telegram не позволяет приложить обе к одному сообщению, а
+// reply-клавиатура липкая — она уже показана и никуда не денется.
+func AutorenewOfferPromptKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(menu.Row(menu.Data("🔄 Включить автопродление", cbAutorenewOffer)))
+	return menu
+}
+
+// AutorenewDisableKeyboard — одиночная кнопка выключения для сообщений
+// scheduler об автосписании.
+func AutorenewDisableKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(menu.Row(menu.Data("Выключить автопродление", cbAutorenewDisable)))
+	return menu
+}
+
+// AutorenewFailureKeyboard — кнопки сообщения о неудачной попытке списания.
+func AutorenewFailureKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(menu.Row(
+		menu.Data("Продлить вручную", cbAutorenewPayManually),
+		menu.Data("Выключить автопродление", cbAutorenewDisable),
+	))
+	return menu
+}
+
+// AutorenewDisabledKeyboard — пустая разметка: кнопок после выключения нет.
+func AutorenewDisabledKeyboard() *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline()
 	return menu
 }
 
@@ -492,10 +577,13 @@ func BugCommentKeyboard() *tele.ReplyMarkup {
 // AdminUserInfoKeyboard — inline-клавиатура карточки пользователя.
 // Кнопка «Продлить на месяц» скрыта для безлимитных подписок (expireAt год >= 2099).
 func AdminUserInfoKeyboard(targetID int64, remUser *remnawave.User) *tele.ReplyMarkup {
-	return AdminUserInfoKeyboardWithReferrals(targetID, remUser, 0)
+	return AdminUserInfoKeyboardWithReferrals(targetID, remUser, 0, false)
 }
 
-func AdminUserInfoKeyboardWithReferrals(targetID int64, remUser *remnawave.User, activeInvites int) *tele.ReplyMarkup {
+// AdminUserInfoKeyboardWithReferrals собирает карточку пользователя.
+// autorenewOn добавляет кнопку выключения автопродления: выключить админ
+// может, включить — нет, согласие на списание денег даёт только сам человек.
+func AdminUserInfoKeyboardWithReferrals(targetID int64, remUser *remnawave.User, activeInvites int, autorenewOn bool) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
 	var row tele.Row
@@ -507,6 +595,10 @@ func AdminUserInfoKeyboardWithReferrals(targetID int64, remUser *remnawave.User,
 	refs := menu.Data(fmt.Sprintf("🎟 Приглашения %d/3", activeInvites), cbAdminUserReferrals, fmt.Sprintf("%d", targetID), "0")
 	row = append(row, refs)
 	rows = append(rows, row)
+
+	if autorenewOn {
+		rows = append(rows, menu.Row(menu.Data("🔄 Выключить автопродление", cbAdminAutorenewOff, fmt.Sprintf("%d", targetID))))
+	}
 
 	menu.Inline(rows...)
 	return menu
