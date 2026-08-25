@@ -84,6 +84,36 @@ func (c *Client) CreatePayment(req paymentprovider.CreateRequest) (*paymentprovi
 		"description":  req.Description,
 		"metadata":     map[string]string{"local_payment_id": fmt.Sprintf("%d", req.LocalPaymentID)},
 	}
+	// Только по явной просьбе: касса сохраняет безусловно, не спрашивая
+	// человека, — согласие берётся на нашей стороне, до редиректа.
+	if req.SavePaymentMethod {
+		body["save_payment_method"] = true
+	}
+	return c.doPayment(http.MethodPost, "/v3/payments", body, key)
+}
+
+// ChargeSavedMethod списывает по сохранённому Способу. Ответ синхронный,
+// вебхук остаётся страховкой; по ключу идемпотентности повтор вернёт тот же платёж.
+func (c *Client) ChargeSavedMethod(req paymentprovider.ChargeRequest) (*paymentprovider.Payment, error) {
+	if req.PaymentMethodID == "" {
+		return nil, fmt.Errorf("charge saved method: empty payment method id")
+	}
+	key := req.IdempotenceKey
+	if key == "" {
+		var err error
+		key, err = NewIdempotenceKey()
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Без confirmation: подтверждения от пользователя такой платёж не требует.
+	body := map[string]any{
+		"amount":            map[string]string{"value": fmt.Sprintf("%d.00", req.Amount), "currency": req.Currency},
+		"capture":           true,
+		"payment_method_id": req.PaymentMethodID,
+		"description":       req.Description,
+		"metadata":          map[string]string{"local_payment_id": fmt.Sprintf("%d", req.LocalPaymentID)},
+	}
 	return c.doPayment(http.MethodPost, "/v3/payments", body, key)
 }
 
@@ -168,8 +198,19 @@ func parsePayment(data []byte) (*paymentprovider.Payment, error) {
 		ID, Status    string
 		Amount        struct{ Value, Currency string }
 		PaymentMethod struct {
-			Type string `json:"type"`
+			Type  string `json:"type"`
+			ID    string `json:"id"`
+			Saved bool   `json:"saved"`
+			Title string `json:"title"`
+			Card  struct {
+				Last4    string `json:"last4"`
+				CardType string `json:"card_type"`
+			} `json:"card"`
 		} `json:"payment_method"`
+		CancellationDetails struct {
+			Party  string `json:"party"`
+			Reason string `json:"reason"`
+		} `json:"cancellation_details"`
 		Confirmation struct {
 			URL string `json:"confirmation_url"`
 		} `json:"confirmation"`
@@ -189,7 +230,62 @@ func parsePayment(data []byte) (*paymentprovider.Payment, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse payment amount: %w", err)
 	}
-	return &paymentprovider.Payment{ID: raw.ID, Status: status(raw.Status), Amount: amount, Currency: raw.Amount.Currency, PaymentMethod: raw.PaymentMethod.Type, ConfirmationURL: raw.Confirmation.URL, ExpiresAt: raw.ExpiresAt, RecipientID: raw.Recipient.AccountID}, nil
+	p := &paymentprovider.Payment{
+		ID:                 raw.ID,
+		Status:             status(raw.Status),
+		Amount:             amount,
+		Currency:           raw.Amount.Currency,
+		PaymentMethod:      raw.PaymentMethod.Type,
+		ConfirmationURL:    raw.Confirmation.URL,
+		ExpiresAt:          raw.ExpiresAt,
+		RecipientID:        raw.Recipient.AccountID,
+		CancellationReason: raw.CancellationDetails.Reason,
+		MethodGone:         methodGone(raw.CancellationDetails.Reason),
+	}
+	// Сохранён — только когда касса сказала об этом сама.
+	if raw.PaymentMethod.Saved && raw.PaymentMethod.ID != "" {
+		p.SavedMethodID = raw.PaymentMethod.ID
+		p.SavedMethodTitle = methodTitle(raw.PaymentMethod.Type, raw.PaymentMethod.Card.Last4, raw.PaymentMethod.Title)
+	}
+	return p, nil
+}
+
+// methodGoneReasons — отказы, после которых списывать нечем. Список намеренно
+// узкий: обычный отказ карты Способ не гасит.
+var methodGoneReasons = map[string]bool{
+	"permission_revoked":        true, // пользователь отозвал разрешение на автоплатежи
+	"card_expired":              true,
+	"invalid_card_number":       true,
+	"payment_method_restricted": true,
+}
+
+func methodGone(reason string) bool { return methodGoneReasons[reason] }
+
+// methodTitle — что показать пользователю вместо технического типа.
+func methodTitle(methodType, last4, apiTitle string) string {
+	switch methodType {
+	case "bank_card":
+		if last4 != "" {
+			return "•••• " + last4
+		}
+		return "Карта"
+	case "sbp":
+		return "СБП"
+	case "yoo_money":
+		return "ЮMoney"
+	case "sberbank", "sber_pay":
+		return "SberPay"
+	case "mir_pay":
+		return "Mir Pay"
+	case "tinkoff_bank", "t_pay":
+		return "T-Pay"
+	case "alfabank", "alfa_pay":
+		return "Alfa Pay"
+	}
+	if apiTitle != "" {
+		return apiTitle
+	}
+	return methodType
 }
 
 func status(s string) string {

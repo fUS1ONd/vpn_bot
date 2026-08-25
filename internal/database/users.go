@@ -263,8 +263,13 @@ func (db *DB) UpdateUserInfo(telegramID int64, username, firstName string) error
 	return nil
 }
 
-// DeleteUser удаляет пользователя
+// DeleteUser удаляет пользователя вместе с автопродлением: хранить платёжный
+// токен отключённого нами человека оснований нет, а вернувшийся по новому
+// инвайту получит новую цену.
 func (db *DB) DeleteUser(telegramID int64) error {
+	if err := db.DeleteAutorenewal(telegramID); err != nil {
+		return err
+	}
 	_, err := db.conn.Exec(`DELETE FROM users WHERE telegram_id = ?`, telegramID)
 	if err != nil {
 		return fmt.Errorf("failed to delete user: %w", err)

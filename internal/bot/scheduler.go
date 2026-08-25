@@ -70,14 +70,19 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 	// 2. Retry confirmed_not_activated платежей
 	b.retryConfirmedNotActivated()
 
-	// 3. Добиваем чеки «Моего налога», не пробитые на платёжном пути — последним
+	// 3. Списания по Автопродлению — отдельным шагом и до основного цикла:
+	// попытка T−0 обязана отработать раньше ветки disable, а успевшие
+	// продлиться попадут в цикл уже с новым expireAt.
+	b.runAutorenewCharges(now)
+
+	// 4. Добиваем чеки «Моего налога», не пробитые на платёжном пути — последним
 	// шагом и через defer. Поход в ФНС долгий, а уведомления, отключения и автокики
 	// ждать его не должны: налоговая подождёт полчаса, а просроченный доступ — нет.
 	// defer, а не просто вызов в конце, потому что шаги ниже умеют выходить раньше
 	// по ошибке Remnawave, а чеки от неё не зависят.
 	defer b.issuePendingReceipts()
 
-	// 4. Получаем пользователей
+	// 5. Получаем пользователей
 	remUsers, err := b.remnawave.GetAllUsers()
 	if err != nil {
 		slog.Error("Scheduler failed to get users from Remnawave", "error", err)
@@ -179,14 +184,18 @@ func (b *Bot) processTrialUser(telegramID int64, ref remnawave.UserRef, expireAt
 // processPaidUser обрабатывает пользователя с оплаченной подпиской.
 // Уведомления за 3д/1д → disable при expireAt → кик через 72ч grace.
 func (b *Bot) processPaidUser(telegramID int64, ref remnawave.UserRef, expireAt, now time.Time) {
+	// С включённым автопродлением про скорое окончание не пишем: для него это
+	// ложная тревога, а окно за сутки занято попыткой списания.
+	silent := b.autorenewSuppressesExpiryNotice(telegramID, expireAt)
+
 	// За 3 дня до конца
-	if notificationWindow(now, expireAt, 48*time.Hour, 72*time.Hour) {
+	if !silent && notificationWindow(now, expireAt, 48*time.Hour, 72*time.Hour) {
 		b.sendNotification(telegramID, notificationExpire3d,
 			"⏳ Ваша подписка заканчивается через 3 дня.\n\nНажмите \"💳 Продлить подписку\" чтобы продлить доступ.")
 	}
 
 	// За 1 день до конца
-	if notificationWindow(now, expireAt, 0, 24*time.Hour) {
+	if !silent && notificationWindow(now, expireAt, 0, 24*time.Hour) {
 		b.sendNotification(telegramID, notificationExpire1d,
 			"⚠️ Ваша подписка заканчивается менее чем через 24 часа.\n\nПродлите сейчас, чтобы не потерять доступ к VPN.")
 	}

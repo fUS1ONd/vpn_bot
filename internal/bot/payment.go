@@ -13,6 +13,7 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/fus1ond/vpn_bot/internal/platega"
 	"github.com/fus1ond/vpn_bot/internal/yookassa"
+	tele "gopkg.in/telebot.v3"
 )
 
 // paymentMu — мьютексы по telegram_id для защиты от race condition при обработке callback.
@@ -289,7 +290,7 @@ func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Paym
 	h.bot.userStates.DeleteIfOneOf(payment.TelegramID, StateWaitPaymentMethod, StateWaitPaymentResult)
 
 	if notifyUser {
-		_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, h.bot.paymentConfirmationMessage(payment), h.bot.userKeyboard(payment.TelegramID))
+		_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, h.bot.paymentConfirmationMessage(payment), h.bot.paymentSuccessMarkup(payment))
 	}
 
 	// Очищаем уведомления (пользователь мог быть в grace period)
@@ -300,9 +301,40 @@ func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Paym
 	h.bot.issueReceiptAsync(payment.ID)
 }
 
+// paymentSuccessMarkup выбирает разметку сообщения об успешной оплате: обычно
+// reply-клавиатуру меню, но при наличии предложения — inline-кнопку вместо неё.
+// Обе Telegram не позволяет, а второе сообщение на ту же оплату было бы шумом.
+func (b *Bot) paymentSuccessMarkup(payment *database.Payment) *tele.ReplyMarkup {
+	return b.paymentSuccessMarkupFor(payment.TelegramID, payment.IsTest)
+}
+
+// paymentSuccessMarkupFor — то же для пути ручной проверки оплаты.
+func (b *Bot) paymentSuccessMarkupFor(telegramID int64, isTest bool) *tele.ReplyMarkup {
+	if !isTest {
+		if offer := b.autorenewOfferMarkup(telegramID); offer != nil {
+			return offer
+		}
+	}
+	return b.userKeyboard(telegramID)
+}
+
+// isTestPaymentUser — то же условие, по которому платёж помечается тестовым при
+// создании. Один предикат на оба места, иначе они разойдутся.
+func (b *Bot) isTestPaymentUser(telegramID int64) bool {
+	return b.config != nil && telegramID == b.config.AdminID && b.config.AdminTestPaymentPrice > 0
+}
+
 func (b *Bot) paymentConfirmationMessage(payment *database.Payment) string {
 	if payment.IsTest {
 		return "✅ Платёжная система работает."
+	}
+	// Платёж автосписания доходит сюда через retry активации, и текст обязан
+	// остаться текстом автосписания: «я не платил» на сообщение о списанных
+	// деньгах — прямая дорога к chargeback.
+	if fromAutorenew, err := b.db.IsAutorenewPayment(payment.ID); err != nil {
+		slog.Warn("Не удалось определить происхождение платежа", "error", err, "payment_id", payment.ID)
+	} else if fromAutorenew {
+		return b.autorenewActivatedMessage(payment)
 	}
 	return b.paymentActivatedMessage(payment.TelegramID)
 }
@@ -635,7 +667,16 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 			// Помечать её expired здесь нельзя: ссылку по ней мы всё равно
 			// выдадим, а оплату по expired-платежу подтверждение отвергнет как
 			// неактуальную — деньги приняты, услуга не оказана.
-			payment = pending
+			//
+			// Кроме записи автосписания: по её ключу касса откажет обычному
+			// платежу. Оставляем её жить своей жизнью и заводим новую.
+			fromAutorenew, autorenewErr := b.db.IsAutorenewPayment(pending.ID)
+			if autorenewErr != nil {
+				return nil, "", fmt.Errorf("check autorenew payment: %w", autorenewErr)
+			}
+			if !fromAutorenew {
+				payment = pending
+			}
 		} else if err := b.db.UpdatePaymentStatus(pending.ID, "expired"); err != nil {
 			// Другой способ оплаты — старый pending помечаем expired
 			return nil, "", fmt.Errorf("expire previous pending: %w", err)
@@ -644,7 +685,7 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 
 	if payment == nil {
 		// Сначала создаём локальную запись: её ID передаётся в metadata ЮKassa.
-		isTest := telegramID == b.config.AdminID && b.config.AdminTestPaymentPrice > 0
+		isTest := b.isTestPaymentUser(telegramID)
 		payment = &database.Payment{TelegramID: telegramID, Amount: price, PaymentMethod: paymentMethodStr, Status: "pending", Provider: providerName, IsTest: isTest}
 		feeBasisPoints := b.getPaymentFeeBasisPoints(providerName, paymentMethodStr)
 		payment.ProviderFeeBasisPoints = &feeBasisPoints
@@ -670,7 +711,7 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 	if payment.ProviderRequestKey != nil {
 		requestKey = *payment.ProviderRequestKey
 	}
-	resp, err := provider.CreatePayment(paymentprovider.CreateRequest{Amount: price, Currency: "RUB", Description: "Пополнение баланса", ReturnURL: returnURL, CallbackURL: callbackURL, LocalPaymentID: payment.ID, IdempotenceKey: requestKey})
+	resp, err := provider.CreatePayment(paymentprovider.CreateRequest{Amount: price, Currency: "RUB", Description: "Пополнение баланса", ReturnURL: returnURL, CallbackURL: callbackURL, LocalPaymentID: payment.ID, IdempotenceKey: requestKey, SavePaymentMethod: b.shouldSavePaymentMethod(providerName, payment.IsTest)})
 	if err != nil {
 		if providerName != paymentprovider.YooKassa {
 			_ = b.db.UpdatePaymentStatus(payment.ID, "expired")
@@ -790,6 +831,10 @@ func (b *Bot) verifyYooKassaPayment(payment *database.Payment, verified *payment
 			return fmt.Errorf("update payment method: %w", err)
 		}
 	}
+	// Единственная воронка, где сверенный ответ кассы встречается с локальным
+	// платежом: и вебхук, и ручная проверка проходят здесь. Способ записывается
+	// именно тут, чтобы два пути не разъехались.
+	b.rememberAutorenewMethod(payment, verified)
 	return nil
 }
 

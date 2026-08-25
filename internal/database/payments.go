@@ -19,10 +19,12 @@ type Payment struct {
 	ProviderRequestKey     *string
 	ProviderFeeBasisPoints *int // сотые доли процента, например 350 = 3.5%
 	IsTest                 bool
-	RedirectURL            *string
-	ExpiresAt              *time.Time
-	CreatedAt              time.Time
-	ConfirmedAt            *time.Time
+	// PeriodMonths — длительность оплаченного периода; сегодня всегда 1.
+	PeriodMonths int
+	RedirectURL  *string
+	ExpiresAt    *time.Time
+	CreatedAt    time.Time
+	ConfirmedAt  *time.Time
 }
 
 // MonthlyConfirmedPayment хранит подтверждённый платёж месяца и долю модератора.
@@ -39,10 +41,13 @@ func (db *DB) CreatePayment(p *Payment) (int64, error) {
 	if p.ProviderPaymentID == nil && p.PlategaTransactionID != nil {
 		p.ProviderPaymentID = p.PlategaTransactionID
 	}
+	if p.PeriodMonths == 0 {
+		p.PeriodMonths = 1
+	}
 	res, err := db.conn.Exec(
-		`INSERT INTO payments (telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, redirect_url, expires_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.TelegramID, p.ModeratorID, p.Amount, p.PaymentMethod, p.Status, p.PlategaTransactionID, p.Provider, p.ProviderPaymentID, p.ProviderRequestKey, p.ProviderFeeBasisPoints, p.IsTest, p.RedirectURL, p.ExpiresAt,
+		`INSERT INTO payments (telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, period_months, redirect_url, expires_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.TelegramID, p.ModeratorID, p.Amount, p.PaymentMethod, p.Status, p.PlategaTransactionID, p.Provider, p.ProviderPaymentID, p.ProviderRequestKey, p.ProviderFeeBasisPoints, p.IsTest, p.PeriodMonths, p.RedirectURL, p.ExpiresAt,
 	)
 	if err != nil {
 		return 0, err
@@ -62,9 +67,9 @@ func (db *DB) GetPaymentByID(id int64) (*Payment, error) {
 	var confirmedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, redirect_url, expires_at, created_at, confirmed_at
+		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, period_months, redirect_url, expires_at, created_at, confirmed_at
 		 FROM payments WHERE id = ?`, id,
-	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &isTest, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
+	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &isTest, &p.PeriodMonths, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -115,10 +120,10 @@ func (db *DB) GetPendingPayment(telegramID int64) (*Payment, error) {
 	var confirmedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, redirect_url, expires_at, created_at, confirmed_at
+		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, period_months, redirect_url, expires_at, created_at, confirmed_at
 		 FROM payments WHERE telegram_id = ? AND status = 'pending' AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
 		 ORDER BY created_at DESC LIMIT 1`, telegramID,
-	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &isTest, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
+	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &isTest, &p.PeriodMonths, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -178,6 +183,13 @@ func (db *DB) GetPaymentByProviderPaymentID(provider, providerPaymentID string) 
 // SetProviderPaymentDetails stores the external ID and redirect details after provider creation.
 func (db *DB) SetProviderPaymentDetails(id int64, providerPaymentID, redirectURL string, expiresAt *time.Time) error {
 	_, err := db.conn.Exec(`UPDATE payments SET provider_payment_id = ?, redirect_url = ?, expires_at = ? WHERE id = ?`, providerPaymentID, redirectURL, expiresAt, id)
+	return err
+}
+
+// SetPaymentExpiry сдвигает срок жизни незакрытого платежа: оживлённая запись
+// автосписания иначе протухнет тем же проходом.
+func (db *DB) SetPaymentExpiry(id int64, expiresAt time.Time) error {
+	_, err := db.conn.Exec(`UPDATE payments SET expires_at = ? WHERE id = ?`, expiresAt, id)
 	return err
 }
 
