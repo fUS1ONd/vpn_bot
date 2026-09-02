@@ -6,6 +6,13 @@
 // магазине кассы. Состояние держится в памяти и умирает вместе с процессом —
 // это стенд, а не сервис.
 //
+// Два семейства маршрутов, и путать их нельзя:
+//
+//   - /api/... — контракт Remnawave. Заглушка обязана отвечать в нём ровно то,
+//     что ожидает боевой клиент, включая различия 2.8.x и 3.x.
+//   - /mock/... — пульт стенда: рычаги, которых у настоящей панели нет. Срок,
+//     статус, трафик, устройства, отказы и задержки.
+//
 // Запуск: go run ./cmd/mockpanel  (порт из MOCK_PANEL_PORT, по умолчанию 8081)
 package main
 
@@ -39,6 +46,11 @@ type user struct {
 	CreatedAt         time.Time `json:"createdAt"`
 	ExpireAt          time.Time `json:"expireAt"`
 	UserTraffic       *traffic  `json:"userTraffic"`
+
+	// devices не уходит в JSON пользователя: у настоящей панели устройства
+	// живут за отдельным HWID-маршрутом, и заглушка обязана повторять это,
+	// иначе бот на стенде пошёл бы не тем путём, что в проде.
+	devices []device
 }
 
 type traffic struct {
@@ -46,11 +58,21 @@ type traffic struct {
 	LifetimeUsedTrafficBytes int64 `json:"lifetimeUsedTrafficBytes"`
 }
 
+// device повторяет remnawave.HwidDevice — то, что бот читает из HWID API.
+type device struct {
+	Hwid        string `json:"hwid"`
+	Platform    string `json:"platform"`
+	OsVersion   string `json:"osVersion"`
+	DeviceModel string `json:"deviceModel"`
+}
+
 type store struct {
 	mu     sync.Mutex
 	nextID int64
 	users  map[string]*user // ключ — UUID
 }
+
+func newStore() *store { return &store{nextID: 1, users: map[string]*user{}} }
 
 func (s *store) byUUID(uuid string) *user { return s.users[uuid] }
 
@@ -85,6 +107,16 @@ func (s *store) byTelegramID(telegramID int64) []user {
 	return found
 }
 
+// firstByTelegramID возвращает указатель на запись, а не копию: пульт меняет
+// пользователя на месте.
+func (s *store) firstByTelegramID(telegramID int64) *user {
+	found := s.byTelegramID(telegramID)
+	if len(found) == 0 {
+		return nil
+	}
+	return s.byUUID(found[0].UUID)
+}
+
 func (s *store) list() []user {
 	all := make([]user, 0, len(s.users))
 	for _, u := range s.users {
@@ -93,10 +125,70 @@ func (s *store) list() []user {
 	return all
 }
 
-func main() {
-	s := &store{nextID: 1, users: map[string]*user{}}
-	mux := http.NewServeMux()
+// chaos — рычаги отказов и задержек. Нужны, чтобы проверять то, что иначе на
+// стенде не воспроизвести: как выглядит интерфейс, когда панель отвалилась или
+// отвечает медленно.
+//
+// Собственный мьютекс, а не мьютекс store: задержка выдерживается до входа в
+// обработчик, и держать на ней блокировку данных нельзя.
+type chaos struct {
+	mu        sync.Mutex
+	failCount int           // сколько ближайших запросов к /api/ провалить
+	failCode  int           // каким статусом
+	latency   time.Duration // задержка перед ответом
+}
 
+// nextFailure возвращает статус, которым надо провалить текущий запрос, и
+// уменьшает счётчик. Ноль означает «пропустить как обычно».
+func (c *chaos) nextFailure() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.failCount <= 0 {
+		return 0
+	}
+	c.failCount--
+	return c.failCode
+}
+
+func (c *chaos) delay() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.latency
+}
+
+func (c *chaos) setFailure(count, code int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.failCount, c.failCode = count, code
+}
+
+func (c *chaos) setLatency(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.latency = d
+}
+
+// newServer собирает маршруты стенда. Отдельная функция, а не тело main, чтобы
+// тесты поднимали её через httptest без сети и переменных окружения.
+func newServer() http.Handler {
+	s := newStore()
+	c := &chaos{}
+
+	api := http.NewServeMux()
+	registerPanelRoutes(api, s)
+
+	root := http.NewServeMux()
+	// Контракт панели — под рычагами отказов и задержек.
+	root.Handle("/api/", withChaos(c, api))
+	// Пульт — вне рычагов: иначе включённый отказ невозможно было бы выключить.
+	registerControlRoutes(root, s, c)
+
+	return logRequests(root)
+}
+
+// registerPanelRoutes — маршруты контракта Remnawave.
+func registerPanelRoutes(mux *http.ServeMux, s *store) {
 	mux.HandleFunc("/api/system/metadata", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"response": map[string]string{"version": panelVersion}})
 	})
@@ -159,8 +251,99 @@ func main() {
 		writeJSON(w, map[string]any{"response": u})
 	})
 
-	// Пульт стенда. Префикс /mock/ намеренно не похож на /api/: это не часть
-	// контракта Remnawave, а рычаги, которых у настоящей панели нет.
+	// HWID-маршруты. Три разных операции живут под одним префиксом, поэтому
+	// «delete» и «delete-all» разбираются до того, как остаток пути будет
+	// принят за идентификатор пользователя.
+	mux.HandleFunc("/api/hwid/devices/", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		rest := strings.TrimPrefix(r.URL.Path, "/api/hwid/devices/")
+
+		switch rest {
+		case "delete":
+			s.deleteDevice(w, r)
+		case "delete-all":
+			s.deleteAllDevices(w, r)
+		default:
+			u := s.find(rest)
+			if u == nil {
+				writeError(w, http.StatusNotFound, "user not found")
+				return
+			}
+			writeDevices(w, u)
+		}
+	})
+
+	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"response": []any{}})
+	})
+	mux.HandleFunc("/api/hosts", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"response": []any{}})
+	})
+}
+
+// userFromHwidBody достаёт пользователя из тела HWID-запроса. На 2.8.x бот
+// присылает userUuid строкой, на 3.x — userId числом; заглушка принимает оба,
+// чтобы одна и та же проверка проходила на обеих версиях.
+func (s *store) userFromHwidBody(r *http.Request) (*user, string) {
+	var req struct {
+		UserUUID string `json:"userUuid"`
+		UserID   int64  `json:"userId"`
+		Hwid     string `json:"hwid"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if req.UserUUID != "" {
+		return s.byUUID(req.UserUUID), req.Hwid
+	}
+	if req.UserID != 0 {
+		return s.byID(req.UserID), req.Hwid
+	}
+	return nil, req.Hwid
+}
+
+// deleteDevice удаляет одно устройство и отвечает оставшимся списком — бот
+// перерисовывает экран прямо из ответа, не перезапрашивая список.
+func (s *store) deleteDevice(w http.ResponseWriter, r *http.Request) {
+	u, hwid := s.userFromHwidBody(r)
+	if u == nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	kept := make([]device, 0, len(u.devices))
+	for _, d := range u.devices {
+		if d.Hwid != hwid {
+			kept = append(kept, d)
+		}
+	}
+	u.devices = kept
+	writeDevices(w, u)
+}
+
+func (s *store) deleteAllDevices(w http.ResponseWriter, r *http.Request) {
+	u, _ := s.userFromHwidBody(r)
+	if u == nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	u.devices = nil
+	writeDevices(w, u)
+}
+
+func writeDevices(w http.ResponseWriter, u *user) {
+	devices := u.devices
+	if devices == nil {
+		devices = []device{}
+	}
+	writeJSON(w, map[string]any{"response": map[string]any{"total": len(devices), "devices": devices}})
+}
+
+// registerControlRoutes — пульт стенда. Префикс /mock/ намеренно не похож на
+// /api/: это не часть контракта Remnawave.
+func registerControlRoutes(mux *http.ServeMux, s *store, c *chaos) {
 	mux.HandleFunc("/mock/user", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -174,26 +357,142 @@ func main() {
 			writeError(w, http.StatusNotFound, "user not found")
 			return
 		}
-		writeJSON(w, map[string]any{"response": u})
+		writeJSON(w, map[string]any{"response": u, "devices": u.devices})
 	})
 
-	// Устройств у стенда нет: HWID-лимиты к платёжному flow отношения не имеют.
-	mux.HandleFunc("/api/hwid/devices/", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"response": map[string]any{"total": 0, "devices": []any{}}})
-	})
-	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"response": []any{}})
-	})
-	mux.HandleFunc("/api/hosts", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"response": []any{}})
+	mux.HandleFunc("/mock/fail", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Count  int `json:"count"`
+			Status int `json:"status"`
+		}
+		if err := decodePost(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		if req.Status == 0 {
+			req.Status = http.StatusInternalServerError
+		}
+		if req.Count < 0 {
+			req.Count = 0
+		}
+		c.setFailure(req.Count, req.Status)
+		writeJSON(w, map[string]any{"failCount": req.Count, "failStatus": req.Status})
 	})
 
-	port := envOr("MOCK_PANEL_PORT", "8081")
-	slog.Info("Mock Remnawave panel started", "port", port, "version", panelVersion)
-	if err := http.ListenAndServe(":"+port, logRequests(mux)); err != nil {
-		slog.Error("mock panel stopped", "error", err)
-		os.Exit(1)
+	mux.HandleFunc("/mock/latency", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Ms int `json:"ms"`
+		}
+		if err := decodePost(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		if req.Ms < 0 {
+			req.Ms = 0
+		}
+		c.setLatency(time.Duration(req.Ms) * time.Millisecond)
+		writeJSON(w, map[string]any{"latencyMs": req.Ms})
+	})
+}
+
+// withChaos выдерживает задержку и проваливает запросы, пока счётчик не
+// исчерпан.
+//
+// Метаданные из-под отказов исключены намеренно: по ним бот определяет версию
+// панели, и провалившийся детект увёл бы стенд в состояние, которое проверять
+// никто не собирался, — вместо экрана ошибки конкретного действия.
+func withChaos(c *chaos, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/system/metadata" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if d := c.delay(); d > 0 {
+			time.Sleep(d)
+		}
+		if code := c.nextFailure(); code != 0 {
+			slog.Info("mock panel injected failure", "path", r.URL.Path, "status", code)
+			writeError(w, code, "injected failure")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// control — рычаги стенда над одним пользователем: подкрутить срок, статус,
+// потраченный трафик и набор устройств, чтобы увидеть ветку интерфейса или шаг
+// планировщика, не дожидаясь реального времени.
+//
+// Срок задаётся **относительно «сейчас»**, а не абсолютной датой, потому что
+// проверяются окна планировщика, и все они считаются от текущего момента:
+// уведомление за 3 дня ждёт expireAt через 48–72 часа, за 1 день — через 0–24,
+// истечение — прошедший expireAt, grace-кик — прошедший больше чем на 72 часа.
+// С абсолютной датой это пришлось бы каждый раз считать руками.
+func (s *store) control(r *http.Request) (*user, error) {
+	var req struct {
+		TelegramID    int64    `json:"telegramId"`
+		ExpireInHours *float64 `json:"expireInHours"`
+		Status        *string  `json:"status"`
+		UsedTrafficGB *float64 `json:"usedTrafficGB"`
+		Devices       *int     `json:"devices"`
 	}
+	if err := decodePost(r, &req); err != nil {
+		return nil, err
+	}
+	if req.TelegramID == 0 {
+		return nil, fmt.Errorf("нужен telegramId")
+	}
+
+	u := s.firstByTelegramID(req.TelegramID)
+	if u == nil {
+		return nil, nil
+	}
+
+	if req.ExpireInHours != nil {
+		u.ExpireAt = time.Now().UTC().Add(time.Duration(*req.ExpireInHours * float64(time.Hour)))
+	}
+	if req.Status != nil {
+		u.Status = *req.Status
+	}
+	if req.UsedTrafficGB != nil {
+		if u.UserTraffic == nil {
+			u.UserTraffic = &traffic{}
+		}
+		u.UserTraffic.UsedTrafficBytes = int64(*req.UsedTrafficGB * 1024 * 1024 * 1024)
+	}
+	if req.Devices != nil {
+		u.devices = makeDevices(*req.Devices)
+	}
+	return u, nil
+}
+
+// deviceTemplates — правдоподобные устройства для экрана «Мои устройства».
+// Разные платформы и модели нужны не для красоты: подписи кнопок обрезаются по
+// длине, и на одинаковых значениях этого не увидеть.
+var deviceTemplates = []device{
+	{Platform: "iOS", OsVersion: "17.5.1", DeviceModel: "iPhone 15 Pro"},
+	{Platform: "Android", OsVersion: "14", DeviceModel: "Pixel 8"},
+	{Platform: "Windows", OsVersion: "11", DeviceModel: "ThinkPad X1 Carbon Gen 11"},
+	{Platform: "macOS", OsVersion: "14.5", DeviceModel: "MacBook Pro 16"},
+	{Platform: "Linux", OsVersion: "6.8", DeviceModel: ""},
+}
+
+func makeDevices(count int) []device {
+	if count <= 0 {
+		return nil
+	}
+
+	devices := make([]device, 0, count)
+	for i := range count {
+		d := deviceTemplates[i%len(deviceTemplates)]
+		d.Hwid = fmt.Sprintf("hwid-%d", i+1)
+		devices = append(devices, d)
+	}
+	return devices
 }
 
 // create заводит пользователя. Значения полей берутся из запроса бота, чтобы
@@ -269,52 +568,17 @@ func (s *store) patch(r *http.Request) *user {
 	return u
 }
 
-// control — рычаги стенда, которых у настоящей панели нет: подкрутить
-// пользователю срок, статус и потраченный трафик, чтобы увидеть ветку интерфейса
-// или шаг планировщика, не дожидаясь реального времени.
-//
-// Срок задаётся **относительно «сейчас»**, а не абсолютной датой, потому что
-// проверяются окна планировщика, и все они считаются от текущего момента:
-// уведомление за 3 дня ждёт expireAt через 48–72 часа, за 1 день — через 0–24,
-// истечение — прошедший expireAt, grace-кик — прошедший больше чем на 72 часа.
-// С абсолютной датой это пришлось бы каждый раз считать руками.
-func (s *store) control(r *http.Request) (*user, error) {
+// decodePost — общий разбор тела пультовых запросов. Метод проверяется здесь же:
+// GET по пульту это почти всегда попытка «посмотреть», и внятный отказ лучше
+// молчаливого применения пустого тела.
+func decodePost(r *http.Request, dst any) error {
 	if r.Method != http.MethodPost {
-		return nil, fmt.Errorf("нужен POST")
+		return fmt.Errorf("нужен POST")
 	}
-
-	var req struct {
-		TelegramID    int64    `json:"telegramId"`
-		ExpireInHours *float64 `json:"expireInHours"`
-		Status        *string  `json:"status"`
-		UsedTrafficGB *float64 `json:"usedTrafficGB"`
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		return fmt.Errorf("некорректный JSON: %w", err)
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return nil, fmt.Errorf("некорректный JSON: %w", err)
-	}
-	if req.TelegramID == 0 {
-		return nil, fmt.Errorf("нужен telegramId")
-	}
-
-	found := s.byTelegramID(req.TelegramID)
-	if len(found) == 0 {
-		return nil, nil
-	}
-	u := s.byUUID(found[0].UUID)
-
-	if req.ExpireInHours != nil {
-		u.ExpireAt = time.Now().UTC().Add(time.Duration(*req.ExpireInHours * float64(time.Hour)))
-	}
-	if req.Status != nil {
-		u.Status = *req.Status
-	}
-	if req.UsedTrafficGB != nil {
-		if u.UserTraffic == nil {
-			u.UserTraffic = &traffic{}
-		}
-		u.UserTraffic.UsedTrafficBytes = int64(*req.UsedTrafficGB * 1024 * 1024 * 1024)
-	}
-	return u, nil
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, payload any) {
@@ -322,10 +586,13 @@ func writeJSON(w http.ResponseWriter, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+// writeError отвечает в формате ошибки панели: бот разбирает тело как
+// {message, errorCode}, и заглушка обязана давать ему то же самое — иначе на
+// стенде не проверить, что видит пользователь при отказе.
 func writeError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"message": message})
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": message, "errorCode": "MOCK"})
 }
 
 func logRequests(next http.Handler) http.Handler {
@@ -340,4 +607,14 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func main() {
+	port := envOr("MOCK_PANEL_PORT", "8081")
+	slog.Info("Mock Remnawave panel started", "port", port, "version", panelVersion)
+
+	if err := http.ListenAndServe(":"+port, newServer()); err != nil {
+		slog.Error("mock panel stopped", "error", err)
+		os.Exit(1)
+	}
 }
