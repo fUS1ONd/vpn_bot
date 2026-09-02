@@ -21,6 +21,10 @@ services:
       - MOCK_PANEL_PORT=8081
       # 2.8.1 или 3.2.3 — одним стендом проверяются обе ветки контракта.
       - MOCK_PANEL_VERSION=${MOCK_PANEL_VERSION:-2.8.1}
+    # Порт наружу нужен только для пульта (POST /mock/user): боту заглушка видна
+    # по имени сервиса внутри сети. Слушаем на localhost, не на 0.0.0.0.
+    ports:
+      - "127.0.0.1:${MOCK_PANEL_PORT:-8081}:8081"
     networks:
       - vpn-test-network
 

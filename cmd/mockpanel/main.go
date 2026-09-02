@@ -159,6 +159,24 @@ func main() {
 		writeJSON(w, map[string]any{"response": u})
 	})
 
+	// Пульт стенда. Префикс /mock/ намеренно не похож на /api/: это не часть
+	// контракта Remnawave, а рычаги, которых у настоящей панели нет.
+	mux.HandleFunc("/mock/user", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		u, err := s.control(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if u == nil {
+			writeError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		writeJSON(w, map[string]any{"response": u})
+	})
+
 	// Устройств у стенда нет: HWID-лимиты к платёжному flow отношения не имеют.
 	mux.HandleFunc("/api/hwid/devices/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"response": map[string]any{"total": 0, "devices": []any{}}})
@@ -249,6 +267,54 @@ func (s *store) patch(r *http.Request) *user {
 		u.Username = *req.Username
 	}
 	return u
+}
+
+// control — рычаги стенда, которых у настоящей панели нет: подкрутить
+// пользователю срок, статус и потраченный трафик, чтобы увидеть ветку интерфейса
+// или шаг планировщика, не дожидаясь реального времени.
+//
+// Срок задаётся **относительно «сейчас»**, а не абсолютной датой, потому что
+// проверяются окна планировщика, и все они считаются от текущего момента:
+// уведомление за 3 дня ждёт expireAt через 48–72 часа, за 1 день — через 0–24,
+// истечение — прошедший expireAt, grace-кик — прошедший больше чем на 72 часа.
+// С абсолютной датой это пришлось бы каждый раз считать руками.
+func (s *store) control(r *http.Request) (*user, error) {
+	if r.Method != http.MethodPost {
+		return nil, fmt.Errorf("нужен POST")
+	}
+
+	var req struct {
+		TelegramID    int64    `json:"telegramId"`
+		ExpireInHours *float64 `json:"expireInHours"`
+		Status        *string  `json:"status"`
+		UsedTrafficGB *float64 `json:"usedTrafficGB"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, fmt.Errorf("некорректный JSON: %w", err)
+	}
+	if req.TelegramID == 0 {
+		return nil, fmt.Errorf("нужен telegramId")
+	}
+
+	found := s.byTelegramID(req.TelegramID)
+	if len(found) == 0 {
+		return nil, nil
+	}
+	u := s.byUUID(found[0].UUID)
+
+	if req.ExpireInHours != nil {
+		u.ExpireAt = time.Now().UTC().Add(time.Duration(*req.ExpireInHours * float64(time.Hour)))
+	}
+	if req.Status != nil {
+		u.Status = *req.Status
+	}
+	if req.UsedTrafficGB != nil {
+		if u.UserTraffic == nil {
+			u.UserTraffic = &traffic{}
+		}
+		u.UserTraffic.UsedTrafficBytes = int64(*req.UsedTrafficGB * 1024 * 1024 * 1024)
+	}
+	return u, nil
 }
 
 func writeJSON(w http.ResponseWriter, payload any) {
