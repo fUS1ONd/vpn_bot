@@ -127,15 +127,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	bot.userLimiter = newUserRateLimiter(3, 5, bot.shutdownCh) // 3 req/s, burst 5
 
 	// Rate limiting middleware — защита от спама командами
-	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
-		return func(c tele.Context) error {
-			if c.Sender() != nil && !bot.userLimiter.allow(c.Sender().ID) {
-				slog.Warn("Rate limit exceeded", "telegram_id", c.Sender().ID)
-				return nil // Молча игнорируем
-			}
-			return next(c)
-		}
-	})
+	b.Use(bot.rateLimitMiddleware)
 
 	// Middleware для логирования
 	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {

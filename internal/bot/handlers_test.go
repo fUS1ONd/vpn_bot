@@ -21,16 +21,18 @@ import (
 // MockContext реализует интерфейс tele.Context для тестов
 type MockContext struct {
 	tele.Context
-	sender     *tele.User
-	message    *tele.Message
-	sentMsg    any
-	sentMsgs   []any
-	opts       []any
-	args       []string
-	editedMsg  any
-	editedOpts []any
-	responded  bool
-	alertText  string
+	sender      *tele.User
+	message     *tele.Message
+	sentMsg     any
+	sentMsgs    []any
+	opts        []any
+	args        []string
+	editedMsg   any
+	editedOpts  []any
+	responded   bool
+	alertText   string
+	callback    *tele.Callback
+	respondText string
 }
 
 func (c *MockContext) Sender() *tele.User {
@@ -67,9 +69,17 @@ func (c *MockContext) Edit(what any, opts ...any) error {
 	return nil
 }
 
+// Callback возвращает callback-запрос апдейта (nil для текстовых сообщений).
+func (c *MockContext) Callback() *tele.Callback {
+	return c.callback
+}
+
 // Respond имитирует ответ на callback-запрос (закрытие "часиков" в клиенте).
 func (c *MockContext) Respond(resp ...*tele.CallbackResponse) error {
 	c.responded = true
+	if len(resp) > 0 && resp[0] != nil {
+		c.respondText = resp[0].Text
+	}
 	return nil
 }
 
