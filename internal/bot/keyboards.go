@@ -39,6 +39,13 @@ const (
 	cbPaymentMethodConfirm = "pm_unlink_ok"
 )
 
+// Unique-идентификаторы inline-кнопок «Повторить» в сообщениях об ошибке
+const (
+	cbRetryPayment      = "retry_pay"       // повторить создание платежа тем же способом
+	cbRetryPaymentCheck = "retry_pay_check" // повторить проверку оплаты
+	cbRetryInvite       = "retry_invite"    // повторить создание приглашения
+)
+
 // Unique-идентификаторы inline-кнопок багрепорта
 const (
 	cbBugServer     = "bug_server"      // переключение выбора сервера (Data = индекс хоста)

@@ -85,10 +85,11 @@ func (b *Bot) handlePaymentMethodSelected(c tele.Context, provider string) error
 			})
 		}
 
-		b.userStates.Delete(telegramID)
-		return c.Send("❌ Не удалось создать платёж. Попробуйте позже.", &tele.SendOptions{
-			ReplyMarkup: b.userKeyboard(telegramID),
-		})
+		// Состояние оставляем: пользователь всё ещё на экране выбора способа,
+		// и reply-клавиатура даёт ему второй способ и «Отмена». Сбросив его, мы
+		// бы отняли выход у того, кто как раз пытается заплатить.
+		return b.sendErrorExit(c, "❌ Не удалось создать платёж — касса не ответила.\n\nДеньги не списаны.",
+			retryAction{unique: cbRetryPayment, data: provider})
 	}
 
 	b.userStates.Set(telegramID, StateWaitPaymentResult)
@@ -113,9 +114,8 @@ func (b *Bot) handleCheckPayment(c tele.Context) error {
 	status, err := b.checkPaymentStatus(telegramID)
 	if err != nil {
 		slog.Error("Ошибка проверки статуса платежа", "error", err, "telegram_id", telegramID)
-		return c.Send("❌ Ошибка проверки. Попробуйте позже.", &tele.SendOptions{
-			ReplyMarkup: PaymentWaitKeyboard(),
-		})
+		return b.sendErrorExit(c, "❌ Не удалось проверить оплату — касса не ответила.\n\nЕсли вы уже оплатили, подписка активируется сама в течение минуты.",
+			retryAction{unique: cbRetryPaymentCheck})
 	}
 
 	switch status {
@@ -171,4 +171,26 @@ func paymentProviderFromButton(text string) (string, bool) {
 
 func (b *Bot) paymentMethodKeyboard() *tele.ReplyMarkup {
 	return PaymentMethodKeyboard(b.yookassa != nil, b.platega != nil)
+}
+
+// handleRetryPayment повторяет создание платежа тем же способом, что выбрал
+// пользователь: способ приходит в данных кнопки, а не берётся из состояния —
+// сообщение об ошибке может пролежать дольше, чем живёт состояние в памяти.
+func (b *Bot) handleRetryPayment(c tele.Context) error {
+	args := c.Args()
+	if len(args) == 0 || args[0] == "" {
+		return c.RespondAlert("Некорректный запрос")
+	}
+	if err := c.Respond(); err != nil {
+		slog.Warn("Failed to respond to payment retry", "error", err, "telegram_id", c.Sender().ID)
+	}
+	return b.handlePaymentMethodSelected(c, args[0])
+}
+
+// handleRetryPaymentCheck повторяет проверку оплаты.
+func (b *Bot) handleRetryPaymentCheck(c tele.Context) error {
+	if err := c.Respond(); err != nil {
+		slog.Warn("Failed to respond to payment check retry", "error", err, "telegram_id", c.Sender().ID)
+	}
+	return b.handleCheckPayment(c)
 }
