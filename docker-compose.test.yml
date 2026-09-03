@@ -1,0 +1,76 @@
+# Стенд для ручной проверки бота без настоящей панели Remnawave.
+#
+# Прод этот файл не трогает: своё имя проекта, свои контейнеры, своя сеть и своя
+# папка данных (./data-test). Поднимать только явной командой с -p и -f, иначе
+# docker compose подхватит docker-compose.yml и остановит боевые контейнеры:
+#
+#   docker compose -p vpn-bot-test -f docker-compose.test.yml --env-file .env.test up -d --build
+#   docker compose -p vpn-bot-test -f docker-compose.test.yml logs -f
+#   docker compose -p vpn-bot-test -f docker-compose.test.yml down
+#
+# Обязательно отдельные BOT_TOKEN (свой тестовый бот у BotFather) и тестовый
+# магазин ЮKassa: с боевым токеном стенд перехватит апдейты у боевого бота, а с
+# боевым магазином спишет настоящие деньги.
+services:
+  mock-panel:
+    build:
+      context: .
+      dockerfile: Dockerfile.mockpanel
+    container_name: vpn-bot-test-panel
+    environment:
+      - MOCK_PANEL_PORT=8081
+      # 2.8.1 или 3.2.3 — одним стендом проверяются обе ветки контракта.
+      - MOCK_PANEL_VERSION=${MOCK_PANEL_VERSION:-2.8.1}
+    # Порт наружу нужен только для пульта (POST /mock/user): боту заглушка видна
+    # по имени сервиса внутри сети. Слушаем на localhost, не на 0.0.0.0.
+    ports:
+      - "127.0.0.1:${MOCK_PANEL_PORT:-8081}:8081"
+    networks:
+      - vpn-test-network
+
+  vpn-bot-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vpn-bot-test
+    depends_on:
+      - mock-panel
+    volumes:
+      - ./data-test:/app/data
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - ADMIN_ID=${ADMIN_ID}
+      - REMNAWAVE_URL=http://mock-panel:8081
+      - REMNAWAVE_API_TOKEN=mock-token
+      - DB_PATH=/app/data/bot.db
+      # Каталог targets синхронизируется при старте и каждые 60 секунд. Без
+      # него SyncNodes падает на каждом тике, и `make stand-logs` заполняется
+      # ошибкой, которая читается как настоящий дефект. Лежит внутри
+      # примонтированного data-test; сам каталог создаёт цель make stand-up —
+      # бот его не создаёт, а stand-reset сносит data-test целиком.
+      - SD_CONFIGS_PATH=/app/data/sd_configs
+      - PRIVACY_POLICY_URL=${PRIVACY_POLICY_URL:-https://example.com/privacy}
+      - TERMS_OF_SERVICE_URL=${TERMS_OF_SERVICE_URL:-https://example.com/terms}
+      - SUPPORT_CONTACT=${SUPPORT_CONTACT:-@support}
+      - MIN_SUBSCRIPTION_PRICE=${MIN_SUBSCRIPTION_PRICE:-400}
+      - DEFAULT_SUBSCRIPTION_PRICE=${DEFAULT_SUBSCRIPTION_PRICE:-400}
+      # Тестовый магазин ЮKassa: автоплатежи на нём доступны по умолчанию.
+      - YOOKASSA_SHOP_ID=${YOOKASSA_SHOP_ID}
+      - YOOKASSA_SECRET_KEY=${YOOKASSA_SECRET_KEY}
+      - YOOKASSA_RETURN_URL=${YOOKASSA_RETURN_URL}
+      - YOOKASSA_FEE_PERCENT=${YOOKASSA_FEE_PERCENT:-3.5}
+      - AUTORENEW_ENABLED=${AUTORENEW_ENABLED:-true}
+      - CALLBACK_PORT=8080
+    ports:
+      - "127.0.0.1:${TEST_CALLBACK_PORT:-8090}:8080"
+    networks:
+      - vpn-test-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  vpn-test-network:
+    driver: bridge

@@ -26,6 +26,7 @@ sd_configs/targets.json
 /bot
 /migrator
 /backfill-used-at
+/mockpanel
 
 # IDE
 .vscode/
@@ -38,3 +39,7 @@ sd_configs/targets.json
 
 # Эфемерные артефакты фичи (SPEC.md, PLAN.md, тикеты) — умирают вместе с фичей
 .scratch/
+
+# Данные тестового стенда
+data-test/
+.env.test
