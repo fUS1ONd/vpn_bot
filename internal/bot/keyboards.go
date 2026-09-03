@@ -404,14 +404,14 @@ func deviceLabel(d remnawave.HwidDevice) string {
 	return truncateDeviceLabel(label)
 }
 
-// DevicesManagementKeyboard — список устройств как inline-кнопки (нажатие = удаление),
+// DevicesManagementKeyboard — список устройств как inline-кнопки (нажатие = отвязка),
 // плюс «Сбросить все» (если есть устройства) и «Закрыть».
 func DevicesManagementKeyboard(devices []remnawave.HwidDevice) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
 
 	for i, d := range devices {
-		btn := menu.Data("🔄 "+deviceLabel(d), cbDeviceDelete, fmt.Sprintf("%d", i))
+		btn := menu.Data("🗑 "+deviceLabel(d), cbDeviceDelete, fmt.Sprintf("%d", i))
 		rows = append(rows, menu.Row(btn))
 	}
 

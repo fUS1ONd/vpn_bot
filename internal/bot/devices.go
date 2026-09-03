@@ -17,7 +17,7 @@ func buildDevicesMessage(devices []remnawave.HwidDevice) string {
 	}
 	msg := "<b>📱 Управление устройствами</b>\n\n"
 	msg += fmt.Sprintf("Подключено устройств: %d\n\n", len(devices))
-	msg += "Нажмите на устройство, чтобы удалить его, либо сбросьте все сразу."
+	msg += "Нажмите на устройство, чтобы отвязать его, либо сбросьте все сразу."
 	return msg
 }
 
@@ -56,7 +56,7 @@ func (b *Bot) handleDevicesManage(c tele.Context) error {
 	return c.Respond()
 }
 
-// handleDeviceDelete удаляет одно устройство по индексу и перерисовывает список.
+// handleDeviceDelete отвязывает одно устройство по индексу и перерисовывает список.
 func (b *Bot) handleDeviceDelete(c tele.Context) error {
 	ref, ok := b.resolveUserRef(c.Sender().ID)
 	if !ok {
@@ -88,14 +88,14 @@ func (b *Bot) handleDeviceDelete(c tele.Context) error {
 	updated, err := b.remnawave.DeleteUserHwidDevice(ref, device.Hwid)
 	if err != nil {
 		slog.Error("Failed to delete HWID device", "error", err, "telegram_id", c.Sender().ID)
-		return c.RespondAlert("Ошибка удаления устройства")
+		return c.RespondAlert("Ошибка отвязки устройства")
 	}
 
 	_ = c.Edit(buildDevicesMessage(updated), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
 		ReplyMarkup: DevicesManagementKeyboard(updated),
 	})
-	return c.Respond(&tele.CallbackResponse{Text: "Устройство удалено"})
+	return c.Respond(&tele.CallbackResponse{Text: "Устройство отвязано"})
 }
 
 // handleDevicesResetAll показывает экран подтверждения сброса всех устройств.

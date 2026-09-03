@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -65,6 +66,9 @@ func TestDevicesManagementKeyboard(t *testing.T) {
 	require.Len(t, kb.InlineKeyboard, 4)
 	require.Equal(t, "dev_del", kb.InlineKeyboard[0][0].Unique)
 	require.Equal(t, "0", kb.InlineKeyboard[0][0].Data)
+	// Нажатие отвязывает устройство, поэтому подпись не должна обещать обновление.
+	require.True(t, strings.HasPrefix(kb.InlineKeyboard[0][0].Text, "🗑 "),
+		"подпись устройства: %q", kb.InlineKeyboard[0][0].Text)
 	require.Equal(t, "dev_del", kb.InlineKeyboard[1][0].Unique)
 	require.Equal(t, "1", kb.InlineKeyboard[1][0].Data)
 	require.Equal(t, "dev_reset_all", kb.InlineKeyboard[2][0].Unique)
