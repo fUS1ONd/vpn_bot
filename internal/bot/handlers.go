@@ -67,13 +67,14 @@ type Bot struct {
 	subRevokeCooldown           sync.Map                                                                // telegram_id -> time.Time последнего перевыпуска ссылки
 	subCards                    cardTracker                                                             // id последней карточки «Моя подписка» на пользователя
 	sendCardMessage             func(c tele.Context, msg string, markup *tele.ReplyMarkup) (int, error) // шов отправки карточки: нужен её message_id
-	deleteCardMessage           func(c tele.Context, messageID int) error                               // шов удаления прежней карточки
-	communityDeclineMu          sync.Mutex                                                              // Делает «проверить кулдаун и занять его» одной операцией
-	communityDeclineCooldown    sync.Map                                                                // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
-	communityMentionMu          sync.Mutex                                                              // Делает «прочитать кулдаун приписки и занять его» одной операцией
-	communityPendingAlerted     sync.Map                                                                // telegram_id -> struct{}, защита от потока алертов о зависших заявках
-	chatMemberOf                chatMemberFunc                                                          // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
-	panelAuthAlerted            sync.Map                                                                // ключ алерта про токен панели -> struct{}, защита от повторов
+	deleteCardMessage           func(c tele.Context, messageID int) error
+	deleteUserMessage           func(c tele.Context, messageID int) error // шов удаления прежней карточки
+	communityDeclineMu          sync.Mutex                                // Делает «проверить кулдаун и занять его» одной операцией
+	communityDeclineCooldown    sync.Map                                  // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
+	communityMentionMu          sync.Mutex                                // Делает «прочитать кулдаун приписки и занять его» одной операцией
+	communityPendingAlerted     sync.Map                                  // telegram_id -> struct{}, защита от потока алертов о зависших заявках
+	chatMemberOf                chatMemberFunc                            // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
+	panelAuthAlerted            sync.Map                                  // ключ алерта про токен панели -> struct{}, защита от повторов
 }
 
 // chatMemberFunc — единственный поход бота за составом Канала.
@@ -123,6 +124,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	}
 	bot.sendCardMessage = newCardSender(b)
 	bot.deleteCardMessage = newCardDeleter(b)
+	bot.deleteUserMessage = newUserMessageDeleter(b)
 	bot.chatMemberOf = func(chatID, userID int64) (*tele.ChatMember, error) {
 		return b.ChatMemberOf(&tele.Chat{ID: chatID}, &tele.User{ID: userID})
 	}
@@ -130,6 +132,9 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 
 	// Rate limiting middleware — защита от спама командами
 	b.Use(bot.rateLimitMiddleware)
+
+	// Уборка нажатий reply-кнопок: навигации не место в истории переписки
+	b.Use(bot.dropReplyTapMiddleware)
 
 	// Middleware для логирования
 	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
