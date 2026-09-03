@@ -53,24 +53,27 @@ type Bot struct {
 	adminPriceMu                sync.RWMutex
 	adminPriceData              map[int64]adminChangePriceSession // pending-данные изменения цены для админа
 	bugReportMu                 sync.RWMutex
-	bugReportData               map[int64]bugReportSession // pending-данные багрепорта
-	bugReportCooldown           sync.Map                   // telegram_id -> time.Time последней отправки
-	adminExtendCooldown         sync.Map                   // telegram_id -> time.Time последнего продления (защита от дабл-клика)
-	unmatchedEventReported      sync.Map                   // object_id -> struct{}, чтобы повторные доставки не спамили владельца
-	ignoredConfirmationReported sync.Map                   // payment_id -> struct{}, одна жалоба на непринятую оплату
-	revivedPaymentReported      sync.Map                   // payment_id -> struct{}, одно сообщение о воскрешённом платеже
-	receiptsInFlight            sync.WaitGroup             // Запущенные пробития чеков — чтобы дождаться их при остановке
-	receiptsStopMu              sync.RWMutex               // Закрывает приём новых пробитий, чтобы Add не гонялся с Wait
-	receiptsStopped             bool                       // true после Stop(): новые пробития не начинаем
-	receiptAuthBlocked          atomic.Bool                // Кабинет не принял вход — проход по чекам прерывается до следующего раза
-	receiptAlerted              sync.Map                   // ключ алерта по чекам -> struct{}, защита от повторов
-	subRevokeCooldown           sync.Map                   // telegram_id -> time.Time последнего перевыпуска ссылки
-	communityDeclineMu          sync.Mutex                 // Делает «проверить кулдаун и занять его» одной операцией
-	communityDeclineCooldown    sync.Map                   // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
-	communityMentionMu          sync.Mutex                 // Делает «прочитать кулдаун приписки и занять его» одной операцией
-	communityPendingAlerted     sync.Map                   // telegram_id -> struct{}, защита от потока алертов о зависших заявках
-	chatMemberOf                chatMemberFunc             // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
-	panelAuthAlerted            sync.Map                   // ключ алерта про токен панели -> struct{}, защита от повторов
+	bugReportData               map[int64]bugReportSession                                              // pending-данные багрепорта
+	bugReportCooldown           sync.Map                                                                // telegram_id -> time.Time последней отправки
+	adminExtendCooldown         sync.Map                                                                // telegram_id -> time.Time последнего продления (защита от дабл-клика)
+	unmatchedEventReported      sync.Map                                                                // object_id -> struct{}, чтобы повторные доставки не спамили владельца
+	ignoredConfirmationReported sync.Map                                                                // payment_id -> struct{}, одна жалоба на непринятую оплату
+	revivedPaymentReported      sync.Map                                                                // payment_id -> struct{}, одно сообщение о воскрешённом платеже
+	receiptsInFlight            sync.WaitGroup                                                          // Запущенные пробития чеков — чтобы дождаться их при остановке
+	receiptsStopMu              sync.RWMutex                                                            // Закрывает приём новых пробитий, чтобы Add не гонялся с Wait
+	receiptsStopped             bool                                                                    // true после Stop(): новые пробития не начинаем
+	receiptAuthBlocked          atomic.Bool                                                             // Кабинет не принял вход — проход по чекам прерывается до следующего раза
+	receiptAlerted              sync.Map                                                                // ключ алерта по чекам -> struct{}, защита от повторов
+	subRevokeCooldown           sync.Map                                                                // telegram_id -> time.Time последнего перевыпуска ссылки
+	subCards                    cardTracker                                                             // id последней карточки «Моя подписка» на пользователя
+	sendCardMessage             func(c tele.Context, msg string, markup *tele.ReplyMarkup) (int, error) // шов отправки карточки: нужен её message_id
+	deleteCardMessage           func(c tele.Context, messageID int) error                               // шов удаления прежней карточки
+	communityDeclineMu          sync.Mutex                                                              // Делает «проверить кулдаун и занять его» одной операцией
+	communityDeclineCooldown    sync.Map                                                                // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
+	communityMentionMu          sync.Mutex                                                              // Делает «прочитать кулдаун приписки и занять его» одной операцией
+	communityPendingAlerted     sync.Map                                                                // telegram_id -> struct{}, защита от потока алертов о зависших заявках
+	chatMemberOf                chatMemberFunc                                                          // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
+	panelAuthAlerted            sync.Map                                                                // ключ алерта про токен панели -> struct{}, защита от повторов
 }
 
 // chatMemberFunc — единственный поход бота за составом Канала.
@@ -118,6 +121,8 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		adminPriceData:  make(map[int64]adminChangePriceSession),
 		bugReportData:   make(map[int64]bugReportSession),
 	}
+	bot.sendCardMessage = newCardSender(b)
+	bot.deleteCardMessage = newCardDeleter(b)
 	bot.chatMemberOf = func(chatID, userID int64) (*tele.ChatMember, error) {
 		return b.ChatMemberOf(&tele.Chat{ID: chatID}, &tele.User{ID: userID})
 	}
@@ -773,8 +778,11 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	// Карточка подписки самодостаточна: статус, ссылка и inline-кнопки
 	// (страница подписки, устройства, перевыпуск). Reply-клавиатура главного
 	// меню остаётся снизу нетронутой, отдельное подменю не нужно.
+	// Карточка живая: с reply-кнопки мы гарантированно внизу чата, поэтому
+	// присылаем новую и убираем предыдущую — иначе в чате копятся карточки с
+	// устаревшими данными и живыми кнопками на уже перевыпущенную ссылку.
 	msg, markup := b.buildSubscriptionCard(telegramID, remnawaveUser)
-	return sendWithInlineFallback(c, msg, markup)
+	return b.replaceCard(c, msg, markup)
 }
 
 // handleInfo показывает помощь, контакты и ссылки на документы сервиса

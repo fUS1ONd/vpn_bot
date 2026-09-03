@@ -33,6 +33,7 @@ type MockContext struct {
 	alertText   string
 	callback    *tele.Callback
 	respondText string
+	editErr     error
 }
 
 func (c *MockContext) Sender() *tele.User {
@@ -64,6 +65,9 @@ func (c *MockContext) Args() []string {
 
 // Edit имитирует редактирование сообщения по callback-у.
 func (c *MockContext) Edit(what any, opts ...any) error {
+	if c.editErr != nil {
+		return c.editErr
+	}
 	c.editedMsg = what
 	c.editedOpts = opts
 	return nil

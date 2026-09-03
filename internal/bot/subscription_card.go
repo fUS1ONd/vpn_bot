@@ -112,20 +112,6 @@ func sendWithInlineFallback(c tele.Context, msg string, markup *tele.ReplyMarkup
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
-// editWithInlineFallback — версия sendWithInlineFallback для редактирования.
-// Если отредактировать не удалось (сообщение устарело или клавиатуру отверг
-// Telegram), отправляем карточку новым сообщением.
-func editWithInlineFallback(c tele.Context, msg string, markup *tele.ReplyMarkup) error {
-	err := c.Edit(msg, &tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: markup})
-	if err == nil {
-		return nil
-	}
-
-	slog.Warn("Failed to edit subscription card, sending new message",
-		"error", err, "telegram_id", c.Sender().ID)
-	return sendWithInlineFallback(c, msg, markup)
-}
-
 // handleSubscriptionCard перерисовывает карточку подписки в текущем сообщении.
 // Используется как возврат из экрана устройств и при отмене перевыпуска.
 func (b *Bot) handleSubscriptionCard(c tele.Context) error {
@@ -143,7 +129,7 @@ func (b *Bot) handleSubscriptionCard(c tele.Context) error {
 	}
 
 	msg, markup := b.buildSubscriptionCard(telegramID, remUser)
-	if err := editWithInlineFallback(c, msg, markup); err != nil {
+	if err := b.editCardInPlace(c, msg, markup); err != nil {
 		slog.Error("Failed to render subscription card", "error", err, "telegram_id", telegramID)
 	}
 	return c.Respond()
@@ -157,7 +143,7 @@ func (b *Bot) handleSubRevoke(c tele.Context) error {
 
 	// Фоллбэк обязателен: без него транзиентная ошибка Edit оставляет пользователя
 	// с погасшими «часиками» и неизменившимся экраном — кнопка выглядит мёртвой.
-	if err := editWithInlineFallback(c, MsgRevokeConfirm, SubscriptionRevokeConfirmKeyboard()); err != nil {
+	if err := b.editCardInPlace(c, MsgRevokeConfirm, SubscriptionRevokeConfirmKeyboard()); err != nil {
 		slog.Error("Failed to show revoke confirmation", "error", err, "telegram_id", c.Sender().ID)
 		return c.RespondAlert("Не удалось открыть подтверждение. Попробуйте ещё раз.")
 	}
@@ -179,7 +165,7 @@ func (b *Bot) handleSubRevokeConfirm(c tele.Context) error {
 	}
 
 	msg, markup := b.buildSubscriptionCard(telegramID, remUser)
-	if err := editWithInlineFallback(c, MsgRevokeDone+msg, markup); err != nil {
+	if err := b.editCardInPlace(c, MsgRevokeDone+msg, markup); err != nil {
 		slog.Error("Failed to render card after revoke", "error", err, "telegram_id", telegramID)
 	}
 	return c.Respond(&tele.CallbackResponse{Text: "Ссылка перевыпущена"})
