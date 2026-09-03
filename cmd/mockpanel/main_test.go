@@ -253,6 +253,163 @@ func TestLatencyDelaysPanelButNotControl(t *testing.T) {
 	require.Less(t, time.Since(start), 150*time.Millisecond)
 }
 
+// withPanelVersion временно переключает эмулируемый контракт. Версия — глобальная
+// настройка стенда, поэтому тесты, её меняющие, не параллелятся.
+func withPanelVersion(t *testing.T, version string) {
+	t.Helper()
+
+	previous := panelVersion
+	panelVersion = version
+	t.Cleanup(func() { panelVersion = previous })
+}
+
+// stream — единственный способ найти пользователя на 3.x. Сломается форма
+// ответа — весь 3.x-стенд мёртв, и выяснится это только вручную.
+func TestStreamLookup(t *testing.T) {
+	srv := httptest.NewServer(newServer())
+	defer srv.Close()
+
+	createUser(t, srv, 900)
+	createUser(t, srv, 901)
+
+	_, parsed := get(t, srv, "/api/users/stream?telegramId=900&size=100")
+	resp := parsed["response"].(map[string]any)
+
+	users := resp["users"].([]any)
+	require.Len(t, users, 1)
+	require.EqualValues(t, 900, users[0].(map[string]any)["telegramId"])
+	require.Equal(t, false, resp["hasMore"])
+}
+
+// by-telegram-id отдаёт массив прямо под response, а не объект с users, —
+// форма отличается от соседнего stream, перепутать легко.
+func TestByTelegramIDReturnsBareArray(t *testing.T) {
+	srv := httptest.NewServer(newServer())
+	defer srv.Close()
+
+	createUser(t, srv, 910)
+
+	resp, err := http.Get(srv.URL + "/api/users/by-telegram-id/910")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	var parsed struct {
+		Response []map[string]any `json:"response"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&parsed))
+	require.Len(t, parsed.Response, 1)
+}
+
+// Перевыпуск обязан менять и shortUuid, и subscriptionUrl: на старую ссылку
+// завязан документированный инвариант порядка операций.
+func TestRevokeChangesSubscriptionLink(t *testing.T) {
+	srv := httptest.NewServer(newServer())
+	defer srv.Close()
+
+	uuid, _ := createUser(t, srv, 920)
+
+	_, before := get(t, srv, "/api/users/"+uuid)
+	oldShort := before["response"].(map[string]any)["shortUuid"]
+	oldURL := before["response"].(map[string]any)["subscriptionUrl"]
+
+	_, after := post(t, srv, "/api/users/"+uuid+"/actions/revoke", `{}`)
+	newShort := after["response"].(map[string]any)["shortUuid"]
+	newURL := after["response"].(map[string]any)["subscriptionUrl"]
+
+	require.NotEqual(t, oldShort, newShort)
+	require.NotEqual(t, oldURL, newURL)
+	require.Contains(t, newURL, newShort)
+}
+
+func TestResolveByUUID(t *testing.T) {
+	srv := httptest.NewServer(newServer())
+	defer srv.Close()
+
+	uuid, id := createUser(t, srv, 930)
+
+	t.Run("на 2.8.x добирает числовой id", func(t *testing.T) {
+		resp, parsed := post(t, srv, "/api/users/resolve", fmt.Sprintf(`{"uuid":%q}`, uuid))
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		resolved := parsed["response"].(map[string]any)
+		require.EqualValues(t, id, resolved["id"])
+		require.Equal(t, uuid, resolved["uuid"])
+	})
+
+	// «resolve» не должен быть принят за идентификатор пользователя: бот трактует
+	// 404 здесь как «связку добрать нечем» и молча признаёт backfill
+	// несостоявшимся.
+	t.Run("неизвестный UUID — 404, а не молчание", func(t *testing.T) {
+		resp, _ := post(t, srv, "/api/users/resolve", `{"uuid":"no-such"}`)
+		require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("на 3.x резолвить нечего", func(t *testing.T) {
+		withPanelVersion(t, "3.2.3")
+
+		resp, _ := post(t, srv, "/api/users/resolve", fmt.Sprintf(`{"uuid":%q}`, uuid))
+		require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+}
+
+// На 3.x заглушка обязана вести себя как 3.x, иначе ручная проверка даёт ложную
+// уверенность: ветка `remnawave_uuid IS NULL` не выполняется, а ре-детект версии
+// в doUserRequest недостижим — он срабатывает ровно на 400 по нечисловому пути.
+func TestV3ContractDiffersFromV2(t *testing.T) {
+	srv := httptest.NewServer(newServer())
+	defer srv.Close()
+
+	uuid, id := createUser(t, srv, 940)
+
+	t.Run("на 2.8.x uuid отдаётся", func(t *testing.T) {
+		_, parsed := get(t, srv, "/api/users/"+uuid)
+		require.NotEmpty(t, parsed["response"].(map[string]any)["uuid"])
+	})
+
+	withPanelVersion(t, "3.2.3")
+
+	t.Run("на 3.x uuid не отдаётся вовсе", func(t *testing.T) {
+		_, parsed := get(t, srv, fmt.Sprintf("/api/users/%d", id))
+		_, present := parsed["response"].(map[string]any)["uuid"]
+		require.False(t, present, "в 3.x колонки uuid нет")
+	})
+
+	t.Run("на 3.x нечисловой путь — 400, триггер ре-детекта", func(t *testing.T) {
+		resp, _ := get(t, srv, "/api/users/"+uuid)
+		require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("на 3.x нечисловой путь устройств — тоже 400", func(t *testing.T) {
+		resp, _ := get(t, srv, "/api/hwid/devices/"+uuid)
+		require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("на 3.x числовой путь устройств работает", func(t *testing.T) {
+		resp, _ := get(t, srv, fmt.Sprintf("/api/hwid/devices/%d", id))
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+}
+
+// Ноды и хосты бот скрейпит сам каждые 60 секунд. Считай их отказы обычными —
+// и «провалить один запрос» съест фоновый тик вместо проверяемого нажатия.
+func TestBackgroundPollingDoesNotEatInjectedFailures(t *testing.T) {
+	srv := httptest.NewServer(newServer())
+	defer srv.Close()
+
+	createUser(t, srv, 950)
+	_, _ = post(t, srv, "/mock/fail", `{"count":1,"status":500}`)
+
+	// Фоновый трафик бота между постановкой отказа и проверяемым действием.
+	resp, _ := get(t, srv, "/api/nodes")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp, _ = get(t, srv, "/api/hosts")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Отказ дожил до действия пользователя.
+	resp, _ = get(t, srv, "/api/users")
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
 func TestUnknownUserReturnsPanelErrorFormat(t *testing.T) {
 	srv := httptest.NewServer(newServer())
 	defer srv.Close()

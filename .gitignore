@@ -26,6 +26,7 @@ sd_configs/targets.json
 /bot
 /migrator
 /backfill-used-at
+/mockpanel
 
 # IDE
 .vscode/

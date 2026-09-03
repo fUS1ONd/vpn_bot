@@ -43,6 +43,12 @@ services:
       - REMNAWAVE_URL=http://mock-panel:8081
       - REMNAWAVE_API_TOKEN=mock-token
       - DB_PATH=/app/data/bot.db
+      # Каталог targets синхронизируется при старте и каждые 60 секунд. Без
+      # него SyncNodes падает на каждом тике, и `make stand-logs` заполняется
+      # ошибкой, которая читается как настоящий дефект. Лежит внутри
+      # примонтированного data-test; сам каталог создаёт цель make stand-up —
+      # бот его не создаёт, а stand-reset сносит data-test целиком.
+      - SD_CONFIGS_PATH=/app/data/sd_configs
       - PRIVACY_POLICY_URL=${PRIVACY_POLICY_URL:-https://example.com/privacy}
       - TERMS_OF_SERVICE_URL=${TERMS_OF_SERVICE_URL:-https://example.com/terms}
       - SUPPORT_CONTACT=${SUPPORT_CONTACT:-@support}

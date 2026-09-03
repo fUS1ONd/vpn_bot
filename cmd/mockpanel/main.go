@@ -33,9 +33,19 @@ import (
 // чтобы одним стендом проверять обе ветки.
 var panelVersion = envOr("MOCK_PANEL_VERSION", "2.8.1")
 
+// isV3 — эмулируем ли контракт 3.x. Различие не косметическое: в 3.x у
+// пользователя нет колонки uuid вовсе, а параметр пути объявлен числом, поэтому
+// панель отвечает 400 на нечисловой сегмент. Именно на этот 400 у бота завязан
+// ре-детект версии (`doUserRequest` в internal/remnawave/userref.go) —
+// единственная страховка на случай апгрейда панели без перезапуска бота. Отдавая
+// на 3.x uuid и 200, заглушка делала бы эту ветку недостижимой.
+func isV3() bool { return strings.HasPrefix(panelVersion, "3.") }
+
 type user struct {
-	ID                int64     `json:"id"`
-	UUID              string    `json:"uuid"`
+	ID int64 `json:"id"`
+	// omitempty плюс очистка в userView: на 3.x поля быть не должно, иначе бот
+	// на стенде никогда не пройдёт веткой `remnawave_uuid IS NULL`.
+	UUID              string    `json:"uuid,omitempty"`
 	ShortUUID         string    `json:"shortUuid"`
 	Username          string    `json:"username"`
 	Status            string    `json:"status"`
@@ -73,6 +83,33 @@ type store struct {
 }
 
 func newStore() *store { return &store{nextID: 1, users: map[string]*user{}} }
+
+// userView готовит пользователя к выдаче наружу. Внутри UUID есть всегда — он
+// служит ключом хранилища, — но на 3.x панель его не отдаёт, и заглушка обязана
+// вести себя так же.
+func userView(u *user) user {
+	view := *u
+	if isV3() {
+		view.UUID = ""
+	}
+	return view
+}
+
+func userViews(users []user) []user {
+	views := make([]user, 0, len(users))
+	for i := range users {
+		views = append(views, userView(&users[i]))
+	}
+	return views
+}
+
+// numericSegment сообщает, годится ли сегмент пути как идентификатор под текущий
+// контракт. На 3.x путь объявлен числом, и нечисловой сегмент панель отвергает
+// четырёхсоткой — тем самым сигналом, по которому бот перечитывает версию.
+func numericSegment(segment string) bool {
+	_, err := strconv.ParseInt(segment, 10, 64)
+	return err == nil
+}
 
 func (s *store) byUUID(uuid string) *user { return s.users[uuid] }
 
@@ -194,45 +231,85 @@ func registerPanelRoutes(mux *http.ServeMux, s *store) {
 	})
 
 	mux.HandleFunc("/api/users", func(w http.ResponseWriter, r *http.Request) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-
+		// Тело разбирается до взятия блокировки: клиент, открывший POST и не
+		// дославший тело, иначе держал бы мьютекс данных, и весь стенд вставал
+		// бы за ним молча, без единой строки в логе.
 		switch r.Method {
 		case http.MethodGet:
-			all := s.list()
+			s.mu.Lock()
+			defer s.mu.Unlock()
+
+			all := userViews(s.list())
 			writeJSON(w, map[string]any{"response": map[string]any{"users": all, "total": len(all)}})
 		case http.MethodPost:
-			writeJSON(w, map[string]any{"response": s.create(r)})
+			var req createRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+
+			s.mu.Lock()
+			defer s.mu.Unlock()
+
+			writeJSON(w, map[string]any{"response": userView(s.create(req))})
 		case http.MethodPatch:
-			u := s.patch(r)
+			var req patchRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+
+			s.mu.Lock()
+			defer s.mu.Unlock()
+
+			u := s.patch(req)
 			if u == nil {
 				writeError(w, http.StatusNotFound, "user not found")
 				return
 			}
-			writeJSON(w, map[string]any{"response": u})
+			writeJSON(w, map[string]any{"response": userView(u)})
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
 	})
 
 	mux.HandleFunc("/api/users/", func(w http.ResponseWriter, r *http.Request) {
+		rest := strings.TrimPrefix(r.URL.Path, "/api/users/")
+
+		// Резолв UUID → числовой id. Разбирается раньше остальных: иначе
+		// «resolve» уйдёт в поиск как идентификатор пользователя и обернётся
+		// 404, а бот трактует 404 здесь как «связку добрать нечем» и молча
+		// признаёт backfill несостоявшимся.
+		if rest == "resolve" {
+			var req struct {
+				UUID string `json:"uuid"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+
+			s.mu.Lock()
+			defer s.mu.Unlock()
+
+			s.resolve(w, req.UUID)
+			return
+		}
+
 		s.mu.Lock()
 		defer s.mu.Unlock()
 
-		rest := strings.TrimPrefix(r.URL.Path, "/api/users/")
-
 		if id, ok := strings.CutPrefix(rest, "by-telegram-id/"); ok {
 			telegramID, _ := strconv.ParseInt(id, 10, 64)
-			writeJSON(w, map[string]any{"response": s.byTelegramID(telegramID)})
+			writeJSON(w, map[string]any{"response": userViews(s.byTelegramID(telegramID))})
 			return
 		}
 		if rest == "stream" {
 			telegramID, _ := strconv.ParseInt(r.URL.Query().Get("telegramId"), 10, 64)
-			writeJSON(w, map[string]any{"response": map[string]any{"users": s.byTelegramID(telegramID)}})
+			writeJSON(w, map[string]any{"response": map[string]any{
+				"users":   userViews(s.byTelegramID(telegramID)),
+				"hasMore": false,
+			}})
 			return
 		}
 
 		segment, action, _ := strings.Cut(rest, "/")
+		if isV3() && !numericSegment(segment) {
+			writeError(w, http.StatusBadRequest, "user id must be a number")
+			return
+		}
+
 		u := s.find(segment)
 		if u == nil {
 			writeError(w, http.StatusNotFound, "user not found")
@@ -248,24 +325,43 @@ func registerPanelRoutes(mux *http.ServeMux, s *store) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		writeJSON(w, map[string]any{"response": u})
+		writeJSON(w, map[string]any{"response": userView(u)})
 	})
 
 	// HWID-маршруты. Три разных операции живут под одним префиксом, поэтому
 	// «delete» и «delete-all» разбираются до того, как остаток пути будет
 	// принят за идентификатор пользователя.
 	mux.HandleFunc("/api/hwid/devices/", func(w http.ResponseWriter, r *http.Request) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-
 		rest := strings.TrimPrefix(r.URL.Path, "/api/hwid/devices/")
 
 		switch rest {
-		case "delete":
-			s.deleteDevice(w, r)
-		case "delete-all":
-			s.deleteAllDevices(w, r)
+		case "delete", "delete-all":
+			// Тело разбирается до блокировки — см. комментарий в /api/users.
+			var body hwidRequest
+			_ = json.NewDecoder(r.Body).Decode(&body)
+
+			s.mu.Lock()
+			defer s.mu.Unlock()
+
+			u := s.userFromHwidBody(body)
+			if u == nil {
+				writeError(w, http.StatusNotFound, "user not found")
+				return
+			}
+			if rest == "delete" {
+				u.removeDevice(body.Hwid)
+			} else {
+				u.devices = nil
+			}
+			writeDevices(w, u)
 		default:
+			s.mu.Lock()
+			defer s.mu.Unlock()
+
+			if isV3() && !numericSegment(rest) {
+				writeError(w, http.StatusBadRequest, "user id must be a number")
+				return
+			}
 			u := s.find(rest)
 			if u == nil {
 				writeError(w, http.StatusNotFound, "user not found")
@@ -283,35 +379,29 @@ func registerPanelRoutes(mux *http.ServeMux, s *store) {
 	})
 }
 
-// userFromHwidBody достаёт пользователя из тела HWID-запроса. На 2.8.x бот
-// присылает userUuid строкой, на 3.x — userId числом; заглушка принимает оба,
-// чтобы одна и та же проверка проходила на обеих версиях.
-func (s *store) userFromHwidBody(r *http.Request) (*user, string) {
-	var req struct {
-		UserUUID string `json:"userUuid"`
-		UserID   int64  `json:"userId"`
-		Hwid     string `json:"hwid"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-
-	if req.UserUUID != "" {
-		return s.byUUID(req.UserUUID), req.Hwid
-	}
-	if req.UserID != 0 {
-		return s.byID(req.UserID), req.Hwid
-	}
-	return nil, req.Hwid
+// hwidRequest — тело HWID-запросов бота. На 2.8.x приходит userUuid строкой, на
+// 3.x — userId числом.
+type hwidRequest struct {
+	UserUUID string `json:"userUuid"`
+	UserID   int64  `json:"userId"`
+	Hwid     string `json:"hwid"`
 }
 
-// deleteDevice удаляет одно устройство и отвечает оставшимся списком — бот
-// перерисовывает экран прямо из ответа, не перезапрашивая список.
-func (s *store) deleteDevice(w http.ResponseWriter, r *http.Request) {
-	u, hwid := s.userFromHwidBody(r)
-	if u == nil {
-		writeError(w, http.StatusNotFound, "user not found")
-		return
+// userFromHwidBody принимает обе формы адресации: какую прислать, решает клиент
+// по детекту версии, и заглушке нечего на этом настаивать.
+func (s *store) userFromHwidBody(req hwidRequest) *user {
+	if req.UserUUID != "" {
+		return s.byUUID(req.UserUUID)
 	}
+	if req.UserID != 0 {
+		return s.byID(req.UserID)
+	}
+	return nil
+}
 
+// removeDevice убирает одно устройство. Ответ на удаление — оставшийся список:
+// бот перерисовывает экран прямо из него, не перезапрашивая.
+func (u *user) removeDevice(hwid string) {
 	kept := make([]device, 0, len(u.devices))
 	for _, d := range u.devices {
 		if d.Hwid != hwid {
@@ -319,18 +409,32 @@ func (s *store) deleteDevice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	u.devices = kept
-	writeDevices(w, u)
 }
 
-func (s *store) deleteAllDevices(w http.ResponseWriter, r *http.Request) {
-	u, _ := s.userFromHwidBody(r)
+// resolve отвечает на POST /api/users/resolve — точечный добор числового id по
+// UUID при заполнении связки (`BackfillRemnawaveIDs`).
+//
+// На 3.x резолвить по UUID нечего: колонки уже нет. Клиент туда и не ходит
+// (`ResolveUserByUUID` отказывает по версии до запроса), но заглушка отвечает
+// честной четырёхсоткой, а не выдумывает ответ, которого панель дать не может.
+func (s *store) resolve(w http.ResponseWriter, uuid string) {
+	if isV3() {
+		writeError(w, http.StatusBadRequest, "resolve by uuid is unavailable on 3.x")
+		return
+	}
+
+	u := s.byUUID(uuid)
 	if u == nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
 
-	u.devices = nil
-	writeDevices(w, u)
+	writeJSON(w, map[string]any{"response": map[string]any{
+		"uuid":      u.UUID,
+		"id":        u.ID,
+		"shortUuid": u.ShortUUID,
+		"username":  u.Username,
+	}})
 }
 
 func writeDevices(w http.ResponseWriter, u *user) {
@@ -357,7 +461,11 @@ func registerControlRoutes(mux *http.ServeMux, s *store, c *chaos) {
 			writeError(w, http.StatusNotFound, "user not found")
 			return
 		}
-		writeJSON(w, map[string]any{"response": u, "devices": u.devices})
+		devices := u.devices
+		if devices == nil {
+			devices = []device{}
+		}
+		writeJSON(w, map[string]any{"response": userView(u), "devices": devices})
 	})
 
 	mux.HandleFunc("/mock/fail", func(w http.ResponseWriter, r *http.Request) {
@@ -400,12 +508,30 @@ func registerControlRoutes(mux *http.ServeMux, s *store, c *chaos) {
 // withChaos выдерживает задержку и проваливает запросы, пока счётчик не
 // исчерпан.
 //
-// Метаданные из-под отказов исключены намеренно: по ним бот определяет версию
-// панели, и провалившийся детект увёл бы стенд в состояние, которое проверять
-// никто не собирался, — вместо экрана ошибки конкретного действия.
+// chaosExempt — маршруты, которые отказы не трогают.
+//
+// Метаданные: по ним бот определяет версию панели, и провалившийся детект увёл
+// бы стенд в состояние, которое проверять никто не собирался, вместо экрана
+// ошибки конкретного действия.
+//
+// Ноды и хосты: бот скрейпит их сам, при старте и каждые 60 секунд
+// (`StartSyncLoop` в internal/monitoring). Считай их отказы обычными — и
+// поставленный «провалить один запрос» съест фоновый тик, а не то нажатие,
+// ради которого отказ включали. Тестировщик увидит штатно отработавшую кнопку
+// и сделает ровно неверный вывод.
+func chaosExempt(path string) bool {
+	switch path {
+	case "/api/system/metadata", "/api/nodes", "/api/hosts":
+		return true
+	default:
+		return false
+	}
+}
+
+// Часть маршрутов выведена из-под отказов намеренно, см. chaosExempt.
 func withChaos(c *chaos, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/system/metadata" {
+		if chaosExempt(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -495,17 +621,16 @@ func makeDevices(count int) []device {
 	return devices
 }
 
+type createRequest struct {
+	Username          string `json:"username"`
+	TelegramID        *int64 `json:"telegramId"`
+	TrafficLimitBytes int64  `json:"trafficLimitBytes"`
+	ExpireAt          string `json:"expireAt"`
+}
+
 // create заводит пользователя. Значения полей берутся из запроса бота, чтобы
 // стенд отвечал тем же, что у него попросили.
-func (s *store) create(r *http.Request) *user {
-	var req struct {
-		Username          string `json:"username"`
-		TelegramID        *int64 `json:"telegramId"`
-		TrafficLimitBytes int64  `json:"trafficLimitBytes"`
-		ExpireAt          string `json:"expireAt"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-
+func (s *store) create(req createRequest) *user {
 	expireAt, err := time.Parse(time.RFC3339, req.ExpireAt)
 	if err != nil {
 		expireAt = time.Now().UTC().AddDate(0, 1, 0)
@@ -531,18 +656,17 @@ func (s *store) create(r *http.Request) *user {
 	return u
 }
 
-// patch применяет изменения статуса, срока и лимита трафика.
-func (s *store) patch(r *http.Request) *user {
-	var req struct {
-		UUID              string  `json:"uuid"`
-		ID                int64   `json:"id"`
-		Status            *string `json:"status"`
-		ExpireAt          *string `json:"expireAt"`
-		TrafficLimitBytes *int64  `json:"trafficLimitBytes"`
-		Username          *string `json:"username"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+type patchRequest struct {
+	UUID              string  `json:"uuid"`
+	ID                int64   `json:"id"`
+	Status            *string `json:"status"`
+	ExpireAt          *string `json:"expireAt"`
+	TrafficLimitBytes *int64  `json:"trafficLimitBytes"`
+	Username          *string `json:"username"`
+}
 
+// patch применяет изменения статуса, срока и лимита трафика.
+func (s *store) patch(req patchRequest) *user {
 	u := s.byUUID(req.UUID)
 	if u == nil && req.ID != 0 {
 		u = s.byID(req.ID)
@@ -613,7 +737,17 @@ func main() {
 	port := envOr("MOCK_PANEL_PORT", "8081")
 	slog.Info("Mock Remnawave panel started", "port", port, "version", panelVersion)
 
-	if err := http.ListenAndServe(":"+port, newServer()); err != nil {
+	// ReadTimeout обязателен: клиент, открывший запрос и не дославший тело,
+	// иначе занимал бы обработчик бесконечно. Стенд молча вставал бы, и
+	// разбираться в этом пришлось бы посреди ручной проверки.
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           newServer(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      60 * time.Second, // больше максимальной /mock/latency
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		slog.Error("mock panel stopped", "error", err)
 		os.Exit(1)
 	}

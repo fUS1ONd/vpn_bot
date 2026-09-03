@@ -126,10 +126,13 @@ make logs            # Показать логи
 ### Тестовый стенд
 
 Прогнать flow руками, не трогая прод и настоящую панель: `make stand-up`,
-`make stand-logs`, `make stand-down`, `make stand-reset`. Бот поднимается с
-заглушкой `cmd/mockpanel`, у которой есть пульт (`POST /mock/user`,
-`/mock/fail`, `/mock/latency`) — срок, статус, трафик, устройства, отказы
-и задержки панели.
+`make stand-logs`, `make stand-restart`, `make stand-down`, `make stand-reset`.
+Бот поднимается с заглушкой `cmd/mockpanel`, у которой есть пульт
+(`POST /mock/user`, `/mock/fail`, `/mock/latency`) — срок, статус, трафик,
+устройства, отказы и задержки панели. `MOCK_PANEL_VERSION` переключает
+эмулируемый контракт панели, и различия 2.8.x/3.x заглушка соблюдает всерьёз
+(на 3.x нет `uuid` и нечисловой путь даёт 400 — на нём держится ре-детект
+версии).
 
 **Никогда не запускай стенд голым `docker compose`**: без `-p vpn-bot-test -f
 docker-compose.test.yml` команда подхватит боевой `docker-compose.yml` и
