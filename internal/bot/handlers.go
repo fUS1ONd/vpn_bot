@@ -215,6 +215,14 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	btnSubRevokeCancel := subMenu.Data("", cbSubRevokeCancel)
 
 	b.Handle(&btnSubCard, bot.handleSubscriptionCard)
+
+	errMenu := &tele.ReplyMarkup{}
+	btnRetryPayment := errMenu.Data("", cbRetryPayment)
+	btnRetryPaymentCheck := errMenu.Data("", cbRetryPaymentCheck)
+	btnRetryInvite := errMenu.Data("", cbRetryInvite)
+	b.Handle(&btnRetryPayment, bot.handleRetryPayment)
+	b.Handle(&btnRetryPaymentCheck, bot.handleRetryPaymentCheck)
+	b.Handle(&btnRetryInvite, bot.handleRetryInvite)
 	b.Handle(&btnSubRevoke, bot.handleSubRevoke)
 	b.Handle(&btnSubRevokeOK, bot.handleSubRevokeConfirm)
 	b.Handle(&btnSubRevokeCancel, bot.handleSubRevokeCancel)
@@ -666,7 +674,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		slog.Error("Failed to create user in Remnawave", "error", err)
 		// Откатываем инвайт — пользователь не создан
 		_ = b.db.UnclaimInvite(code, telegramID)
-		return c.Send("Ошибка создания аккаунта. Попробуйте позже или обратитесь к администратору.")
+		return b.sendErrorExit(c, "Не удалось создать аккаунт. Приглашение не потрачено — отправьте код ещё раз.", retryAction{})
 	}
 
 	// Цена берётся из snapshot инвайта, first-touch — из всей истории referral.
@@ -680,7 +688,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		if err != nil {
 			slog.Error("Failed to resolve first referral inviter", "error", err, "telegram_id", telegramID)
 			b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.Ref())
-			return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
+			return b.sendErrorExit(c, "Не удалось создать аккаунт. Приглашение не потрачено — отправьте код ещё раз.", retryAction{})
 		}
 	}
 
@@ -692,7 +700,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		slog.Error("Failed to create user in DB", "error", err)
 		// Claim освобождается только после подтверждённого удаления из Remnawave.
 		b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.Ref())
-		return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
+		return b.sendErrorExit(c, "Не удалось создать аккаунт. Приглашение не потрачено — отправьте код ещё раз.", retryAction{})
 	}
 
 	// Отправляем уведомление админу о новом пользователе (асинхронно)
@@ -777,7 +785,8 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	remnawaveUser, err := b.remnawaveUser(telegramID)
 	if err != nil {
 		slog.Error("Failed to get user from Remnawave", "error", err)
-		return c.Send("Ошибка получения статуса. Попробуйте позже.")
+		return b.sendErrorExit(c, "Не удалось получить статус подписки — панель не ответила.",
+			retryAction{unique: cbSubCard})
 	}
 
 	// Карточка подписки самодостаточна: статус, ссылка и inline-кнопки

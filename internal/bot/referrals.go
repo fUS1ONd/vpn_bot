@@ -92,7 +92,7 @@ func (b *Bot) handleCreateReferralInvite(c tele.Context) error {
 	allowed, err := b.canCreateReferralInvite(c.Sender().ID)
 	if err != nil {
 		slog.Error("Failed to verify referral invite eligibility", "error", err, "telegram_id", c.Sender().ID)
-		return c.Send("Ошибка проверки подписки. Попробуйте позже.", &tele.SendOptions{ReplyMarkup: InvitesMenuKeyboard()})
+		return b.sendErrorExit(c, "Не удалось проверить подписку — панель не ответила.", retryAction{unique: cbRetryInvite})
 	}
 	if !allowed {
 		return c.Send(
@@ -110,7 +110,7 @@ func (b *Bot) handleCreateReferralInvite(c tele.Context) error {
 			return c.Send("Достигнут лимит: 15 созданных приглашений за последние 24 часа.", &tele.SendOptions{ReplyMarkup: InvitesMenuKeyboard()})
 		default:
 			slog.Error("Failed to create referral invite", "error", err, "telegram_id", c.Sender().ID)
-			return c.Send("Ошибка создания приглашения.", &tele.SendOptions{ReplyMarkup: InvitesMenuKeyboard()})
+			return b.sendErrorExit(c, "Не удалось создать приглашение.", retryAction{unique: cbRetryInvite})
 		}
 	}
 	return c.Send(b.referralInviteMessage(invite), &tele.SendOptions{ReplyMarkup: InvitesMenuKeyboard()})
@@ -291,4 +291,12 @@ func (b *Bot) notifyReferralActivated(invite *database.Invite, telegramID int64,
 	if _, err := b.bot.Send(&tele.User{ID: invite.CreatedBy}, msg, &tele.SendOptions{ParseMode: tele.ModeHTML}); err != nil {
 		slog.Debug("Failed to notify referral creator", "error", err, "creator_id", invite.CreatedBy)
 	}
+}
+
+// handleRetryInvite повторяет создание приглашения после ошибки.
+func (b *Bot) handleRetryInvite(c tele.Context) error {
+	if err := c.Respond(); err != nil {
+		slog.Warn("Failed to respond to invite retry", "error", err, "telegram_id", c.Sender().ID)
+	}
+	return b.handleCreateReferralInvite(c)
 }
