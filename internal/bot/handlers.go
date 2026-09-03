@@ -705,7 +705,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		slog.Error("Failed to create user in Remnawave", "error", err)
 		// Откатываем инвайт — пользователь не создан
 		_ = b.db.UnclaimInvite(code, telegramID)
-		return b.sendErrorExit(c, "Не удалось создать аккаунт. Приглашение не потрачено — отправьте код ещё раз.", retryAction{})
+		return b.sendErrorExit(c, "Не получилось создать аккаунт. Отправьте код приглашения ещё раз — а если он не примется, напишите нам.", retryAction{})
 	}
 
 	// Цена берётся из snapshot инвайта, first-touch — из всей истории referral.
@@ -719,7 +719,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		if err != nil {
 			slog.Error("Failed to resolve first referral inviter", "error", err, "telegram_id", telegramID)
 			b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.Ref())
-			return b.sendErrorExit(c, "Не удалось создать аккаунт. Приглашение не потрачено — отправьте код ещё раз.", retryAction{})
+			return b.sendErrorExit(c, "Не получилось создать аккаунт. Отправьте код приглашения ещё раз — а если он не примется, напишите нам.", retryAction{})
 		}
 	}
 
@@ -731,7 +731,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		slog.Error("Failed to create user in DB", "error", err)
 		// Claim освобождается только после подтверждённого удаления из Remnawave.
 		b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.Ref())
-		return b.sendErrorExit(c, "Не удалось создать аккаунт. Приглашение не потрачено — отправьте код ещё раз.", retryAction{})
+		return b.sendErrorExit(c, "Не получилось создать аккаунт. Отправьте код приглашения ещё раз — а если он не примется, напишите нам.", retryAction{})
 	}
 
 	// Отправляем уведомление админу о новом пользователе (асинхронно)
@@ -816,7 +816,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	remnawaveUser, err := b.remnawaveUser(telegramID)
 	if err != nil {
 		slog.Error("Failed to get user from Remnawave", "error", err)
-		return b.sendErrorExit(c, "Не удалось получить статус подписки — панель не ответила.",
+		return b.sendErrorExit(c, "Не получилось загрузить вашу подписку. Это временный сбой с нашей стороны — с самой подпиской ничего не случилось.",
 			retryAction{unique: cbSubCard})
 	}
 

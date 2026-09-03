@@ -92,7 +92,7 @@ func (b *Bot) handleCreateReferralInvite(c tele.Context) error {
 	allowed, err := b.canCreateReferralInvite(c.Sender().ID)
 	if err != nil {
 		slog.Error("Failed to verify referral invite eligibility", "error", err, "telegram_id", c.Sender().ID)
-		return b.sendErrorExit(c, "Не удалось проверить подписку — панель не ответила.", retryAction{unique: cbRetryInvite})
+		return b.sendErrorExit(c, "Не получилось проверить вашу подписку. Это временный сбой с нашей стороны.", retryAction{unique: cbRetryInvite})
 	}
 	if !allowed {
 		return c.Send(
@@ -110,7 +110,7 @@ func (b *Bot) handleCreateReferralInvite(c tele.Context) error {
 			return c.Send("Достигнут лимит: 15 созданных приглашений за последние 24 часа.", &tele.SendOptions{ReplyMarkup: InvitesMenuKeyboard()})
 		default:
 			slog.Error("Failed to create referral invite", "error", err, "telegram_id", c.Sender().ID)
-			return b.sendErrorExit(c, "Не удалось создать приглашение.", retryAction{unique: cbRetryInvite})
+			return b.sendErrorExit(c, "Не получилось создать приглашение. Попробуйте ещё раз.", retryAction{unique: cbRetryInvite})
 		}
 	}
 	return c.Send(b.referralInviteMessage(invite), &tele.SendOptions{ReplyMarkup: InvitesMenuKeyboard()})
