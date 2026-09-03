@@ -86,7 +86,7 @@ func (b *Bot) handlePaymentMethodSelected(c tele.Context, provider string) error
 		// Состояние оставляем: пользователь всё ещё на экране выбора способа,
 		// и reply-клавиатура даёт ему второй способ и «Отмена». Сбросив его, мы
 		// бы отняли выход у того, кто как раз пытается заплатить.
-		return b.sendErrorExit(c, "❌ Не получилось создать платёж.\n\nДеньги не списаны — попробуйте ещё раз.",
+		return b.sendErrorExit(c, "❌ Не удалось создать платёж\n\nДеньги не списаны.",
 			retryAction{unique: cbRetryPayment, data: provider})
 	}
 
@@ -112,7 +112,7 @@ func (b *Bot) handleCheckPayment(c tele.Context) error {
 	status, err := b.checkPaymentStatus(telegramID)
 	if err != nil {
 		slog.Error("Ошибка проверки статуса платежа", "error", err, "telegram_id", telegramID)
-		return b.sendErrorExit(c, "❌ Не получилось проверить оплату.\n\nЕсли вы уже оплатили, подписка включится сама в течение минуты.",
+		return b.sendErrorExit(c, "❌ Не удалось проверить оплату\n\nЕсли вы уже оплатили, подписка включится сама в течение минуты.",
 			retryAction{unique: cbRetryPaymentCheck})
 	}
 
