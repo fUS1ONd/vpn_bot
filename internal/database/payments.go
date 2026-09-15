@@ -161,6 +161,35 @@ func (db *DB) GetPendingPayment(telegramID int64) (*Payment, error) {
 	return p, nil
 }
 
+// GetLatestPendingPayment возвращает последний PENDING платёж пользователя, в том
+// числе с истёкшей ссылкой: срок ссылки платёж не закрывает, и оплата по нему
+// может прийти позже (крипта Platega). Для переиспользования ссылки годится только
+// GetPendingPayment.
+func (db *DB) GetLatestPendingPayment(telegramID int64) (*Payment, error) {
+	var id int64
+	err := db.conn.QueryRow(
+		`SELECT id FROM payments WHERE telegram_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1`,
+		telegramID,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return db.GetPaymentByID(id)
+}
+
+// HasPaymentAfter сообщает, заводил ли пользователь платёж после указанного.
+func (db *DB) HasPaymentAfter(telegramID, paymentID int64) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND id > ?)`,
+		telegramID, paymentID,
+	).Scan(&exists)
+	return exists, err
+}
+
 // GetPaymentByPlategaTxID возвращает платёж по ID транзакции Platega
 func (db *DB) GetPaymentByPlategaTxID(txID string) (*Payment, error) {
 	return db.GetPaymentByProviderPaymentID("platega", txID)

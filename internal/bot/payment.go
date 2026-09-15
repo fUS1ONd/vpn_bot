@@ -509,6 +509,15 @@ func (h *paymentCallbackHandler) handleCanceled(payment *database.Payment) error
 	if err := h.bot.db.UpdatePaymentStatus(payment.ID, "canceled"); err != nil {
 		return fmt.Errorf("update status to canceled: %w", err)
 	}
+	// Отмену брошенного платежа сверка находит и тогда, когда человек уже завёл
+	// новый: сообщение и сброс состояния относились бы к новому платежу.
+	superseded, err := h.bot.db.HasPaymentAfter(fresh.TelegramID, fresh.ID)
+	if err != nil {
+		return fmt.Errorf("check newer payment: %w", err)
+	}
+	if superseded {
+		return nil
+	}
 	h.bot.userStates.DeleteIfOneOf(payment.TelegramID, StateWaitPaymentMethod, StateWaitPaymentResult)
 	_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, "❌ Платёж отменён. Вы можете попробовать снова.", h.bot.userKeyboard(payment.TelegramID))
 	return nil
@@ -730,7 +739,7 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	pending, err := b.db.GetPendingPayment(telegramID)
+	pending, err := b.db.GetLatestPendingPayment(telegramID)
 	if err != nil {
 		return "", fmt.Errorf("get pending: %w", err)
 	}

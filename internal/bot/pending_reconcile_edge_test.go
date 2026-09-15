@@ -666,6 +666,39 @@ func TestСверкаPlategaПереноситОтмену(t *testing.T) {
 	assert.Len(t, env.tg.matching("Платёж отменён"), 1)
 }
 
+// Крипта подтверждается позже срока ссылки Platega, и платёж после него остаётся
+// pending. Кнопка «Проверить оплату» обязана его видеть: ответ «Активных платежей
+// не найдено» человеку, который уже заплатил, толкает его заплатить второй раз.
+func TestКнопкаВидитОплаченныйPlategaПослеСрокаСсылки(t *testing.T) {
+	env := newEdgeEnv(t)
+	env.platega.onGet = plategaSays(platega.StatusConfirmed)
+	id := env.pending(t, paymentprovider.Platega, 40*time.Minute)
+	env.setExpiresAt(t, id, time.Now().UTC().Add(-25*time.Minute).Format("2006-01-02 15:04:05.999999999-07:00"))
+
+	status, err := env.bot.checkPaymentStatus(edgeUserID)
+	require.NoError(t, err)
+
+	assert.Equal(t, "confirmed", status)
+	assert.Equal(t, "confirmed", env.status(t, id))
+}
+
+// Человек бросил ссылку Platega и начал новый платёж; сверка находит старый
+// отменённым. Сообщение «Платёж отменён» и сброс состояния в этот момент относятся
+// к платежу, который человек уже заменил, и сбивают его с нового.
+func TestОтменаЗаменённогоПлатежаНеПишетЧеловекуИНеСбрасываетНовыйПлатёж(t *testing.T) {
+	env := newEdgeEnv(t)
+	env.platega.onGet = plategaSays(platega.StatusCanceled)
+	old := env.pending(t, paymentprovider.Platega, time.Hour)
+	env.pending(t, paymentprovider.YooKassa, 5*time.Minute)
+	env.bot.userStates.Set(edgeUserID, StateWaitPaymentResult)
+
+	env.bot.reconcilePendingPayment(old, time.Now().UTC(), "test")
+
+	assert.Equal(t, "canceled", env.status(t, old))
+	assert.Empty(t, env.tg.matching("Платёж отменён"))
+	assert.Equal(t, StateWaitPaymentResult, env.bot.userStates.Get(edgeUserID))
+}
+
 // Chargeback, найденный сверкой, обязан привести к тому же, что и chargeback из
 // callback: деньги отозваны, и доступ у отозвавшего остаться не может.
 func TestСверкаPlategaОбрабатываетChargebackКакCallback(t *testing.T) {
