@@ -492,9 +492,18 @@ func (b *Bot) getPaymentFeeBasisPoints(provider, paymentMethod string) int {
 	return b.getPlategaFeePercent(paymentMethod) * 100
 }
 
-// handleCanceled обрабатывает отменённый платёж
+// handleCanceled обрабатывает отменённый платёж.
+//
+// Решение принимается по свежей записи, а не по снимку вызывающей стороны:
+// вебхук и callback читают платёж до захвата мьютекса, и пока они его ждут,
+// сверка успевает отменить платёж и написать человеку. По устаревшему снимку
+// отмена выполнялась бы второй раз — со вторым таким же сообщением.
 func (h *paymentCallbackHandler) handleCanceled(payment *database.Payment) error {
-	if payment.Status != "pending" {
+	fresh, err := h.bot.db.GetPaymentByID(payment.ID)
+	if err != nil {
+		return fmt.Errorf("reload payment before cancel: %w", err)
+	}
+	if fresh == nil || fresh.Status != "pending" {
 		return nil
 	}
 	if err := h.bot.db.UpdatePaymentStatus(payment.ID, "canceled"); err != nil {
