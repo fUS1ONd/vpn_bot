@@ -176,7 +176,8 @@ func parsePayment(data []byte) (*paymentprovider.Payment, error) {
 		Recipient struct {
 			AccountID string `json:"account_id"`
 		} `json:"recipient"`
-		ExpiresAt *time.Time `json:"expires_at"`
+		ExpiresAt  *time.Time `json:"expires_at"`
+		CapturedAt *time.Time `json:"captured_at"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)
@@ -189,7 +190,7 @@ func parsePayment(data []byte) (*paymentprovider.Payment, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse payment amount: %w", err)
 	}
-	return &paymentprovider.Payment{ID: raw.ID, Status: status(raw.Status), Amount: amount, Currency: raw.Amount.Currency, PaymentMethod: raw.PaymentMethod.Type, ConfirmationURL: raw.Confirmation.URL, ExpiresAt: raw.ExpiresAt, RecipientID: raw.Recipient.AccountID}, nil
+	return &paymentprovider.Payment{ID: raw.ID, Status: status(raw.Status), Amount: amount, Currency: raw.Amount.Currency, PaymentMethod: raw.PaymentMethod.Type, ConfirmationURL: raw.Confirmation.URL, ExpiresAt: raw.ExpiresAt, RecipientID: raw.Recipient.AccountID, PaidAt: raw.CapturedAt}, nil
 }
 
 func status(s string) string {

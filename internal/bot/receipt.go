@@ -302,7 +302,13 @@ func (b *Bot) claimReceipt(payment *database.Payment) (*database.Receipt, error)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := b.db.ClaimReceipt(payment.ID, marker, *payment.ConfirmedAt, payment.Amount); err != nil {
+	// Доход датируется списанием: бот мог узнать об оплате позже, а на стыке
+	// месяцев это уже другой налоговый период.
+	operationTime := *payment.ConfirmedAt
+	if payment.ProviderPaidAt != nil {
+		operationTime = *payment.ProviderPaidAt
+	}
+	if _, err := b.db.ClaimReceipt(payment.ID, marker, operationTime, payment.Amount); err != nil {
 		return nil, err
 	}
 	return b.db.GetReceipt(payment.ID)
@@ -340,7 +346,7 @@ func (b *Bot) createReceipt(payment *database.Payment, receipt *database.Receipt
 	)
 }
 
-// reconcileWindow — сутки вокруг времени операции: в этом окне ищем свой чек.
+// reconcileWindow — запас вокруг окна поиска чека.
 const reconcileWindow = 24 * time.Hour
 
 // reconcileReceipt выясняет судьбу чека, ответ по которому потерялся. Искать
@@ -353,9 +359,13 @@ func (b *Bot) reconcileReceipt(payment *database.Payment, receipt *database.Rece
 		return
 	}
 
+	// Окно тянется от времени операции до текущего момента: время операции — это
+	// момент списания, а чек мог быть пробит намного позже (оплата подхвачена
+	// сверкой, платёж пролежал в очереди на пробитие). Промахнувшись мимо своего
+	// чека, сверка пробила бы второй.
 	incomes, err := b.moynalog.ListIncomes(
 		receipt.OperationTime.Add(-reconcileWindow),
-		receipt.OperationTime.Add(reconcileWindow),
+		time.Now().UTC().Add(reconcileWindow),
 	)
 	if err != nil {
 		// Состояние остаётся unknown: пробить вслепую — значит рискнуть дублем.

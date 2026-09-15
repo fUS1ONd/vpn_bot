@@ -159,6 +159,19 @@ func TestReceiptOperationTimeIsMoscowRegardlessOfProcessTimezone(t *testing.T) {
 	}
 }
 
+// Доход ложится датой списания, а не датой, когда бот узнал об оплате: у платежа
+// №135 деньги ушли 14.09, а подтверждение случилось только 15.09.
+func TestReceiptOperationTimeIsProviderPaidMomentWhenKnown(t *testing.T) {
+	stub := &fnsStub{}
+	b, db, _ := newReceiptTestBot(t, stub)
+	id := confirmedPayment(t, db, "yookassa", 400, time.Date(2026, 9, 15, 16, 10, 11, 0, time.UTC))
+	require.NoError(t, db.SetProviderPaidAt(id, time.Date(2026, 9, 14, 11, 0, 50, 0, time.UTC)))
+
+	b.processReceipt(id)
+
+	assert.Equal(t, "2026-09-14T14:00:50.000+03:00", stub.lastCreated(t)["operationTime"])
+}
+
 func TestPlategaPaymentIsSkippedSilently(t *testing.T) {
 	stub := &fnsStub{}
 	b, db, capture := newReceiptTestBot(t, stub)

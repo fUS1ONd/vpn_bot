@@ -59,13 +59,9 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 		slog.Debug("Scheduler: версия панели подтверждена", "contract", version.String())
 	}
 
-	// 1. Протухание старых PENDING платежей
-	expired, err := b.db.ExpireOldPendingPayments()
-	if err != nil {
-		slog.Error("Scheduler: ошибка при протухании pending платежей", "error", err)
-	} else if expired > 0 {
-		slog.Info("Scheduler: протухли pending платежи", "count", expired)
-	}
+	// 1. Сверка зависших PENDING платежей с провайдером: принимает оплату с
+	// потерянным уведомлением и закрывает брошенные платежи.
+	b.reconcilePendingPayments(now)
 
 	// 2. Retry confirmed_not_activated платежей
 	b.retryConfirmedNotActivated()
@@ -157,6 +153,10 @@ func (b *Bot) processTrialUser(telegramID int64, ref remnawave.UserRef, expireAt
 			return
 		}
 
+		// Кик необратим, поэтому свежий платёж сверяется с провайдером сразу, не
+		// дожидаясь своей очереди в общем шаге сверки.
+		b.reconcileUserPaymentsBeforeKick(telegramID, now)
+
 		// Защита: проверяем, не оплатил ли пользователь.
 		// confirmed_not_activated тоже защищает от кика: деньги уже подтверждены,
 		// даже если активация в панели ещё не завершилась.
@@ -193,6 +193,10 @@ func (b *Bot) processPaidUser(telegramID int64, ref remnawave.UserRef, expireAt,
 
 	// Подписка истекла — disable + начало grace period
 	if !now.Before(expireAt) {
+		// Отключение и кик необратимы для человека, который только что заплатил:
+		// его платёж может быть моложе 15 минут и в общий шаг сверки ещё не попасть.
+		b.reconcileUserPaymentsBeforeKick(telegramID, now)
+
 		// Защита: проверяем, не оплатил ли пользователь после expireAt.
 		// confirmed_not_activated тоже считается оплатой для scheduler:
 		// пользователя нельзя disable-ить как должника, пока retry активации продолжается.

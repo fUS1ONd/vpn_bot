@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/stretchr/testify/require"
@@ -67,6 +68,27 @@ func TestGetPaymentMapsTerminalAndIntermediateStatuses(t *testing.T) {
 			require.Equal(t, tc.want, p.Status)
 		})
 	}
+}
+
+func TestGetPaymentReadsCaptureMoment(t *testing.T) {
+	c := NewClientWithBaseURL("shop", "secret", "https://yookassa.test")
+	c.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return response(`{"id":"yo","status":"succeeded","amount":{"value":"400.00","currency":"RUB"},"recipient":{"account_id":"shop"},"captured_at":"2026-09-14T11:00:50.202Z"}`), nil
+	})})
+	p, err := c.GetPayment("yo")
+	require.NoError(t, err)
+	require.NotNil(t, p.PaidAt)
+	require.True(t, p.PaidAt.Equal(time.Date(2026, 9, 14, 11, 0, 50, 202_000_000, time.UTC)))
+}
+
+func TestGetPaymentWithoutCaptureHasNoPaidMoment(t *testing.T) {
+	c := NewClientWithBaseURL("shop", "secret", "https://yookassa.test")
+	c.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return response(`{"id":"yo","status":"pending","amount":{"value":"400.00","currency":"RUB"},"recipient":{"account_id":"shop"}}`), nil
+	})})
+	p, err := c.GetPayment("yo")
+	require.NoError(t, err)
+	require.Nil(t, p.PaidAt)
 }
 
 func TestGetPaymentRejectsFractionalRubleAmount(t *testing.T) {

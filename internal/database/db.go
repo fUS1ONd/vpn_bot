@@ -257,6 +257,10 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE payments ADD COLUMN provider_fee_percent INTEGER`,
 		// Тестовые платежи администратора не влияют на доступ и финансовые отчёты.
 		`ALTER TABLE payments ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`,
+		// Момент списания по данным провайдера — дата дохода в чеке. confirmed_at
+		// остаётся моментом, когда бот принял оплату: по нему scheduler решает,
+		// платил ли человек после истечения подписки.
+		`ALTER TABLE payments ADD COLUMN provider_paid_at TIMESTAMP`,
 	}
 	for _, m := range alterMigrations {
 		// Игнорируем ошибки ALTER TABLE - колонка может уже существовать

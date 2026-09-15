@@ -23,6 +23,7 @@ type Payment struct {
 	ExpiresAt              *time.Time
 	CreatedAt              time.Time
 	ConfirmedAt            *time.Time
+	ProviderPaidAt         *time.Time // момент списания по данным провайдера (ЮKassa: captured_at)
 }
 
 // MonthlyConfirmedPayment хранит подтверждённый платёж месяца и долю модератора.
@@ -59,12 +60,12 @@ func (db *DB) GetPaymentByID(id int64) (*Payment, error) {
 	var providerFeePercent sql.NullInt64
 	var isTest bool
 	var expiresAt sql.NullTime
-	var confirmedAt sql.NullTime
+	var confirmedAt, providerPaidAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, redirect_url, expires_at, created_at, confirmed_at
+		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, redirect_url, expires_at, created_at, confirmed_at, provider_paid_at
 		 FROM payments WHERE id = ?`, id,
-	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &isTest, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
+	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &isTest, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt, &providerPaidAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -98,6 +99,9 @@ func (db *DB) GetPaymentByID(id int64) (*Payment, error) {
 	}
 	if confirmedAt.Valid {
 		p.ConfirmedAt = &confirmedAt.Time
+	}
+	if providerPaidAt.Valid {
+		p.ProviderPaidAt = &providerPaidAt.Time
 	}
 
 	return p, nil
@@ -155,6 +159,35 @@ func (db *DB) GetPendingPayment(telegramID int64) (*Payment, error) {
 	}
 
 	return p, nil
+}
+
+// GetLatestPendingPayment возвращает последний PENDING платёж пользователя, в том
+// числе с истёкшей ссылкой: срок ссылки платёж не закрывает, и оплата по нему
+// может прийти позже (крипта Platega). Для переиспользования ссылки годится только
+// GetPendingPayment.
+func (db *DB) GetLatestPendingPayment(telegramID int64) (*Payment, error) {
+	var id int64
+	err := db.conn.QueryRow(
+		`SELECT id FROM payments WHERE telegram_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1`,
+		telegramID,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return db.GetPaymentByID(id)
+}
+
+// HasPaymentAfter сообщает, заводил ли пользователь платёж после указанного.
+func (db *DB) HasPaymentAfter(telegramID, paymentID int64) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND id > ?)`,
+		telegramID, paymentID,
+	).Scan(&exists)
+	return exists, err
 }
 
 // GetPaymentByPlategaTxID возвращает платёж по ID транзакции Platega
@@ -221,15 +254,57 @@ func (db *DB) ConfirmPayment(id int64) error {
 	return err
 }
 
-// ExpireOldPendingPayments помечает протухшие PENDING как expired
-func (db *DB) ExpireOldPendingPayments() (int64, error) {
-	res, err := db.conn.Exec(
-		`UPDATE payments SET status = 'expired' WHERE status = 'pending' AND datetime(expires_at) <= datetime('now')`,
+// SetProviderPaidAt сохраняет момент списания. Первое сообщённое значение не
+// перезаписывается: дата дохода в чеке не должна гулять между сверками.
+func (db *DB) SetProviderPaidAt(id int64, paidAt time.Time) error {
+	_, err := db.conn.Exec(`UPDATE payments SET provider_paid_at = COALESCE(provider_paid_at, ?) WHERE id = ?`, paidAt.UTC(), id)
+	return err
+}
+
+// PendingPaymentIDsCreatedBefore возвращает PENDING-платежи, созданные не позже cutoff.
+func (db *DB) PendingPaymentIDsCreatedBefore(cutoff time.Time) ([]int64, error) {
+	return db.paymentIDs(
+		`SELECT id FROM payments WHERE status = 'pending' AND datetime(created_at) <= datetime(?) ORDER BY id`,
+		cutoff.UTC().Format("2006-01-02 15:04:05"),
 	)
+}
+
+// ClosedPaymentIDsCreatedAfter возвращает локально закрытые платежи не старше
+// границы: бот закрывает платёж сам, а деньги по нему могли всё же пройти.
+func (db *DB) ClosedPaymentIDsCreatedAfter(since time.Time) ([]int64, error) {
+	return db.paymentIDs(
+		`SELECT id FROM payments WHERE status IN ('expired', 'canceled') AND datetime(created_at) > datetime(?) ORDER BY id`,
+		since.UTC().Format("2006-01-02 15:04:05"),
+	)
+}
+
+// PendingPaymentIDsOfUser возвращает все платежи человека, ждущие оплаты.
+func (db *DB) PendingPaymentIDsOfUser(telegramID int64) ([]int64, error) {
+	return db.paymentIDs(`SELECT id FROM payments WHERE telegram_id = ? AND status = 'pending' ORDER BY id`, telegramID)
+}
+
+func (db *DB) paymentIDs(query string, args ...any) ([]int64, error) {
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return res.RowsAffected()
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ExpirePendingPayment закрывает платёж как expired, только если он всё ещё PENDING.
+func (db *DB) ExpirePendingPayment(id int64) error {
+	_, err := db.conn.Exec(`UPDATE payments SET status = 'expired' WHERE id = ? AND status = 'pending'`, id)
+	return err
 }
 
 // GetConfirmedNotActivated возвращает платежи со статусом confirmed_not_activated
