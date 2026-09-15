@@ -23,6 +23,7 @@ type Payment struct {
 	ExpiresAt              *time.Time
 	CreatedAt              time.Time
 	ConfirmedAt            *time.Time
+	ProviderPaidAt         *time.Time // момент списания по данным провайдера (ЮKassa: captured_at)
 }
 
 // MonthlyConfirmedPayment хранит подтверждённый платёж месяца и долю модератора.
@@ -59,12 +60,12 @@ func (db *DB) GetPaymentByID(id int64) (*Payment, error) {
 	var providerFeePercent sql.NullInt64
 	var isTest bool
 	var expiresAt sql.NullTime
-	var confirmedAt sql.NullTime
+	var confirmedAt, providerPaidAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, redirect_url, expires_at, created_at, confirmed_at
+		`SELECT id, telegram_id, moderator_id, amount, payment_method, status, platega_transaction_id, provider, provider_payment_id, provider_request_key, provider_fee_percent, is_test, redirect_url, expires_at, created_at, confirmed_at, provider_paid_at
 		 FROM payments WHERE id = ?`, id,
-	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &isTest, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt)
+	).Scan(&p.ID, &p.TelegramID, &modID, &p.Amount, &p.PaymentMethod, &p.Status, &txID, &p.Provider, &providerPaymentID, &providerRequestKey, &providerFeePercent, &isTest, &redirectURL, &expiresAt, &p.CreatedAt, &confirmedAt, &providerPaidAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -98,6 +99,9 @@ func (db *DB) GetPaymentByID(id int64) (*Payment, error) {
 	}
 	if confirmedAt.Valid {
 		p.ConfirmedAt = &confirmedAt.Time
+	}
+	if providerPaidAt.Valid {
+		p.ProviderPaidAt = &providerPaidAt.Time
 	}
 
 	return p, nil
@@ -218,6 +222,13 @@ func (db *DB) ConfirmPayment(id int64) error {
 		     confirmed_at = COALESCE(confirmed_at, datetime('now'))
 		 WHERE id = ?`, id,
 	)
+	return err
+}
+
+// SetProviderPaidAt сохраняет момент списания. Первое сообщённое значение не
+// перезаписывается: дата дохода в чеке не должна гулять между сверками.
+func (db *DB) SetProviderPaidAt(id int64, paidAt time.Time) error {
+	_, err := db.conn.Exec(`UPDATE payments SET provider_paid_at = COALESCE(provider_paid_at, ?) WHERE id = ?`, paidAt.UTC(), id)
 	return err
 }
 

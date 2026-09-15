@@ -576,6 +576,27 @@ func TestExpireOldPendingPayments(t *testing.T) {
 	assert.Equal(t, "expired", got.Status)
 }
 
+func TestProviderPaidAtKeepsFirstReportedMoment(t *testing.T) {
+	db, err := New(t.TempDir() + "/paid_at.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	id, err := db.CreatePayment(&Payment{TelegramID: 1, Amount: 400, PaymentMethod: "yookassa", Status: "pending"})
+	require.NoError(t, err)
+	got, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	assert.Nil(t, got.ProviderPaidAt)
+
+	first := time.Date(2026, 9, 14, 11, 0, 50, 0, time.UTC)
+	require.NoError(t, db.SetProviderPaidAt(id, first))
+	require.NoError(t, db.SetProviderPaidAt(id, first.Add(time.Hour)))
+
+	got, err = db.GetPaymentByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, got.ProviderPaidAt)
+	assert.True(t, got.ProviderPaidAt.Equal(first))
+}
+
 func TestHasConfirmedPayment(t *testing.T) {
 	dbFile := "test_payments_has.db"
 	db, err := New(dbFile)

@@ -23,6 +23,7 @@ type Payment struct {
 	ConfirmationURL string
 	ExpiresAt       *time.Time
 	RecipientID     string
+	PaidAt          *time.Time // момент списания, если провайдер его сообщает
 }
 
 // CreateRequest carries only server-controlled data to a provider.

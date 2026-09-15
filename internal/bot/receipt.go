@@ -302,7 +302,13 @@ func (b *Bot) claimReceipt(payment *database.Payment) (*database.Receipt, error)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := b.db.ClaimReceipt(payment.ID, marker, *payment.ConfirmedAt, payment.Amount); err != nil {
+	// Доход датируется списанием: бот мог узнать об оплате позже, а на стыке
+	// месяцев это уже другой налоговый период.
+	operationTime := *payment.ConfirmedAt
+	if payment.ProviderPaidAt != nil {
+		operationTime = *payment.ProviderPaidAt
+	}
+	if _, err := b.db.ClaimReceipt(payment.ID, marker, operationTime, payment.Amount); err != nil {
 		return nil, err
 	}
 	return b.db.GetReceipt(payment.ID)

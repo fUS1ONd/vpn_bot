@@ -790,6 +790,11 @@ func (b *Bot) verifyYooKassaPayment(payment *database.Payment, verified *payment
 			return fmt.Errorf("update payment method: %w", err)
 		}
 	}
+	if verified.PaidAt != nil {
+		if err := b.db.SetProviderPaidAt(payment.ID, *verified.PaidAt); err != nil {
+			return fmt.Errorf("save provider paid moment: %w", err)
+		}
+	}
 	return nil
 }
 
