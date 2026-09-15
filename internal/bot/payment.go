@@ -684,6 +684,7 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 	if providerName == paymentprovider.Platega {
 		payment.PlategaTransactionID = &resp.ID
 	}
+	b.schedulePendingPaymentCheck(payment.ID)
 	return payment, resp.ConfirmationURL, nil
 }
 
@@ -705,10 +706,6 @@ func (b *Bot) paymentPrice(telegramID int64, user *database.User) (int, bool) {
 // Защищён мьютексом по telegram_id для предотвращения race condition
 // с параллельным callback от Platega.
 func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
-	// Глобальная операция: помечаем протухшие PENDING как expired (не ждём scheduler).
-	// Вызывается ДО захвата per-user mutex, т.к. операция не привязана к конкретному пользователю.
-	b.db.ExpireOldPendingPayments()
-
 	// Берём мьютекс ДО чтения из БД — та же блокировка, что и в callback
 	mu := getPaymentMutex(telegramID)
 	mu.Lock()

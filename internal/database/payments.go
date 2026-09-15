@@ -232,15 +232,32 @@ func (db *DB) SetProviderPaidAt(id int64, paidAt time.Time) error {
 	return err
 }
 
-// ExpireOldPendingPayments помечает протухшие PENDING как expired
-func (db *DB) ExpireOldPendingPayments() (int64, error) {
-	res, err := db.conn.Exec(
-		`UPDATE payments SET status = 'expired' WHERE status = 'pending' AND datetime(expires_at) <= datetime('now')`,
+// PendingPaymentIDsCreatedBefore возвращает PENDING-платежи, созданные не позже cutoff.
+func (db *DB) PendingPaymentIDsCreatedBefore(cutoff time.Time) ([]int64, error) {
+	rows, err := db.conn.Query(
+		`SELECT id FROM payments WHERE status = 'pending' AND datetime(created_at) <= datetime(?) ORDER BY id`,
+		cutoff.UTC().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return res.RowsAffected()
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ExpirePendingPayment закрывает платёж как expired, только если он всё ещё PENDING.
+func (db *DB) ExpirePendingPayment(id int64) error {
+	_, err := db.conn.Exec(`UPDATE payments SET status = 'expired' WHERE id = ? AND status = 'pending'`, id)
+	return err
 }
 
 // GetConfirmedNotActivated возвращает платежи со статусом confirmed_not_activated

@@ -152,14 +152,11 @@ func TestPendingPaymentExpiryHandlesTimezoneAwareExpiresAt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, got, "просроченный платёж со смещением timezone не должен возвращаться как активный pending")
 
-	expired, err := db.ExpireOldPendingPayments()
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), expired, "просроченный платёж со смещением timezone должен протухать")
-
 	stored, err := db.GetPaymentByID(id)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Equal(t, "expired", stored.Status)
+	require.NotNil(t, stored.ExpiresAt)
+	assert.True(t, stored.ExpiresAt.Before(time.Now()), "срок со смещением timezone читается как уже прошедший")
 }
 
 func TestGetPaymentByPlategaTxID(t *testing.T) {
@@ -546,34 +543,46 @@ func TestUpdatePaymentStatusIfNot(t *testing.T) {
 	assert.False(t, updated, "не должен обновлять повторно")
 }
 
-func TestExpireOldPendingPayments(t *testing.T) {
-	dbFile := "test_payments_expire.db"
-	db, err := New(dbFile)
+func TestPendingPaymentIDsCreatedBefore(t *testing.T) {
+	db, err := New(t.TempDir() + "/pending_ids.db")
 	require.NoError(t, err)
-	defer func() {
-		db.Close()
-		os.Remove(dbFile)
-	}()
+	t.Cleanup(func() { db.Close() })
 
-	// Создаём протухший платёж напрямую
-	past := time.Now().UTC().Add(-2 * time.Minute)
-	p := &Payment{
-		TelegramID:    12345,
-		Amount:        500,
-		PaymentMethod: "sbp",
-		Status:        "pending",
-		ExpiresAt:     &past,
+	create := func(status string, age time.Duration) int64 {
+		id, err := db.CreatePayment(&Payment{TelegramID: 1, Amount: 400, PaymentMethod: "yookassa", Status: status, Provider: "yookassa"})
+		require.NoError(t, err)
+		_, err = db.Conn().Exec(`UPDATE payments SET created_at = ? WHERE id = ?`, time.Now().UTC().Add(-age).Format("2006-01-02 15:04:05"), id)
+		require.NoError(t, err)
+		return id
 	}
-	id, err := db.CreatePayment(p)
+	old := create("pending", time.Hour)
+	create("pending", time.Minute)
+	create("confirmed", time.Hour)
+
+	ids, err := db.PendingPaymentIDsCreatedBefore(time.Now().UTC().Add(-15 * time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, []int64{old}, ids)
+}
+
+func TestExpirePendingPaymentLeavesResolvedPaymentAlone(t *testing.T) {
+	db, err := New(t.TempDir() + "/expire_pending.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	pending, err := db.CreatePayment(&Payment{TelegramID: 1, Amount: 400, PaymentMethod: "yookassa", Status: "pending"})
+	require.NoError(t, err)
+	confirmed, err := db.CreatePayment(&Payment{TelegramID: 1, Amount: 400, PaymentMethod: "yookassa", Status: "confirmed"})
 	require.NoError(t, err)
 
-	n, err := db.ExpireOldPendingPayments()
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), n)
+	require.NoError(t, db.ExpirePendingPayment(pending))
+	require.NoError(t, db.ExpirePendingPayment(confirmed))
 
-	got, err := db.GetPaymentByID(id)
+	got, err := db.GetPaymentByID(pending)
 	require.NoError(t, err)
 	assert.Equal(t, "expired", got.Status)
+	got, err = db.GetPaymentByID(confirmed)
+	require.NoError(t, err)
+	assert.Equal(t, "confirmed", got.Status)
 }
 
 func TestProviderPaidAtKeepsFirstReportedMoment(t *testing.T) {

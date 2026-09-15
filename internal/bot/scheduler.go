@@ -59,13 +59,9 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 		slog.Debug("Scheduler: версия панели подтверждена", "contract", version.String())
 	}
 
-	// 1. Протухание старых PENDING платежей
-	expired, err := b.db.ExpireOldPendingPayments()
-	if err != nil {
-		slog.Error("Scheduler: ошибка при протухании pending платежей", "error", err)
-	} else if expired > 0 {
-		slog.Info("Scheduler: протухли pending платежи", "count", expired)
-	}
+	// 1. Сверка зависших PENDING платежей с провайдером: принимает оплату с
+	// потерянным уведомлением и закрывает брошенные платежи.
+	b.reconcilePendingPayments(now)
 
 	// 2. Retry confirmed_not_activated платежей
 	b.retryConfirmedNotActivated()

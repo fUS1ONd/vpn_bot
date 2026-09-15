@@ -46,6 +46,8 @@ type Bot struct {
 	maintenanceMode             atomic.Bool               // Режим обслуживания (сбрасывается при перезапуске)
 	paymentRetryDelays          []time.Duration           // Тестовые override-задержки для короткого background retry активации
 	paymentRetryInFlight        sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
+	pendingCheckDelay           time.Duration             // Тестовый override задержки первой сверки нового платежа
+	pendingCheckScheduled       sync.Map                  // payment_id -> struct{}, одна первая сверка на платёж
 	shutdownCh                  chan struct{}             // Закрывается при Stop() для отмены фоновых горутин
 	userLimiter                 *userRateLimiter          // per-user rate limiter для команд бота
 	adminSwitchMu               sync.RWMutex
