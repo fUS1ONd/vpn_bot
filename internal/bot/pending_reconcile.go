@@ -20,9 +20,17 @@ const (
 	pendingFirstCheckDelay = 15 * time.Minute
 
 	// pendingMaxAge — возраст, после которого платёж без конечного статуса
-	// закрывается. Совпадает с окном, в котором ЮKassa повторяет уведомления:
-	// позже ни уведомление, ни оплата уже не придут.
+	// закрывается, а закрытый перестаёт сверяться. Совпадает с окном, в котором
+	// ЮKassa повторяет уведомления: позже ни уведомление, ни оплата уже не придут.
+	// Срок жизни ссылки пределом не служит: у Platega он около 15 минут, а крипта
+	// подтверждается позже — закрытый по ссылке платёж callback уже не оживит.
 	pendingMaxAge = 24 * time.Hour
+
+	// defaultReconcilePassBudget — потолок времени на шаг сверки в проходе
+	// планировщика. Недоступный провайдер держит каждый платёж до минуты, а за
+	// сверкой в проходе стоят уведомления, отключения и автокики: им ждать нельзя.
+	// Что не успели — досверим следующим проходом.
+	defaultReconcilePassBudget = 5 * time.Minute
 )
 
 func (b *Bot) firstPendingCheckDelay() time.Duration {
@@ -30,6 +38,13 @@ func (b *Bot) firstPendingCheckDelay() time.Duration {
 		return b.pendingCheckDelay
 	}
 	return pendingFirstCheckDelay
+}
+
+func (b *Bot) reconcileBudget() time.Duration {
+	if b.reconcilePassBudget > 0 {
+		return b.reconcilePassBudget
+	}
+	return defaultReconcilePassBudget
 }
 
 // schedulePendingPaymentCheck ставит первую сверку нового платежа. Таймер живёт в
@@ -55,17 +70,55 @@ func (b *Bot) schedulePendingPaymentCheck(paymentID int64) {
 	}()
 }
 
-// reconcilePendingPayments — шаг планировщика: сверяет все PENDING-платежи старше
-// первой задержки.
+// reconcilePendingPayments — шаг планировщика: сверяет платежи, судьба которых
+// решается ответом провайдера.
+//
+// Свои сбои шаг держит при себе: паника здесь не должна срывать уведомления,
+// отключения и автокики остального прохода.
 func (b *Bot) reconcilePendingPayments(now time.Time) {
-	ids, err := b.db.PendingPaymentIDsCreatedBefore(now.Add(-pendingFirstCheckDelay))
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Шаг сверки платежей упал с паникой", "recover", r)
+		}
+	}()
+
+	ids, err := b.reconcilablePaymentIDs(now)
 	if err != nil {
-		slog.Error("Scheduler: не удалось получить зависшие платежи", "error", err)
+		slog.Error("Scheduler: не удалось получить платежи для сверки", "error", err)
 		return
 	}
-	for _, id := range ids {
+
+	deadline := time.Now().Add(b.reconcileBudget())
+	for i, id := range ids {
+		select {
+		case <-b.shutdownCh:
+			slog.Info("Scheduler: бот останавливается, сверка платежей прервана", "processed", i, "left", len(ids)-i)
+			return
+		default:
+		}
+		if time.Now().After(deadline) {
+			slog.Warn("Scheduler: бюджет времени на сверку платежей исчерпан, остальные досверим следующим проходом",
+				"processed", i, "left", len(ids)-i)
+			return
+		}
 		b.reconcilePendingPayment(id, now, "scheduler")
 	}
+}
+
+// reconcilablePaymentIDs собирает платежи, которые ещё имеет смысл сверять:
+// зависшие PENDING старше первой задержки и локально закрытые не старше суток.
+// Закрытые нужны потому, что бот закрывает платёж сам (смена способа оплаты,
+// сорвавшееся создание), а деньги по нему могли всё же пройти.
+func (b *Bot) reconcilablePaymentIDs(now time.Time) ([]int64, error) {
+	pending, err := b.db.PendingPaymentIDsCreatedBefore(now.Add(-pendingFirstCheckDelay))
+	if err != nil {
+		return nil, err
+	}
+	closed, err := b.db.ClosedPaymentIDsCreatedAfter(now.Add(-pendingMaxAge))
+	if err != nil {
+		return nil, err
+	}
+	return append(pending, closed...), nil
 }
 
 // reconcilePendingPayment переносит на платёж статус, который отдаёт провайдер.
@@ -77,7 +130,7 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 		slog.Error("Сверка платежа: не удалось загрузить платёж", "error", err, "payment_id", paymentID, "source", source)
 		return
 	}
-	if payment == nil || payment.Status != "pending" {
+	if !reconcilable(payment, now) {
 		return
 	}
 
@@ -91,11 +144,12 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 		slog.Error("Сверка платежа: не удалось перечитать платёж", "error", err, "payment_id", paymentID, "source", source)
 		return
 	}
-	if payment == nil || payment.Status != "pending" {
+	if !reconcilable(payment, now) {
 		return
 	}
 
-	deadlinePassed := !now.Before(pendingDeadline(payment))
+	// Закрывается только платёж, который всё ещё ждёт оплаты: закрытый закрывать нечего.
+	deadlinePassed := payment.Status == "pending" && !now.Before(payment.CreatedAt.Add(pendingMaxAge))
 
 	verified, err := b.verifiedProviderState(payment)
 	if err != nil {
@@ -115,13 +169,15 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 	case paymentprovider.StatusSucceeded:
 		slog.Warn("Платёж подтверждён сверкой: уведомление провайдера не дошло",
 			"payment_id", payment.ID, "provider", payment.Provider, "telegram_id", payment.TelegramID,
-			"age", now.Sub(payment.CreatedAt).Round(time.Second).String(), "source", source)
+			"local_status", payment.Status, "age", now.Sub(payment.CreatedAt).Round(time.Second).String(), "source", source)
 		if err := h.handleConfirmedFromProviderState(payment); err != nil {
 			slog.Error("Сверка платежа: не удалось принять оплату", "error", err, "payment_id", payment.ID, "source", source)
 		}
 	case paymentprovider.StatusCanceled:
-		slog.Info("Платёж отменён по сверке: уведомление об отмене не дошло",
-			"payment_id", payment.ID, "provider", payment.Provider, "source", source)
+		if payment.Status == "pending" {
+			slog.Info("Платёж отменён по сверке: уведомление об отмене не дошло",
+				"payment_id", payment.ID, "provider", payment.Provider, "source", source)
+		}
 		if err := h.handleCanceled(payment); err != nil {
 			slog.Error("Сверка платежа: не удалось отменить платёж", "error", err, "payment_id", payment.ID, "source", source)
 		}
@@ -138,14 +194,34 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 	}
 }
 
-// pendingDeadline — момент, после которого неоплаченный платёж закрывается:
-// сутки с создания или срок жизни от провайдера, если он раньше.
-func pendingDeadline(payment *database.Payment) time.Time {
-	deadline := payment.CreatedAt.Add(pendingMaxAge)
-	if payment.ExpiresAt != nil && payment.ExpiresAt.Before(deadline) {
-		return *payment.ExpiresAt
+// reconcilable сообщает, решается ли судьба платежа ответом провайдера: платёж
+// ждёт оплаты либо закрыт локально не больше суток назад.
+func reconcilable(payment *database.Payment, now time.Time) bool {
+	if payment == nil {
+		return false
 	}
-	return deadline
+	if payment.Status == "pending" {
+		return true
+	}
+	if !revivablePaymentStatuses[payment.Status] {
+		return false
+	}
+	return now.Before(payment.CreatedAt.Add(pendingMaxAge))
+}
+
+// reconcileUserPaymentsBeforeKick спрашивает провайдера о живых платежах человека
+// перед отключением или удалением. Обычный шаг сверки ждёт 15 минут, а удаление
+// учётной записи необратимо: оплата, сделанная минуту назад, должна успеть стать
+// подпиской.
+func (b *Bot) reconcileUserPaymentsBeforeKick(telegramID int64, now time.Time) {
+	ids, err := b.db.PendingPaymentIDsOfUser(telegramID)
+	if err != nil {
+		slog.Error("Не удалось получить платежи пользователя перед киком", "error", err, "telegram_id", telegramID)
+		return
+	}
+	for _, id := range ids {
+		b.reconcilePendingPayment(id, now, "pre-kick")
+	}
 }
 
 // verifiedProviderState запрашивает у провайдера состояние платежа и сверяет его
@@ -162,10 +238,8 @@ func (b *Bot) verifiedProviderState(payment *database.Payment) (*paymentprovider
 	if err != nil {
 		return nil, err
 	}
-	if payment.Provider == paymentprovider.YooKassa {
-		if err := b.verifyYooKassaPayment(payment, verified); err != nil {
-			return nil, err
-		}
+	if err := b.verifyProviderPayment(payment, verified); err != nil {
+		return nil, err
 	}
 	return verified, nil
 }

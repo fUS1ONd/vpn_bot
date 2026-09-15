@@ -153,6 +153,10 @@ func (b *Bot) processTrialUser(telegramID int64, ref remnawave.UserRef, expireAt
 			return
 		}
 
+		// Кик необратим, поэтому свежий платёж сверяется с провайдером сразу, не
+		// дожидаясь своей очереди в общем шаге сверки.
+		b.reconcileUserPaymentsBeforeKick(telegramID, now)
+
 		// Защита: проверяем, не оплатил ли пользователь.
 		// confirmed_not_activated тоже защищает от кика: деньги уже подтверждены,
 		// даже если активация в панели ещё не завершилась.
@@ -189,6 +193,10 @@ func (b *Bot) processPaidUser(telegramID int64, ref remnawave.UserRef, expireAt,
 
 	// Подписка истекла — disable + начало grace period
 	if !now.Before(expireAt) {
+		// Отключение и кик необратимы для человека, который только что заплатил:
+		// его платёж может быть моложе 15 минут и в общий шаг сверки ещё не попасть.
+		b.reconcileUserPaymentsBeforeKick(telegramID, now)
+
 		// Защита: проверяем, не оплатил ли пользователь после expireAt.
 		// confirmed_not_activated тоже считается оплатой для scheduler:
 		// пользователя нельзя disable-ить как должника, пока retry активации продолжается.

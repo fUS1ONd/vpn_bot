@@ -234,10 +234,28 @@ func (db *DB) SetProviderPaidAt(id int64, paidAt time.Time) error {
 
 // PendingPaymentIDsCreatedBefore возвращает PENDING-платежи, созданные не позже cutoff.
 func (db *DB) PendingPaymentIDsCreatedBefore(cutoff time.Time) ([]int64, error) {
-	rows, err := db.conn.Query(
+	return db.paymentIDs(
 		`SELECT id FROM payments WHERE status = 'pending' AND datetime(created_at) <= datetime(?) ORDER BY id`,
 		cutoff.UTC().Format("2006-01-02 15:04:05"),
 	)
+}
+
+// ClosedPaymentIDsCreatedAfter возвращает локально закрытые платежи не старше
+// границы: бот закрывает платёж сам, а деньги по нему могли всё же пройти.
+func (db *DB) ClosedPaymentIDsCreatedAfter(since time.Time) ([]int64, error) {
+	return db.paymentIDs(
+		`SELECT id FROM payments WHERE status IN ('expired', 'canceled') AND datetime(created_at) > datetime(?) ORDER BY id`,
+		since.UTC().Format("2006-01-02 15:04:05"),
+	)
+}
+
+// PendingPaymentIDsOfUser возвращает все платежи человека, ждущие оплаты.
+func (db *DB) PendingPaymentIDsOfUser(telegramID int64) ([]int64, error) {
+	return db.paymentIDs(`SELECT id FROM payments WHERE telegram_id = ? AND status = 'pending' ORDER BY id`, telegramID)
+}
+
+func (db *DB) paymentIDs(query string, args ...any) ([]int64, error) {
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -627,6 +627,16 @@ func (b *Bot) createPaymentForProvider(telegramID int64, providerName string) (*
 		return nil, "", fmt.Errorf("check pending: %w", err)
 	}
 
+	// Запись старше суток переиспользовать нельзя: предел жизни платежа считается
+	// от её создания, и выданная по ней ссылка закрылась бы ближайшей сверкой,
+	// пока человек платит.
+	if pending != nil && !time.Now().UTC().Before(pending.CreatedAt.Add(pendingMaxAge)) {
+		if err := b.db.ExpirePendingPayment(pending.ID); err != nil {
+			return nil, "", fmt.Errorf("expire outdated pending: %w", err)
+		}
+		pending = nil
+	}
+
 	var payment *database.Payment
 	if pending != nil {
 		if pending.Provider == providerName {
@@ -785,6 +795,18 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	}
 
 	return status.Status, nil
+}
+
+// verifyProviderPayment сверяет ответ провайдера с локальной записью: платёж на
+// другую сумму или чужой платёж подпиской не оплачивается.
+func (b *Bot) verifyProviderPayment(payment *database.Payment, verified *paymentprovider.Payment) error {
+	if payment.Provider == paymentprovider.YooKassa {
+		return b.verifyYooKassaPayment(payment, verified)
+	}
+	if payment.ProviderPaymentID == nil || verified.ID != *payment.ProviderPaymentID || verified.Amount != payment.Amount || verified.Currency != "RUB" {
+		return fmt.Errorf("%s payment verification mismatch: local_payment_id=%d", payment.Provider, payment.ID)
+	}
+	return nil
 }
 
 func (b *Bot) verifyYooKassaPayment(payment *database.Payment, verified *paymentprovider.Payment) error {

@@ -275,11 +275,23 @@ func TestНеоплаченныйПлатёжЗакрываетсяРовноЧ�
 	}
 }
 
-// Срок жизни ссылки у провайдера и наши сутки — два разных предела, и решает
-// более ранний. Иначе бот либо держит мёртвую ссылку сутки, либо закрывает
-// платёж, по которому касса ещё принимает деньги.
-func TestСрокомСлужитБолееРаннийИзСутокИСрокаПровайдера(t *testing.T) {
-	t.Run("срок провайдера позже суток — закрываем по суткам", func(t *testing.T) {
+// Срок жизни ссылки короче суток (у Platega это ~15 минут), но платёж по нему не
+// закрывается: оплата криптой и СБП подтверждается с задержкой, а закрытый платёж
+// уже не оживить. Пределом служат сутки, мёртвую ссылку закроет сама касса своим
+// статусом.
+func TestСрокСсылкиНеЗакрываетПлатёжРаньшеСуток(t *testing.T) {
+	t.Run("срок ссылки прошёл — платёж жив до суток", func(t *testing.T) {
+		env := newEdgeEnv(t)
+		env.yoo.onGet = yooSays("pending", "")
+		id := env.pending(t, paymentprovider.YooKassa, 20*time.Minute)
+		env.setExpiresAt(t, id, time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05.999999999-07:00"))
+
+		env.bot.reconcilePendingPayment(id, time.Now().UTC(), "test")
+
+		assert.Equal(t, "pending", env.status(t, id))
+	})
+
+	t.Run("сутки прошли — закрываем", func(t *testing.T) {
 		env := newEdgeEnv(t)
 		env.yoo.onGet = yooSays("pending", "")
 		id := env.pending(t, paymentprovider.YooKassa, 20*time.Minute)
@@ -289,37 +301,28 @@ func TestСрокомСлужитБолееРаннийИзСутокИСрок�
 
 		assert.Equal(t, "expired", env.status(t, id))
 	})
-
-	t.Run("срок провайдера ещё не наступил — платёж жив", func(t *testing.T) {
-		env := newEdgeEnv(t)
-		env.yoo.onGet = yooSays("pending", "")
-		id := env.pending(t, paymentprovider.YooKassa, 20*time.Minute)
-		env.setExpiresAt(t, id, time.Now().UTC().Add(time.Hour).Format("2006-01-02 15:04:05.999999999-07:00"))
-
-		env.bot.reconcilePendingPayment(id, time.Now().UTC(), "test")
-
-		assert.Equal(t, "pending", env.status(t, id))
-	})
 }
 
-// В базе живут сроки со смещением часового пояса (так их писал драйвер раньше).
-// Прочитанный как местное время, такой срок сдвинется на три часа: живой платёж
-// закроется раньше времени либо мёртвый переживёт свой срок.
-func TestСрокСоСмещениемЧасовогоПоясаСравниваетсяКакМомент(t *testing.T) {
+// В базе живут времена со смещением часового пояса (так их пишет драйвер).
+// Прочитанный как местное время, момент создания сдвинется на три часа: живой
+// платёж закроется раньше срока либо мёртвый переживёт свой срок.
+func TestМоментСозданияСоСмещениемЧасовогоПоясаЧитаетсяКакМомент(t *testing.T) {
 	msk := time.FixedZone("MSK", 3*60*60)
 	for _, tc := range []struct {
 		name    string
-		expires time.Time
+		created time.Time
 		want    string
 	}{
-		{"срок прошёл минуту назад", time.Now().UTC().Add(-time.Minute).In(msk), "expired"},
-		{"срок наступит через час", time.Now().UTC().Add(time.Hour).In(msk), "pending"},
+		{"создан 25 часов назад", time.Now().UTC().Add(-25 * time.Hour).In(msk), "expired"},
+		{"создан час назад", time.Now().UTC().Add(-time.Hour).In(msk), "pending"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newEdgeEnv(t)
 			env.yoo.onGet = yooSays("pending", "")
 			id := env.pending(t, paymentprovider.YooKassa, 20*time.Minute)
-			env.setExpiresAt(t, id, tc.expires.Format("2006-01-02 15:04:05.999999999-07:00"))
+			_, err := env.db.Conn().Exec(`UPDATE payments SET created_at = ? WHERE id = ?`,
+				tc.created.Format("2006-01-02 15:04:05.999999999-07:00"), id)
+			require.NoError(t, err)
 
 			env.bot.reconcilePendingPayment(id, time.Now().UTC(), "test")
 
@@ -678,18 +681,19 @@ func TestСверкаPlategaОбрабатываетChargebackКакCallback(t *
 	assert.True(t, banned, "chargeback = бан, независимо от того, кто его обнаружил")
 }
 
-// Ссылка Platega живёт около 15 минут, и её срок — предел жизни платежа. До
-// срока платёж не закрывают: крипта и СБП подтверждаются не мгновенно.
-func TestНеоплаченныйPlategaЖивётДоСрокаСсылкиИЗакрываетсяПослеНего(t *testing.T) {
+// Ссылка Platega живёт около 15 минут — ровно столько же, через сколько приходит
+// первая сверка. Закрывать платёж по сроку ссылки нельзя: крипта подтверждается с
+// задержкой, а закрытый платёж callback Platega уже не оживит.
+func TestНеоплаченныйPlategaПереживаетСрокСсылкиИЗакрываетсяЧерезСутки(t *testing.T) {
 	env := newEdgeEnv(t)
 	env.platega.onGet = plategaSays(platega.StatusPending)
 	id := env.pending(t, paymentprovider.Platega, 20*time.Minute)
-	env.setExpiresAt(t, id, time.Now().UTC().Add(5*time.Minute).Format("2006-01-02 15:04:05.999999999-07:00"))
+	env.setExpiresAt(t, id, time.Now().UTC().Add(-5*time.Minute).Format("2006-01-02 15:04:05.999999999-07:00"))
 
 	env.bot.reconcilePendingPayment(id, time.Now().UTC(), "test")
-	assert.Equal(t, "pending", env.status(t, id))
+	assert.Equal(t, "pending", env.status(t, id), "срок ссылки не закрывает платёж")
 
-	env.bot.reconcilePendingPayment(id, time.Now().UTC().Add(10*time.Minute), "test")
+	env.bot.reconcilePendingPayment(id, env.createdAt(t, id).Add(25*time.Hour), "test")
 	assert.Equal(t, "expired", env.status(t, id))
 }
 

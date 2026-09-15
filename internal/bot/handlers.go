@@ -48,6 +48,7 @@ type Bot struct {
 	paymentRetryInFlight        sync.Map                  // payment_id -> struct{}, чтобы не плодить дублирующие retry-воркеры
 	pendingCheckDelay           time.Duration             // Тестовый override задержки первой сверки нового платежа
 	pendingCheckScheduled       sync.Map                  // payment_id -> struct{}, одна первая сверка на платёж
+	reconcilePassBudget         time.Duration             // Тестовый override потолка времени на шаг сверки платежей
 	shutdownCh                  chan struct{}             // Закрывается при Stop() для отмены фоновых горутин
 	userLimiter                 *userRateLimiter          // per-user rate limiter для команд бота
 	adminSwitchMu               sync.RWMutex

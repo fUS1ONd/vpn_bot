@@ -240,7 +240,8 @@ func TestReconcileChecksProviderBeforeHonouringProviderExpiry(t *testing.T) {
 	assert.Equal(t, "confirmed_not_activated", paymentStatus(t, db, id))
 }
 
-func TestReconcileExpiresPaymentPastProviderExpiry(t *testing.T) {
+// Истёкшая ссылка платёж не закрывает: провайдер ещё может провести оплату.
+func TestReconcileKeepsPaymentPastProviderExpiry(t *testing.T) {
 	stub := &yooKassaStub{}
 	stub.set("pending", "")
 	b, db, _ := newReconcileTestBot(t, stub)
@@ -252,7 +253,7 @@ func TestReconcileExpiresPaymentPastProviderExpiry(t *testing.T) {
 
 	b.reconcilePendingPayments(time.Now().UTC())
 
-	assert.Equal(t, "expired", paymentStatus(t, db, id))
+	assert.Equal(t, "pending", paymentStatus(t, db, id))
 }
 
 // Уже подтверждённый вебхуком платёж сверка не трогает.
