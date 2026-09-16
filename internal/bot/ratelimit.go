@@ -140,6 +140,19 @@ func (b *Bot) reportRateLimited(c tele.Context) error {
 	if c.Callback() != nil {
 		return c.Respond(&tele.CallbackResponse{Text: MsgRateLimitedCallback})
 	}
+	// Inline-запрос уходит на каждую набранную букву, поэтому под лимит он
+	// попадает легче всех. Без ответа в поле ввода остаются вечные часики, и
+	// человек правит текст снова — то есть бьёт в лимит ещё сильнее.
+	if c.Query() != nil {
+		return c.Answer(&tele.QueryResponse{
+			Results:      tele.Results{},
+			CacheTime:    shareCacheTime,
+			IsPersonal:   true,
+			SwitchPMText: MsgRateLimitedInline,
+			// Параметр обязателен: с одним лишь текстом Telegram ответ отвергает.
+			SwitchPMParameter: StartParamInvites,
+		})
+	}
 	if c.Message() == nil {
 		return nil
 	}
