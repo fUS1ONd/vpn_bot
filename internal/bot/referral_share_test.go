@@ -2,6 +2,7 @@ package bot
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -36,6 +37,12 @@ func captureInlineAnswer(t *testing.T, b *Bot) *map[string]any {
 
 func activeReferralInvite(t *testing.T, db *database.DB, creator int64) database.Invite {
 	t.Helper()
+	// Раздел приглашений доступен только зарегистрированным, и inline-путь
+	// проверяет то же самое — без записи в users список окажется пустым.
+	if exists, err := db.UserExists(creator); err == nil && !exists {
+		_, err := db.CreateUser(creator, "user", "User", strPtrTest(fmt.Sprintf("uuid-%d", creator)), nil, nil, nil)
+		require.NoError(t, err)
+	}
 	invite, err := db.CreateReferralInvite(creator, 400, time.Now().UTC())
 	require.NoError(t, err)
 	return *invite
@@ -218,7 +225,19 @@ func TestHandleReferralShareQuery_EmptyIsStillAnAnswer(t *testing.T) {
 	require.True(t, ok)
 	assert.Empty(t, results)
 	assert.Equal(t, "Создать приглашение", (*answer)["switch_pm_text"])
-	// Без параметра: с ним незарегистрированный получит deep link, который бот
-	// прочитает как несуществующий код приглашения.
-	assert.NotContains(t, *answer, "switch_pm_parameter")
+	// Параметр обязателен: без него Telegram отвечает «can't use empty
+	// start_parameter», ответ не доходит и крутилка остаётся навсегда.
+	assert.Equal(t, StartParamInvites, (*answer)["switch_pm_parameter"])
+}
+
+// TestShareableInvites_BannedGetsNothing: у забаненного активные приглашения
+// остаются в базе, и inline-путь не должен стать обходом бана.
+func TestShareableInvites_BannedGetsNothing(t *testing.T) {
+	b, db := setupTestBot(t)
+	invite := activeReferralInvite(t, db, 100)
+	require.NoError(t, db.BanUser(100, 1))
+
+	invites, err := b.shareableInvites(100, invite.Code, time.Now().UTC())
+	require.NoError(t, err)
+	assert.Empty(t, invites)
 }
