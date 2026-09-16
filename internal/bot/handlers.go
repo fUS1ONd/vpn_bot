@@ -340,6 +340,13 @@ func (b *Bot) handleStart(c tele.Context) error {
 			payload = strings.TrimSpace(msg.Payload)
 		}
 
+		// Кнопка «Создать приглашение» из пустого inline-ответа приводит сюда же,
+		// но её параметр — не код: приняв его за код, бот встретил бы человека
+		// сообщением о несуществующем приглашении.
+		if payload == StartParamInvites {
+			payload = ""
+		}
+
 		if payload != "" {
 			// Пытаемся автоматически активировать код из deep link
 			err := b.processInviteCode(c, payload)

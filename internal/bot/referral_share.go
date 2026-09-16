@@ -10,6 +10,10 @@ import (
 	tele "gopkg.in/telebot.v3"
 )
 
+// StartParamInvites — deep link, которым кнопка «Создать приглашение» из пустого
+// inline-ответа приводит человека в бота. Кодом приглашения не является.
+const StartParamInvites = "invites"
+
 // referralShareMessage — текст, который уходит в чужой чат. Получатель видит
 // только его и ничего больше не знает о сервисе, поэтому здесь нет ни слова,
 // обращённого к владельцу приглашения: ни про лимит активных ссылок, ни про
@@ -39,17 +43,25 @@ func (b *Bot) referralShareMessage(invite *database.Invite) string {
 // shareableInvites отдаёт приглашения, которыми отправитель вправе поделиться.
 // Спрашивающий известен только по inline-запросу, поэтому список строится от
 // него: чужой код сюда не попадёт, даже если его подставить в запрос руками.
-func (b *Bot) shareableInvites(telegramID int64, query string, now time.Time) ([]database.Invite, error) {
+//
+// Доступ к разделу проверяется и здесь: у забаненного активные приглашения
+// остаются в базе, и без этой проверки inline-путь стал бы обходом бана — все
+// остальные входы в раздел через него не пускают.
+func (b *Bot) shareableInvites(telegramID int64, wantedCode string, now time.Time) ([]database.Invite, error) {
+	accessible, err := b.canAccessReferralSection(telegramID)
+	if err != nil || !accessible {
+		return nil, err
+	}
 	active, err := b.db.GetActiveReferralInvites(telegramID, now)
 	if err != nil {
 		return nil, err
 	}
-	query = strings.TrimSpace(query)
-	if query == "" {
+	wantedCode = strings.TrimSpace(wantedCode)
+	if wantedCode == "" {
 		return active, nil
 	}
 	for _, invite := range active {
-		if invite.Code == query {
+		if invite.Code == wantedCode {
 			return []database.Invite{invite}, nil
 		}
 	}
@@ -101,15 +113,20 @@ func (b *Bot) handleReferralShareQuery(c tele.Context) error {
 	})
 }
 
-// emptyShareResponse — ответ, когда делиться нечем. SwitchPMParameter не задаём
-// намеренно: с ним кнопка приведёт в бота с deep link, который незарегистрированный
-// человек получит как несуществующий код приглашения.
+// emptyShareResponse — ответ, когда делиться нечем.
+//
+// SwitchPMParameter обязателен: с одним SwitchPMText Telegram отвечает
+// «can't use empty start_parameter», ответ не доходит, и у человека в поле ввода
+// остаётся крутилка — ровно то, от чего этот ответ и придуман. Параметр приходит
+// в бота как deep link, поэтому handleStart знает его в лицо и не принимает за
+// код приглашения.
 func emptyShareResponse() *tele.QueryResponse {
 	return &tele.QueryResponse{
-		Results:      tele.Results{},
-		CacheTime:    0,
-		IsPersonal:   true,
-		SwitchPMText: "Создать приглашение",
+		Results:           tele.Results{},
+		CacheTime:         0,
+		IsPersonal:        true,
+		SwitchPMText:      "Создать приглашение",
+		SwitchPMParameter: StartParamInvites,
 	}
 }
 
