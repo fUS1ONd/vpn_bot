@@ -110,6 +110,7 @@ const (
 	BtnInviteCreate = "📨 Создать приглашение"
 	BtnInviteList   = "📋 Мои приглашения"
 	BtnInviteBack   = "🔙 В меню"
+	BtnInviteShare  = "📤 Поделиться"
 
 	// Админ-кнопки статистики приглашений
 	BtnAdminReferrals        = "🤝 Приглашения"
@@ -155,9 +156,10 @@ func ReferralInvitesKeyboard(invites []database.Invite, page int, hasNext bool) 
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
 	for _, invite := range invites {
+		share := ReferralShareButton(invite.Code)
 		resend := menu.Data("📨 "+invite.Code, cbReferralResend, invite.Code)
 		revoke := menu.Data("🗑 Отозвать", cbReferralRevoke, invite.Code)
-		rows = append(rows, menu.Row(resend, revoke))
+		rows = append(rows, menu.Row(share, resend, revoke))
 	}
 	var nav tele.Row
 	if page > 0 {
@@ -171,6 +173,20 @@ func ReferralInvitesKeyboard(invites []database.Invite, page int, hasNext bool) 
 	}
 	rows = append(rows, menu.Row(menu.Data("🔙 Закрыть", cbReferralBack)))
 	menu.Inline(rows...)
+	return menu
+}
+
+// ReferralShareButton — кнопка «Поделиться»: открывает нативный выбор чата и
+// подставляет туда inline-запрос с кодом. Сообщение уходит не по нажатию кнопки,
+// а по выбору карточки, которую отдаёт handleReferralShareQuery.
+func ReferralShareButton(code string) tele.Btn {
+	return tele.Btn{Text: BtnInviteShare, InlineQuery: code}
+}
+
+// ReferralShareKeyboard — одна кнопка «Поделиться» под сообщением с приглашением.
+func ReferralShareKeyboard(code string) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(menu.Row(ReferralShareButton(code)))
 	return menu
 }
 

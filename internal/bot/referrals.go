@@ -113,7 +113,7 @@ func (b *Bot) handleCreateReferralInvite(c tele.Context) error {
 			return b.sendErrorExit(c, "❌ Не удалось создать приглашение", retryAction{unique: cbRetryInvite})
 		}
 	}
-	return c.Send(b.referralInviteMessage(invite), &tele.SendOptions{ReplyMarkup: InvitesMenuKeyboard()})
+	return c.Send(b.referralInviteMessage(invite), &tele.SendOptions{ReplyMarkup: ReferralShareKeyboard(invite.Code)})
 }
 
 func (b *Bot) buildReferralList(telegramID int64, page int) (string, []database.Invite, bool, error) {
@@ -212,7 +212,7 @@ func (b *Bot) handleReferralResend(c tele.Context) error {
 		invite.UsedBy != nil || invite.RevokedAt != nil || invite.ExpiresAt == nil || !invite.ExpiresAt.After(time.Now().UTC()) {
 		return c.RespondAlert("Приглашение больше не активно")
 	}
-	if err := c.Send(b.referralInviteMessage(invite)); err != nil {
+	if err := c.Send(b.referralInviteMessage(invite), &tele.SendOptions{ReplyMarkup: ReferralShareKeyboard(invite.Code)}); err != nil {
 		return err
 	}
 	return c.Respond(&tele.CallbackResponse{Text: "Сообщение отправлено"})
