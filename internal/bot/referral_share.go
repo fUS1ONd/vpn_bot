@@ -14,6 +14,12 @@ import (
 // inline-ответа приводит человека в бота. Кодом приглашения не является.
 const StartParamInvites = "invites"
 
+// shareCacheTime — секунда, а не ноль: `cache_time` объявлен omitempty, ноль
+// выпадает из запроса, и Telegram применяет свои 300 секунд по умолчанию. За эти
+// пять минут только что отозванным приглашением ещё можно поделиться, а только
+// что созданного в выборе чата не видно.
+const shareCacheTime = 1
+
 // referralShareMessage — текст, который уходит в чужой чат. Получатель видит
 // только его и ничего больше не знает о сервисе, поэтому здесь нет ни слова,
 // обращённого к владельцу приглашения: ни про лимит активных ссылок, ни про
@@ -44,14 +50,9 @@ func (b *Bot) referralShareMessage(invite *database.Invite) string {
 // Спрашивающий известен только по inline-запросу, поэтому список строится от
 // него: чужой код сюда не попадёт, даже если его подставить в запрос руками.
 //
-// Доступ к разделу проверяется и здесь: у забаненного активные приглашения
-// остаются в базе, и без этой проверки inline-путь стал бы обходом бана — все
-// остальные входы в раздел через него не пускают.
+// Право на раздел проверяет вызывающий: у забаненного активные приглашения
+// остаются в базе, и без той проверки inline-путь стал бы обходом бана.
 func (b *Bot) shareableInvites(telegramID int64, wantedCode string, now time.Time) ([]database.Invite, error) {
-	accessible, err := b.canAccessReferralSection(telegramID)
-	if err != nil || !accessible {
-		return nil, err
-	}
 	active, err := b.db.GetActiveReferralInvites(telegramID, now)
 	if err != nil {
 		return nil, err
@@ -79,10 +80,22 @@ func (b *Bot) handleReferralShareQuery(c tele.Context) error {
 		return nil
 	}
 
+	// Доступ проверяется до всего остального: посторонний не должен получить даже
+	// кнопку «Создать приглашение» — вход в сервис закрыт, и inline-режим, видный
+	// из любого чата, не место его приоткрывать.
+	accessible, err := b.canAccessReferralSection(query.Sender.ID)
+	if err != nil {
+		slog.Error("Failed to check referral access for inline share", "error", err, "telegram_id", query.Sender.ID)
+		return c.Answer(silentShareResponse())
+	}
+	if !accessible {
+		return c.Answer(silentShareResponse())
+	}
+
 	invites, err := b.shareableInvites(query.Sender.ID, query.Text, time.Now().UTC())
 	if err != nil {
 		slog.Error("Failed to list invites for inline share", "error", err, "telegram_id", query.Sender.ID)
-		return c.Answer(emptyShareResponse())
+		return c.Answer(silentShareResponse())
 	}
 	if len(invites) == 0 {
 		return c.Answer(emptyShareResponse())
@@ -103,12 +116,9 @@ func (b *Bot) handleReferralShareQuery(c tele.Context) error {
 		results = append(results, article)
 	}
 
-	// CacheTime = 0 и IsPersonal обязательны вместе: иначе Telegram закеширует
-	// ответ и отдаст его другому человеку, набравшему тот же запрос, — а запрос
-	// здесь и есть код приглашения.
 	return c.Answer(&tele.QueryResponse{
 		Results:    results,
-		CacheTime:  0,
+		CacheTime:  shareCacheTime,
 		IsPersonal: true,
 	})
 }
@@ -123,10 +133,21 @@ func (b *Bot) handleReferralShareQuery(c tele.Context) error {
 func emptyShareResponse() *tele.QueryResponse {
 	return &tele.QueryResponse{
 		Results:           tele.Results{},
-		CacheTime:         0,
+		CacheTime:         shareCacheTime,
 		IsPersonal:        true,
 		SwitchPMText:      "Создать приглашение",
 		SwitchPMParameter: StartParamInvites,
+	}
+}
+
+// silentShareResponse — ответ постороннему: пусто и без единой подсказки о том,
+// что за бот ему попался. Ответить всё равно надо, иначе крутилка в поле ввода
+// не разрешится.
+func silentShareResponse() *tele.QueryResponse {
+	return &tele.QueryResponse{
+		Results:    tele.Results{},
+		CacheTime:  shareCacheTime,
+		IsPersonal: true,
 	}
 }
 

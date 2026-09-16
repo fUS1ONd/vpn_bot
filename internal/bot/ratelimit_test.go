@@ -117,6 +117,28 @@ func TestRateLimitMiddleware_TextWarnsOnce(t *testing.T) {
 	assert.Nil(t, second.sentMsg, "повторные превышения молчат")
 }
 
+// TestRateLimitMiddleware_InlineQueryAlwaysAnswered: inline-запрос уходит на
+// каждую набранную букву и под лимит попадает легче всего. Молчание оставило бы
+// в поле ввода часики, которые не разрешатся ничем.
+func TestRateLimitMiddleware_InlineQueryAlwaysAnswered(t *testing.T) {
+	b := &Bot{userLimiter: newTestLimiter(t, 3, 5), userStates: newStateMap()}
+	drainBucket(t, b.userLimiter, 42, 5)
+
+	handler := b.rateLimitMiddleware(func(tele.Context) error {
+		t.Fatal("отсечённый апдейт не должен доходить до хендлера")
+		return nil
+	})
+
+	for i := 0; i < 3; i++ {
+		ctx := &MockContext{sender: &tele.User{ID: 42}, query: &tele.Query{ID: "q", Sender: &tele.User{ID: 42}}}
+		require.NoError(t, handler(ctx))
+		require.NotNil(t, ctx.queryAnswer, "запрос %d остался без ответа", i+1)
+		assert.Empty(t, ctx.queryAnswer.Results)
+		assert.Equal(t, MsgRateLimitedInline, ctx.queryAnswer.SwitchPMText)
+		assert.NotEmpty(t, ctx.queryAnswer.SwitchPMParameter, "Telegram отвергнет текст без параметра")
+	}
+}
+
 // TestRateLimitMiddleware_PassesThroughWhenAllowed: в пределах лимита апдейт
 // доходит до хендлера, и лимитер ничего не отвечает от себя.
 func TestRateLimitMiddleware_PassesThroughWhenAllowed(t *testing.T) {

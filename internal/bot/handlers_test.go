@@ -34,10 +34,21 @@ type MockContext struct {
 	callback    *tele.Callback
 	respondText string
 	editErr     error
+	query       *tele.Query
+	queryAnswer *tele.QueryResponse
 }
 
 func (c *MockContext) Sender() *tele.User {
 	return c.sender
+}
+
+func (c *MockContext) Query() *tele.Query {
+	return c.query
+}
+
+func (c *MockContext) Answer(response *tele.QueryResponse) error {
+	c.queryAnswer = response
+	return nil
 }
 
 func (c *MockContext) Message() *tele.Message {

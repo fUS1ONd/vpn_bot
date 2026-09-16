@@ -189,7 +189,7 @@ func TestHandleReferralShareQuery_AnswersWithOwnInvites(t *testing.T) {
 	assert.True(t, ids[second.Code])
 
 	assert.Equal(t, true, (*answer)["is_personal"])
-	assert.NotContains(t, *answer, "cache_time", "кеш отдал бы чужому человеку чужие приглашения")
+	assert.Equal(t, float64(shareCacheTime), (*answer)["cache_time"], "без явного значения Telegram кеширует ответ на 5 минут")
 }
 
 // TestHandleReferralShareQuery_FiltersByCode: кнопка подставляет конкретный код,
@@ -213,7 +213,11 @@ func TestHandleReferralShareQuery_FiltersByCode(t *testing.T) {
 // TestHandleReferralShareQuery_EmptyIsStillAnAnswer: без ответа у человека в поле
 // ввода навсегда остаётся крутилка, поэтому пустой список — тоже ответ.
 func TestHandleReferralShareQuery_EmptyIsStillAnAnswer(t *testing.T) {
-	b, _ := setupTestBot(t)
+	b, db := setupTestBot(t)
+	// Зарегистрированный, но пока без единого приглашения: ему подсказка нужна,
+	// в отличие от постороннего.
+	_, err := db.CreateUser(100, "user", "User", strPtrTest("uuid-100"), nil, nil, nil)
+	require.NoError(t, err)
 	answer := captureInlineAnswer(t, b)
 
 	ctx := b.bot.NewContext(tele.Update{
@@ -230,14 +234,52 @@ func TestHandleReferralShareQuery_EmptyIsStillAnAnswer(t *testing.T) {
 	assert.Equal(t, StartParamInvites, (*answer)["switch_pm_parameter"])
 }
 
-// TestShareableInvites_BannedGetsNothing: у забаненного активные приглашения
-// остаются в базе, и inline-путь не должен стать обходом бана.
-func TestShareableInvites_BannedGetsNothing(t *testing.T) {
+// TestHandleReferralShareQuery_BannedGetsNothing: у забаненного активные
+// приглашения остаются в базе, и inline-путь не должен стать обходом бана.
+func TestHandleReferralShareQuery_BannedGetsNothing(t *testing.T) {
 	b, db := setupTestBot(t)
 	invite := activeReferralInvite(t, db, 100)
 	require.NoError(t, db.BanUser(100, 1))
+	answer := captureInlineAnswer(t, b)
 
-	invites, err := b.shareableInvites(100, invite.Code, time.Now().UTC())
-	require.NoError(t, err)
-	assert.Empty(t, invites)
+	ctx := b.bot.NewContext(tele.Update{
+		Query: &tele.Query{ID: "q4", Sender: &tele.User{ID: 100}, Text: invite.Code},
+	})
+	require.NoError(t, b.handleReferralShareQuery(ctx))
+
+	results, ok := (*answer)["results"].([]any)
+	require.True(t, ok, "ответить надо даже забаненному, иначе у него крутится вечная загрузка")
+	assert.Empty(t, results)
+	assert.NotContains(t, *answer, "switch_pm_text", "постороннему не показываем даже кнопку")
+}
+
+// TestHandleReferralShareQuery_StrangerLearnsNothing: inline-режим виден из
+// любого чата, и незарегистрированный не должен узнать из него о сервисе.
+func TestHandleReferralShareQuery_StrangerLearnsNothing(t *testing.T) {
+	b, _ := setupTestBot(t)
+	answer := captureInlineAnswer(t, b)
+
+	ctx := b.bot.NewContext(tele.Update{
+		Query: &tele.Query{ID: "q5", Sender: &tele.User{ID: 4242}},
+	})
+	require.NoError(t, b.handleReferralShareQuery(ctx))
+
+	results, ok := (*answer)["results"].([]any)
+	require.True(t, ok)
+	assert.Empty(t, results)
+	assert.NotContains(t, *answer, "switch_pm_text")
+}
+
+// TestShareAnswers_CacheTimeIsSent: ноль выпадает из запроса как omitempty, и
+// Telegram применяет свои 300 секунд — за них отозванным кодом ещё делятся.
+func TestShareAnswers_CacheTimeIsSent(t *testing.T) {
+	for name, response := range map[string]*tele.QueryResponse{
+		"пустой": emptyShareResponse(),
+		"молчун": silentShareResponse(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, 1, response.CacheTime)
+			assert.True(t, response.IsPersonal)
+		})
+	}
 }
