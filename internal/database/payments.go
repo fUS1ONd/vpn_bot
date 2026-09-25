@@ -380,6 +380,17 @@ func (db *DB) HasConfirmedPayment(telegramID int64) (bool, error) {
 	return exists, err
 }
 
+// HasUnactivatedPayment — есть ли у пользователя принятый платёж, по которому
+// подписка ещё не продлена (confirmed_not_activated), когда бы он ни был принят.
+func (db *DB) HasUnactivatedPayment(telegramID int64) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM payments WHERE telegram_id = ? AND status = 'confirmed_not_activated' AND is_test = 0)`,
+		telegramID,
+	).Scan(&exists)
+	return exists, err
+}
+
 // HasConfirmedPaymentSince проверяет, есть ли подтверждённый платёж после указанной даты.
 // Используется scheduler для защиты от ложного кика/disable. Для этой проверки
 // confirmed_not_activated тоже считается оплатой: callback уже подтвердил деньги,

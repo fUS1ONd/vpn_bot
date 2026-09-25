@@ -191,6 +191,80 @@ func edgePendingBody(id string) string {
 		"recipient":{"account_id":"shop-1"},"payment_method":{"type":"bank_card","id":"pm-edge","saved":true,"card":{"last4":"4242"}}}`
 }
 
+// Касса назвала свой платёж и ответила pending, а к T−0 он так и не разрешился.
+// Новая попытка с новым ключом списала бы второй раз, если первая всё же пройдёт.
+func TestAutorenewSecondAttemptWaitsForUnresolvedPending(t *testing.T) {
+	expireAt := time.Now().UTC().Add(6 * time.Hour)
+	stub := &arEdgeStub{expireAt: expireAt, responses: []string{edgePendingBody("yo-edge-hanging")}}
+	b, _, _ := setupAutorenewEdgeBot(t, stub)
+
+	b.runAutorenewCharges(time.Now().UTC())
+	require.Equal(t, 1, stub.callCount())
+
+	b.runAutorenewCharges(expireAt.Add(time.Minute))
+	require.Equal(t, 1, stub.callCount(), "пока исход первого списания не выяснен, второго не делаем")
+}
+
+// Касса списала, но ответ не сошёлся с локальной записью, и подписку мы не
+// выдали. Деньги ушли: вторая попытка цикла списала бы их ещё раз.
+func TestAutorenewSecondAttemptAfterUnconfirmedSuccess(t *testing.T) {
+	expireAt := time.Now().UTC().Add(6 * time.Hour)
+	stub := &arEdgeStub{expireAt: expireAt, responses: []string{
+		`{"id":"yo-edge-mismatch","status":"succeeded","amount":{"value":"400.00","currency":"RUB"},
+		  "recipient":{"account_id":"other-shop"}}`,
+	}}
+	b, _, capture := setupAutorenewEdgeBot(t, stub)
+
+	b.runAutorenewCharges(time.Now().UTC())
+	require.Equal(t, 1, stub.callCount())
+	require.NotEmpty(t, messagesTo(capture, b.config.AdminID), "владелец узнаёт о несошедшемся ответе")
+
+	b.runAutorenewCharges(expireAt.Add(time.Minute))
+	require.Equal(t, 1, stub.callCount(), "деньги по первой попытке ушли — второй не будет")
+}
+
+// Касса не ответила, а к T−0 прошли сутки: ЮKassa ключ уже забыла, и повтор
+// «по тому же ключу» стал бы новым платежом. Не списываем и зовём владельца.
+func TestAutorenewSecondAttemptSkipsExpiredIdempotenceKey(t *testing.T) {
+	expireAt := time.Now().UTC().Add(6 * time.Hour)
+	stub := &arEdgeStub{expireAt: expireAt, transportErr: true}
+	b, _, capture := setupAutorenewEdgeBot(t, stub)
+
+	b.runAutorenewCharges(time.Now().UTC())
+	first := stub.callCount()
+	require.Positive(t, first)
+
+	b.runAutorenewCharges(time.Now().UTC().Add(24 * time.Hour))
+	require.Equal(t, first, stub.callCount(), "с протухшим ключом в кассу не идём")
+
+	alerted := false
+	for _, m := range messagesTo(capture, b.config.AdminID) {
+		if strings.Contains(m.Text, "Вторую попытку не делаем") {
+			alerted = true
+		}
+	}
+	require.True(t, alerted, "владелец должен проверить платёж в кабинете кассы")
+}
+
+// Ручная оплата за два дня до конца принята, но панель не продлила подписку.
+// expireAt на месте, retry ещё доведёт платёж — списывать в T−24ч нельзя.
+func TestAutorenewSkipsOlderUnactivatedPayment(t *testing.T) {
+	expireAt := time.Now().UTC().Add(6 * time.Hour)
+	stub := &arEdgeStub{expireAt: expireAt, responses: []string{edgeSucceededBody("yo-edge-double")}}
+	b, db, _ := setupAutorenewEdgeBot(t, stub)
+
+	externalID := "yo-edge-manual-stuck"
+	id, err := db.CreatePayment(&database.Payment{
+		TelegramID: arEdgeUserID, Amount: 400, PaymentMethod: paymentprovider.YooKassa,
+		Status: "pending", Provider: paymentprovider.YooKassa, ProviderPaymentID: &externalID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.UpdatePaymentStatus(id, "confirmed_not_activated"))
+
+	b.runAutorenewCharges(time.Now().UTC())
+	require.Zero(t, stub.callCount(), "деньги за месяц уже приняты — второй раз не списываем")
+}
+
 // Автосписание зависло в pending, а позже касса его отменила — сверка зависших
 // платежей это находит. Отмену записываем, но «Платёж отменён, попробуйте
 // снова» человеку, который ничего не оплачивал, не пишем.

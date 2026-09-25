@@ -241,7 +241,7 @@ func TestAutorenewTransportFailureAlertsOwner(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, attempts, 1)
 	require.Equal(t, database.AutorenewOutcomeUnknown, attempts[0].Outcome)
-	require.Len(t, capture.matching("ни одна попытка не дошла"), 1)
+	require.Len(t, capture.matching("ни одна попытка не прошла"), 1)
 }
 
 // Обычный отказ карты алерт не поднимает: касса работает и просто отказала.
@@ -252,7 +252,7 @@ func TestAutorenewDeclineDoesNotAlertOwner(t *testing.T) {
 
 	b.runAutorenewCharges(time.Now().UTC())
 
-	require.Empty(t, capture.matching("ни одна попытка не дошла"))
+	require.Empty(t, capture.matching("ни одна попытка не прошла"))
 }
 
 // Ручная оплата между попытками сдвигает expireAt: окно неактуально, в кассу
@@ -362,4 +362,7 @@ func TestAutorenewClientErrorIsNotAnOutage(t *testing.T) {
 	require.False(t, isYooKassaOutage(errors.New("yookassa API error 404: not found")))
 	require.True(t, isYooKassaOutage(errors.New("send request: TLS handshake timeout")))
 	require.True(t, isYooKassaOutage(errors.New("yookassa API error 502: bad gateway")))
+	// Сломанный ключ и отозванное разрешение на автоплатежи бьют по всем сразу.
+	require.True(t, isYooKassaOutage(errors.New("yookassa API error 401: unauthorized")))
+	require.True(t, isYooKassaOutage(errors.New("yookassa API error 403: forbidden")))
 }

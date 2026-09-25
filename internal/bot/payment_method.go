@@ -93,11 +93,7 @@ func (b *Bot) handlePaymentMethodUnlinkConfirm(c tele.Context) error {
 	}
 	telegramID := c.Sender().ID
 
-	if err := b.db.SetAutorenewEnabled(telegramID, false); err != nil {
-		slog.Error("Не удалось выключить автопродление при отвязке", "error", err, "telegram_id", telegramID)
-		return c.RespondAlert("Не удалось отвязать способ оплаты. Попробуйте позже.")
-	}
-	if err := b.db.ClearAutorenewMethod(telegramID); err != nil {
+	if err := b.unlinkPaymentMethod(telegramID); err != nil {
 		slog.Error("Не удалось отвязать способ оплаты", "error", err, "telegram_id", telegramID)
 		return c.RespondAlert("Не удалось отвязать способ оплаты. Попробуйте позже.")
 	}
@@ -110,4 +106,21 @@ func (b *Bot) handlePaymentMethodUnlinkConfirm(c tele.Context) error {
 		slog.Error("Не удалось перерисовать экран после отвязки", "error", err, "telegram_id", telegramID)
 	}
 	return c.Respond(&tele.CallbackResponse{Text: "Способ оплаты отвязан"})
+}
+
+// unlinkPaymentMethod гасит согласие и Способ под мьютексом платежей: списание,
+// уже идущее в этот момент, иначе прошло бы, а его ответ кассы тут же сохранил
+// бы Способ заново — сразу после «мы больше не храним его».
+func (b *Bot) unlinkPaymentMethod(telegramID int64) error {
+	mu := getPaymentMutex(telegramID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if err := b.db.SetAutorenewEnabled(telegramID, false); err != nil {
+		return fmt.Errorf("disable autorenew: %w", err)
+	}
+	if err := b.db.ClearAutorenewMethod(telegramID); err != nil {
+		return fmt.Errorf("clear method: %w", err)
+	}
+	return nil
 }

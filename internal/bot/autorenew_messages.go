@@ -68,7 +68,7 @@ func (b *Bot) reportAutorenewOutage(attempted, transportFailures int) {
 		return
 	}
 	b.sendAdminAlert(fmt.Sprintf(
-		"⚠️ Автосписания: ни одна попытка не дошла до кассы (%d из %d — сбой связи или 5xx).\n\n"+
+		"⚠️ Автосписания: ни одна попытка не прошла (%d из %d — сбой связи, 5xx, 401 или 403).\n\n"+
 			"Так выглядят сломанный ключ ЮKassa и отозванное разрешение на автоплатежи. Проверьте кабинет кассы.",
 		transportFailures, attempted))
 }

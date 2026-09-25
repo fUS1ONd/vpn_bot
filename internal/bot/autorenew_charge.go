@@ -158,8 +158,13 @@ func (b *Bot) chargeAutorenewal(renewal *database.Autorenewal, now time.Time) au
 
 	// Обычно от второго списания защищает сдвиг expireAt, но при упавшей
 	// активации деньги уже приняты, а expireAt на месте. Поэтому спрашиваем не
-	// «двигалась ли подписка», а «принимали ли мы деньги в этом цикле».
+	// «двигалась ли подписка», а «принимали ли мы деньги в этом цикле». Платёж с
+	// упавшей активацией считается при любой дате приёма: ручная оплата за два дня
+	// до конца тоже висит на месте expireAt, и retry её ещё доведёт.
 	paid, err := b.db.HasConfirmedPaymentSince(telegramID, remUser.ExpireAt.Add(-autorenewChargeLead))
+	if err == nil && !paid {
+		paid, err = b.db.HasUnactivatedPayment(telegramID)
+	}
 	if err != nil {
 		slog.Error("Автосписание: не удалось проверить оплату цикла", "error", err, "telegram_id", telegramID)
 		return autorenewChargeResult{}
@@ -167,6 +172,10 @@ func (b *Bot) chargeAutorenewal(renewal *database.Autorenewal, now time.Time) au
 	if paid {
 		slog.Info("Автосписание: деньги за этот цикл уже приняты, пропускаем",
 			"telegram_id", telegramID, "expire_at", remUser.ExpireAt)
+		return autorenewChargeResult{}
+	}
+
+	if b.autorenewCycleUnsettled(telegramID, remUser.ExpireAt, now) {
 		return autorenewChargeResult{}
 	}
 
@@ -184,6 +193,57 @@ func (b *Bot) chargeAutorenewal(renewal *database.Autorenewal, now time.Time) au
 	}
 
 	return b.performAutorenewCharge(telegramID, *dbUser.SubscriptionPrice, attemptNo, remUser)
+}
+
+// autorenewKeyLifetime — сколько после первого обращения прежний ключ
+// идемпотентности ещё безопасно переиспользовать. ЮKassa держит ключ сутки, а
+// попытки T−24ч и T−0 разнесены почти ровно на сутки: запас в час, иначе повтор
+// «по тому же ключу» уйдёт в кассу уже новым платежом.
+const autorenewKeyLifetime = 23 * time.Hour
+
+// autorenewCycleUnsettled — висит ли в цикле попытка, судьбу которой мы не
+// знаем. Новый ключ идемпотентности в цикле допустим только после определённого
+// отказа кассы: при любом другом исходе деньги могли уйти, и новая попытка
+// списала бы второй раз за месяц.
+//
+//   - Касса назвала свой платёж, а он не отменён (pending, не сошёлся со сверкой,
+//     не подтвердился у нас) — его судьбу решают вебхук и сверка зависших.
+//   - Касса платежа не назвала — повтор возможен только по прежнему ключу и
+//     только пока тот жив (autorenewKeyLifetime).
+func (b *Bot) autorenewCycleUnsettled(telegramID int64, cycle, now time.Time) bool {
+	attempts, err := b.db.ListAutorenewAttempts(telegramID, cycle)
+	if err != nil {
+		slog.Error("Автосписание: не удалось прочитать попытки цикла", "error", err, "telegram_id", telegramID)
+		return true
+	}
+	for _, a := range attempts {
+		if a.Outcome != database.AutorenewOutcomeUnknown || a.PaymentID == nil {
+			continue
+		}
+		payment, err := b.db.GetPaymentByID(*a.PaymentID)
+		if err != nil || payment == nil {
+			slog.Error("Автосписание: не удалось прочитать платёж прошлой попытки", "error", err, "payment_id", *a.PaymentID)
+			return true
+		}
+		if payment.ProviderPaymentID != nil && *payment.ProviderPaymentID != "" {
+			if payment.Status == "canceled" {
+				continue
+			}
+			slog.Warn("Автосписание: исход прошлой попытки цикла не выяснен, новую не делаем",
+				"telegram_id", telegramID, "payment_id", payment.ID, "status", payment.Status)
+			return true
+		}
+		if now.Sub(a.CreatedAt) >= autorenewKeyLifetime {
+			slog.Warn("Автосписание: ключ прошлой попытки истёк, а исход неизвестен — новую не делаем",
+				"telegram_id", telegramID, "payment_id", payment.ID, "attempt_at", a.CreatedAt)
+			b.sendAdminAlert(fmt.Sprintf(
+				"⚠️ Автосписание #%d (пользователь %d): касса не ответила на попытку %s, и повторить её по тому же ключу уже нельзя. "+
+					"Вторую попытку не делаем, чтобы не списать дважды. Проверьте платёж в кабинете ЮKassa.",
+				payment.ID, telegramID, a.CreatedAt.Format("02.01.2006 15:04")))
+			return true
+		}
+	}
+	return false
 }
 
 // autorenewAttemptFor — какая попытка положена сейчас: первая за сутки до
@@ -346,14 +406,16 @@ func (b *Bot) autorenewChargePayment(telegramID int64, price int, cycle time.Tim
 	return payment, nil
 }
 
-// isYooKassaOutage отличает «до кассы не достучались» от её отказа: 4xx клиент
-// отдаёт текстом «yookassa API error 4xx».
+// isYooKassaOutage отличает поломку на стороне кассы или магазина от ответа по
+// конкретному платежу: 4xx клиент отдаёт текстом «yookassa API error 4xx».
+// 401 (сломанный ключ) и 403 (отозвано разрешение на автоплатежи) — поломка:
+// они бьют по всем списаниям сразу, и ради них алерт и существует.
 func isYooKassaOutage(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
-	for _, code := range []string{"error 400", "error 401", "error 403", "error 404", "error 409"} {
+	for _, code := range []string{"error 400", "error 404", "error 409"} {
 		if strings.Contains(msg, code) {
 			return false
 		}
