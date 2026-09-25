@@ -31,7 +31,11 @@ type autorenewChargeResult struct {
 	// transportFailure — до кассы не достучались или 5xx. Отказ кассы сюда не
 	// входит: он означает, что касса работает.
 	transportFailure bool
-	notify           func() // что сказать пользователю вне мьютекса
+	// resend — повтор недошедшего обращения тем же ключом. В счётчики прохода не
+	// идёт: о недоступности кассы владелец узнал на первом обращении, и повторы
+	// каждые полчаса иначе слали бы тот же алерт до самого истечения ключа.
+	resend bool
+	notify func() // что сказать пользователю вне мьютекса
 }
 
 // runAutorenewCharges — шаг прохода scheduler: списания по включённому
@@ -80,6 +84,9 @@ func (b *Bot) runAutorenewCharges(now time.Time) {
 			// Сообщение уходит вне мьютекса: под ним только касса и подтверждение.
 			if result.notify != nil {
 				result.notify()
+			}
+			if result.resend {
+				return
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -152,8 +159,14 @@ func (b *Bot) chargeAutorenewal(renewal *database.Autorenewal, now time.Time) au
 		slog.Error("Автосписание: не удалось проверить попытку", "error", err, "telegram_id", telegramID)
 		return autorenewChargeResult{}
 	}
+	resend := false
 	if already {
-		return autorenewChargeResult{}
+		// Попытка этого окна уже была. Повторяем её только если касса так и не
+		// назвала свой платёж, а ключ ещё жив: до следующего окна почти сутки, и
+		// ключ к нему гарантированно протухнет.
+		if resend, err = b.autorenewResendable(telegramID, remUser.ExpireAt, attemptNo, now); err != nil || !resend {
+			return autorenewChargeResult{}
+		}
 	}
 
 	// Обычно от второго списания защищает сдвиг expireAt, но при упавшей
@@ -192,14 +205,35 @@ func (b *Bot) chargeAutorenewal(renewal *database.Autorenewal, now time.Time) au
 		return autorenewChargeResult{}
 	}
 
-	return b.performAutorenewCharge(telegramID, *dbUser.SubscriptionPrice, attemptNo, remUser)
+	result := b.performAutorenewCharge(telegramID, *dbUser.SubscriptionPrice, attemptNo, remUser)
+	result.resend = resend
+	return result
 }
 
 // autorenewKeyLifetime — сколько после первого обращения прежний ключ
-// идемпотентности ещё безопасно переиспользовать. ЮKassa держит ключ сутки, а
-// попытки T−24ч и T−0 разнесены почти ровно на сутки: запас в час, иначе повтор
-// «по тому же ключу» уйдёт в кассу уже новым платежом.
+// идемпотентности ещё безопасно переиспользовать. ЮKassa держит ключ сутки:
+// запас в час, иначе повтор «по тому же ключу» уйдёт в кассу уже новым платежом.
+// Попытки T−24ч и T−0 разнесены почти ровно на сутки, поэтому повтор по ключу
+// делается в окне своей же попытки — каждым проходом scheduler, пока ключ жив.
 const autorenewKeyLifetime = 23 * time.Hour
+
+// autorenewResendable — можно ли повторить уже сделанную попытку attemptNo тем
+// же ключом: касса не ответила и своего платежа не назвала, а ключ ещё жив.
+// Повтор безопасен — по тому же ключу касса вернёт прежний платёж, если деньги
+// уже ушли, и не создаст второй.
+func (b *Bot) autorenewResendable(telegramID int64, cycle time.Time, attemptNo int, now time.Time) (bool, error) {
+	unresolved, err := b.db.UnresolvedAutorenewAttempt(telegramID, cycle)
+	if err != nil {
+		slog.Error("Автосписание: не удалось проверить попытку без ответа кассы", "error", err, "telegram_id", telegramID)
+		return false, err
+	}
+	if unresolved == nil || unresolved.AttemptNo != attemptNo {
+		return false, nil
+	}
+	// Протухший ключ разбирает autorenewCycleUnsettled: алерт владельцу и без
+	// новых обращений.
+	return now.Sub(unresolved.CreatedAt) < autorenewKeyLifetime, nil
+}
 
 // autorenewCycleUnsettled — висит ли в цикле попытка, судьбу которой мы не
 // знаем. Новый ключ идемпотентности в цикле допустим только после определённого
@@ -314,8 +348,9 @@ func (b *Bot) performAutorenewCharge(telegramID int64, price, attemptNo int, rem
 		PaymentMethodID: *renewal.PaymentMethodID,
 	})
 	if err != nil {
-		// Исход неизвестен: платёж живёт незавершённым, следующая попытка пойдёт
-		// по тому же ключу и узнает его судьбу. Пользователю не пишем. В счётчик
+		// Исход неизвестен: платёж живёт незавершённым, следующий проход повторит
+		// обращение по тому же ключу (autorenewResendable) и узнает его судьбу.
+		// Пользователю не пишем. В счётчик
 		// аномалии идёт только недоступность кассы, 4xx — это её ответ.
 		outage := isYooKassaOutage(err)
 		slog.Warn("Автосписание: касса не ответила", "error", err,
@@ -335,7 +370,9 @@ func (b *Bot) performAutorenewCharge(telegramID int64, price, attemptNo int, rem
 			return autorenewChargeResult{attempted: true, notify: notify}
 		}
 	case paymentprovider.StatusCanceled:
-		b.finishDeclinedAutorenew(payment, charged, attempt, price)
+		if notify := b.finishDeclinedAutorenew(payment, charged, attempt, price); notify != nil {
+			return autorenewChargeResult{attempted: true, notify: notify}
+		}
 	default:
 		// pending: попытка израсходована, пользователю не пишем.
 		slog.Info("Автосписание: касса ответила pending", "telegram_id", telegramID, "payment_id", paymentID)
@@ -402,8 +439,16 @@ func (b *Bot) autorenewChargePayment(telegramID int64, price int, cycle time.Tim
 	if err != nil {
 		return nil, err
 	}
-	payment.ID = id
-	return payment, nil
+	// Перечитываем, чтобы у записи был created_at из БД: по нему решается,
+	// можно ли сохранять Способ из ответа кассы.
+	created, err := b.db.GetPaymentByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if created == nil {
+		return nil, fmt.Errorf("autorenew payment %d vanished after insert", id)
+	}
+	return created, nil
 }
 
 // isYooKassaOutage отличает поломку на стороне кассы или магазина от ответа по
@@ -468,8 +513,9 @@ func (b *Bot) finishSuccessfulAutorenew(payment *database.Payment, charged *paym
 	return func() { b.notifyAutorenewSuccess(telegramID, price, previous, hasPrevious) }
 }
 
-// finishDeclinedAutorenew обрабатывает отказ кассы.
-func (b *Bot) finishDeclinedAutorenew(payment *database.Payment, charged *paymentprovider.Payment, attempt *database.AutorenewAttempt, price int) {
+// finishDeclinedAutorenew обрабатывает отказ кассы и возвращает уведомление для
+// отправки вне мьютекса: медленный Telegram не должен держать платежи человека.
+func (b *Bot) finishDeclinedAutorenew(payment *database.Payment, charged *paymentprovider.Payment, attempt *database.AutorenewAttempt, price int) func() {
 	telegramID := payment.TelegramID
 
 	if err := b.db.UpdatePaymentStatus(payment.ID, "canceled"); err != nil {
@@ -494,7 +540,9 @@ func (b *Bot) finishDeclinedAutorenew(payment *database.Payment, charged *paymen
 
 	// После провала T−0 молчим: человек вчера всё прочитал, а сегодня получит
 	// штатное «подписка истекла».
-	if attempt.AttemptNo == 1 {
-		b.notifyAutorenewFailure(telegramID, price, attempt.ExpireAt, charged.MethodGone)
+	if attempt.AttemptNo != 1 {
+		return nil
 	}
+	expireAt, methodGone := attempt.ExpireAt, charged.MethodGone
+	return func() { b.notifyAutorenewFailure(telegramID, price, expireAt, methodGone) }
 }

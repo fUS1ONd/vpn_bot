@@ -289,6 +289,9 @@ func migrate(conn *sql.DB) error {
 		`ALTER TABLE payments ADD COLUMN provider_paid_at TIMESTAMP`,
 		// Длительность оплаченного периода; сегодня всегда 1.
 		`ALTER TABLE payments ADD COLUMN period_months INTEGER NOT NULL DEFAULT 1`,
+		// Момент, когда Способ автосписания погашен: ответ кассы по платежу,
+		// созданному раньше, не должен возвращать отвязанный или мёртвый Способ.
+		`ALTER TABLE autorenewals ADD COLUMN method_cleared_at TIMESTAMP`,
 	}
 	for _, m := range alterMigrations {
 		// Игнорируем ошибки ALTER TABLE - колонка может уже существовать

@@ -31,6 +31,9 @@ type Autorenewal struct {
 	PeriodMonths    int // сегодня всегда 1, ветвлений под другие значения нет
 	CreatedAt       time.Time
 	UpdatedAt       *time.Time
+	// MethodClearedAt — когда Способ погасили в последний раз (отвязка или
+	// «карта мертва»). Nil — ни разу.
+	MethodClearedAt *time.Time
 }
 
 // HasMethod — есть ли Способ автосписания.
@@ -63,12 +66,12 @@ func autorenewCycleKey(expireAt time.Time) time.Time {
 func (db *DB) GetAutorenewal(telegramID int64) (*Autorenewal, error) {
 	a := &Autorenewal{}
 	var methodID, methodTitle sql.NullString
-	var updatedAt sql.NullTime
+	var updatedAt, clearedAt sql.NullTime
 
 	err := db.conn.QueryRow(
-		`SELECT telegram_id, enabled, payment_method_id, method_title, period_months, created_at, updated_at
+		`SELECT telegram_id, enabled, payment_method_id, method_title, period_months, created_at, updated_at, method_cleared_at
 		 FROM autorenewals WHERE telegram_id = ?`, telegramID,
-	).Scan(&a.TelegramID, &a.Enabled, &methodID, &methodTitle, &a.PeriodMonths, &a.CreatedAt, &updatedAt)
+	).Scan(&a.TelegramID, &a.Enabled, &methodID, &methodTitle, &a.PeriodMonths, &a.CreatedAt, &updatedAt, &clearedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -84,6 +87,9 @@ func (db *DB) GetAutorenewal(telegramID int64) (*Autorenewal, error) {
 	}
 	if updatedAt.Valid {
 		a.UpdatedAt = &updatedAt.Time
+	}
+	if clearedAt.Valid {
+		a.MethodClearedAt = &clearedAt.Time
 	}
 	return a, nil
 }
@@ -106,13 +112,14 @@ func (db *DB) SaveAutorenewMethod(telegramID int64, paymentMethodID, methodTitle
 }
 
 // ClearAutorenewMethod гасит Способ, оставляя согласие: при следующей оплате
-// картой автопродление оживает само.
+// картой автопродление оживает само. Момент гашения запоминается: платежи,
+// созданные до него, Способ обратно не приносят.
 func (db *DB) ClearAutorenewMethod(telegramID int64) error {
 	_, err := db.conn.Exec(
 		`UPDATE autorenewals
-		 SET payment_method_id = NULL, method_title = NULL, updated_at = CURRENT_TIMESTAMP
+		 SET payment_method_id = NULL, method_title = NULL, method_cleared_at = ?, updated_at = CURRENT_TIMESTAMP
 		 WHERE telegram_id = ?`,
-		telegramID,
+		time.Now().UTC(), telegramID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to clear autorenew method: %w", err)

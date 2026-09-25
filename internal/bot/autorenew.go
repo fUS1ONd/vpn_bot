@@ -25,11 +25,32 @@ func (b *Bot) shouldSavePaymentMethod(providerName string, isTest bool) bool {
 
 // rememberAutorenewMethod записывает Способ по сверенному ответу кассы.
 // Согласие при этом не включается.
+//
+// Сюда приходит каждый сверенный ответ, а не только первый: повторный вебхук,
+// сверка зависших и отменённых. Поэтому два фильтра:
+//   - только succeeded: отказ `card_expired` по-прежнему несёт saved=true, и
+//     сверка отменённого автосписания вернула бы мёртвую карту;
+//   - только платёж, созданный после последнего гашения Способа: иначе
+//     отвязанная карта вернулась бы с ответом по старому платежу сразу после
+//     «мы больше не храним его».
 func (b *Bot) rememberAutorenewMethod(payment *database.Payment, verified *paymentprovider.Payment) {
 	if !b.autorenewAvailable() || payment == nil || verified == nil {
 		return
 	}
-	if payment.IsTest || verified.SavedMethodID == "" {
+	if payment.IsTest || verified.SavedMethodID == "" || verified.Status != paymentprovider.StatusSucceeded {
+		return
+	}
+	renewal, err := b.db.GetAutorenewal(payment.TelegramID)
+	if err != nil {
+		slog.Error("Не удалось прочитать автопродление перед сохранением Способа",
+			"error", err, "telegram_id", payment.TelegramID, "payment_id", payment.ID)
+		return
+	}
+	// created_at платежа хранится с точностью до секунды: платёж той же секунды,
+	// что и гашение, считаем старым — лишний раз не вернуть карту дешевле.
+	if renewal != nil && renewal.MethodClearedAt != nil && !payment.CreatedAt.After(*renewal.MethodClearedAt) {
+		slog.Info("Способ из ответа по платежу старше его гашения не сохраняем",
+			"telegram_id", payment.TelegramID, "payment_id", payment.ID)
 		return
 	}
 	if err := b.db.SaveAutorenewMethod(payment.TelegramID, verified.SavedMethodID, verified.SavedMethodTitle); err != nil {

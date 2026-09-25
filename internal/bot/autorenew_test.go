@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
@@ -73,7 +74,7 @@ func TestRememberAutorenewMethodDoesNotEnableConsent(t *testing.T) {
 	b, db := autorenewTestBot(t, true)
 	payment := &database.Payment{ID: 1, TelegramID: 42, Amount: 400}
 
-	b.rememberAutorenewMethod(payment, &paymentprovider.Payment{SavedMethodID: "pm-1", SavedMethodTitle: "•••• 4242"})
+	b.rememberAutorenewMethod(payment, &paymentprovider.Payment{Status: paymentprovider.StatusSucceeded, SavedMethodID: "pm-1", SavedMethodTitle: "•••• 4242"})
 
 	a, err := db.GetAutorenewal(42)
 	require.NoError(t, err)
@@ -86,7 +87,7 @@ func TestRememberAutorenewMethodSkipsTestAndUnsaved(t *testing.T) {
 	b, db := autorenewTestBot(t, true)
 
 	b.rememberAutorenewMethod(&database.Payment{ID: 1, TelegramID: 43, IsTest: true},
-		&paymentprovider.Payment{SavedMethodID: "pm-1", SavedMethodTitle: "•••• 4242"})
+		&paymentprovider.Payment{Status: paymentprovider.StatusSucceeded, SavedMethodID: "pm-1", SavedMethodTitle: "•••• 4242"})
 	a, err := db.GetAutorenewal(43)
 	require.NoError(t, err)
 	require.Nil(t, a, "тестовый платёж админа способ не сохраняет")
@@ -101,22 +102,94 @@ func TestRememberAutorenewMethodSilentWhenDisabled(t *testing.T) {
 	b, db := autorenewTestBot(t, false)
 
 	b.rememberAutorenewMethod(&database.Payment{ID: 1, TelegramID: 45},
-		&paymentprovider.Payment{SavedMethodID: "pm-1", SavedMethodTitle: "•••• 4242"})
+		&paymentprovider.Payment{Status: paymentprovider.StatusSucceeded, SavedMethodID: "pm-1", SavedMethodTitle: "•••• 4242"})
 
 	a, err := db.GetAutorenewal(45)
 	require.NoError(t, err)
 	require.Nil(t, a)
 }
 
-// Сквозь вебхук: сверенный ответ кассы с сохранённым способом доезжает до БД.
-func TestYooKassaWebhookStoresSavedMethod(t *testing.T) {
-	b, db := autorenewTestBot(t, true)
-	externalID := "yo-saved"
-	_, err := db.CreatePayment(&database.Payment{
-		TelegramID: 55, Amount: 400, PaymentMethod: "yookassa", Status: "pending",
+func createYooKassaPayment(t *testing.T, db *database.DB, telegramID int64, externalID string) *database.Payment {
+	t.Helper()
+	id, err := db.CreatePayment(&database.Payment{
+		TelegramID: telegramID, Amount: 400, PaymentMethod: "yookassa", Status: "pending",
 		Provider: "yookassa", ProviderPaymentID: &externalID,
 	})
 	require.NoError(t, err)
+	payment, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+	return payment
+}
+
+func verifiedSaved(externalID, status string) *paymentprovider.Payment {
+	return &paymentprovider.Payment{
+		ID: externalID, Status: status, Amount: 400, Currency: "RUB", RecipientID: "shop-1",
+		SavedMethodID: "pm-55", SavedMethodTitle: "•••• 4242",
+	}
+}
+
+// Сверенный успешный ответ кассы с сохранённым способом доезжает до БД.
+func TestYooKassaVerifiedSucceededStoresSavedMethod(t *testing.T) {
+	b, db := autorenewTestBot(t, true)
+	payment := createYooKassaPayment(t, db, 55, "yo-saved")
+
+	require.NoError(t, b.verifyYooKassaPayment(payment, verifiedSaved("yo-saved", paymentprovider.StatusSucceeded)))
+
+	a, err := db.GetAutorenewal(55)
+	require.NoError(t, err)
+	require.NotNil(t, a)
+	require.Equal(t, "pm-55", *a.PaymentMethodID)
+	require.Equal(t, "•••• 4242", *a.MethodTitle)
+	require.False(t, a.Enabled)
+}
+
+// Способ, погашенный как мёртвый, не возвращается сверкой отклонённого
+// автосписания: касса и в отказе `card_expired` отдаёт saved=true.
+func TestCanceledPaymentDoesNotResurrectDeadMethod(t *testing.T) {
+	b, db := autorenewTestBot(t, true)
+	payment := createYooKassaPayment(t, db, 56, "yo-dead")
+	require.NoError(t, db.SaveAutorenewMethod(56, "pm-55", "•••• 4242"))
+	require.NoError(t, db.SetAutorenewEnabled(56, true))
+	require.NoError(t, db.ClearAutorenewMethod(56))
+
+	require.NoError(t, b.verifyYooKassaPayment(payment, verifiedSaved("yo-dead", paymentprovider.StatusCanceled)))
+
+	a, err := db.GetAutorenewal(56)
+	require.NoError(t, err)
+	require.False(t, a.HasMethod(), "мёртвая карта не должна вернуться и пойти в следующее списание")
+}
+
+// Отвязанный Способ не возвращается ответом по платежу, начатому до отвязки, —
+// ни ручному, оплаченному после, ни повторному вебхуку.
+func TestUnlinkedMethodNotRestoredByOlderPayment(t *testing.T) {
+	b, db := autorenewTestBot(t, true)
+	older := createYooKassaPayment(t, db, 57, "yo-older")
+	require.NoError(t, db.SaveAutorenewMethod(57, "pm-55", "•••• 4242"))
+	require.NoError(t, b.unlinkPaymentMethod(57))
+
+	require.NoError(t, b.verifyYooKassaPayment(older, verifiedSaved("yo-older", paymentprovider.StatusSucceeded)))
+
+	a, err := db.GetAutorenewal(57)
+	require.NoError(t, err)
+	require.False(t, a.HasMethod(), "после «мы больше не храним его» карта вернуться не должна")
+
+	// Новая оплата после отвязки — свежее согласие: Способ сохраняется.
+	newer := createYooKassaPayment(t, db, 57, "yo-newer")
+	newer.CreatedAt = time.Now().UTC().Add(time.Second)
+	require.NoError(t, b.verifyYooKassaPayment(newer, verifiedSaved("yo-newer", paymentprovider.StatusSucceeded)))
+
+	a, err = db.GetAutorenewal(57)
+	require.NoError(t, err)
+	require.True(t, a.HasMethod())
+	require.False(t, a.Enabled, "согласие отвязка погасила, новая оплата его не включает")
+}
+
+// Сквозь вебхук: отменённый платёж Способ не сохраняет — касса отдаёт его
+// только в успешном ответе.
+func TestYooKassaWebhookCanceledDoesNotStoreMethod(t *testing.T) {
+	b, db := autorenewTestBot(t, true)
+	externalID := "yo-saved"
+	createYooKassaPayment(t, db, 55, externalID)
 
 	client := yookassa.NewClientWithBaseURL("shop-1", "secret", "https://yookassa.test")
 	client.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -131,8 +204,5 @@ func TestYooKassaWebhookStoresSavedMethod(t *testing.T) {
 
 	a, err := db.GetAutorenewal(55)
 	require.NoError(t, err)
-	require.NotNil(t, a)
-	require.Equal(t, "pm-55", *a.PaymentMethodID)
-	require.Equal(t, "•••• 4242", *a.MethodTitle)
-	require.False(t, a.Enabled)
+	require.Nil(t, a)
 }

@@ -237,6 +237,17 @@ func (b *Bot) handleAutorenewEnable(c tele.Context) error {
 	return c.Respond(&tele.CallbackResponse{Text: "Автопродление включено"})
 }
 
+// disableAutorenew снимает согласие под мьютексом платежей. Списание проверяет
+// согласие под тем же мьютексом один раз, в начале: без него выключение,
+// нажатое пока идёт запрос к панели, ответило бы «выключено», а деньги всё
+// равно ушли бы.
+func (b *Bot) disableAutorenew(telegramID int64) error {
+	mu := getPaymentMutex(telegramID)
+	mu.Lock()
+	defer mu.Unlock()
+	return b.db.SetAutorenewEnabled(telegramID, false)
+}
+
 // handleAutorenewDisable выключает автопродление одним тапом: переспрашивать на
 // выключении — удерживающий паттерн. Способ остаётся, включить можно сразу.
 func (b *Bot) handleAutorenewDisable(c tele.Context) error {
@@ -245,7 +256,7 @@ func (b *Bot) handleAutorenewDisable(c tele.Context) error {
 	}
 	telegramID := c.Sender().ID
 
-	if err := b.db.SetAutorenewEnabled(telegramID, false); err != nil {
+	if err := b.disableAutorenew(telegramID); err != nil {
 		slog.Error("Не удалось выключить автопродление", "error", err, "telegram_id", telegramID)
 		return c.RespondAlert("Не удалось выключить автопродление. Попробуйте позже.")
 	}
@@ -380,7 +391,7 @@ func (b *Bot) handleAdminAutorenewDisable(c tele.Context) error {
 		return c.RespondAlert("Не удалось определить пользователя")
 	}
 
-	if err := b.db.SetAutorenewEnabled(targetID, false); err != nil {
+	if err := b.disableAutorenew(targetID); err != nil {
 		slog.Error("Админ: не удалось выключить автопродление", "error", err, "telegram_id", targetID)
 		return c.RespondAlert("Не удалось выключить автопродление")
 	}
