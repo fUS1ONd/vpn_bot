@@ -170,13 +170,14 @@ func setupAutorenewEdgeBotAt(t *testing.T, stub *arEdgeStub) (*Bot, *database.DB
 	return b, db, dbPath, capture
 }
 
-// agePendingPayments сдвигает срок жизни висящих платежей в прошлое.
+// agePendingPayments сдвигает висящие платежи на сутки с лишним в прошлое:
+// и срок ссылки, и момент создания, от которого сверка считает предел жизни.
 func agePendingPayments(t *testing.T, dbPath string) {
 	t.Helper()
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer conn.Close()
-	_, err = conn.Exec(`UPDATE payments SET expires_at = datetime('now', '-1 hour') WHERE status = 'pending'`)
+	_, err = conn.Exec(`UPDATE payments SET expires_at = datetime('now', '-1 hour'), created_at = datetime('now', '-25 hours') WHERE status = 'pending'`)
 	require.NoError(t, err)
 }
 
@@ -188,6 +189,38 @@ func edgeSucceededBody(id string) string {
 func edgePendingBody(id string) string {
 	return `{"id":"` + id + `","status":"pending","amount":{"value":"400.00","currency":"RUB"},
 		"recipient":{"account_id":"shop-1"},"payment_method":{"type":"bank_card","id":"pm-edge","saved":true,"card":{"last4":"4242"}}}`
+}
+
+// Автосписание зависло в pending, а позже касса его отменила — сверка зависших
+// платежей это находит. Отмену записываем, но «Платёж отменён, попробуйте
+// снова» человеку, который ничего не оплачивал, не пишем.
+func TestAutorenewCanceledByReconcileStaysSilent(t *testing.T) {
+	expireAt := time.Now().UTC().Add(6 * time.Hour)
+	stub := &arEdgeStub{
+		expireAt: expireAt,
+		responses: []string{
+			edgePendingBody("yo-edge-late-cancel"),
+			`{"id":"yo-edge-late-cancel","status":"canceled","amount":{"value":"400.00","currency":"RUB"},
+			  "recipient":{"account_id":"shop-1"},"cancellation_details":{"party":"payment_network","reason":"insufficient_funds"}}`,
+		},
+	}
+	b, db, capture := setupAutorenewEdgeBot(t, stub)
+
+	b.runAutorenewCharges(time.Now().UTC())
+	attempts, err := db.ListAutorenewAttempts(arEdgeUserID, expireAt)
+	require.NoError(t, err)
+	require.Len(t, attempts, 1)
+	require.NotNil(t, attempts[0].PaymentID)
+
+	b.reconcilePendingPayment(*attempts[0].PaymentID, time.Now().UTC(), "test")
+
+	canceled, err := db.GetPaymentByID(*attempts[0].PaymentID)
+	require.NoError(t, err)
+	require.Equal(t, "canceled", canceled.Status, "отмену кассы сверка переносит на платёж")
+	for _, m := range messagesTo(capture, arEdgeUserID) {
+		require.NotContains(t, m.Text, "Платёж отменён",
+			"человек ничего не оплачивал — предлагать ему попробовать снова нельзя")
+	}
 }
 
 // Касса списала в T−24ч, но активация упала: expireAt не сдвинулся, и попытка
@@ -323,10 +356,13 @@ func TestAutorenewSecondAttemptKeepsIdempotenceKeyOfUnresolvedFirst(t *testing.T
 	require.Len(t, attempts, 1)
 	require.Equal(t, database.AutorenewOutcomeUnknown, attempts[0].Outcome)
 
-	// Между попытками прошли сутки, и шаг протухания их заметил.
+	// Между попытками прошли сутки, и сверка закрыла запись: до кассы она так и
+	// не дошла, спрашивать провайдера не о чем.
 	agePendingPayments(t, dbPath)
-	_, err = db.ExpireOldPendingPayments()
+	b.reconcilePendingPayments(time.Now().UTC())
+	closed, err := db.GetPaymentByID(*attempts[0].PaymentID)
 	require.NoError(t, err)
+	require.Equal(t, "expired", closed.Status)
 
 	firstCalls := stub.callCount()
 	b.runAutorenewCharges(expireAt.Add(time.Minute))

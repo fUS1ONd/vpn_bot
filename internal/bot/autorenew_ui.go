@@ -240,6 +240,9 @@ func (b *Bot) handleAutorenewEnable(c tele.Context) error {
 // handleAutorenewDisable выключает автопродление одним тапом: переспрашивать на
 // выключении — удерживающий паттерн. Способ остаётся, включить можно сразу.
 func (b *Bot) handleAutorenewDisable(c tele.Context) error {
+	if !b.autorenewAvailable() {
+		return c.RespondAlert(autorenewOffAlert)
+	}
 	telegramID := c.Sender().ID
 
 	if err := b.db.SetAutorenewEnabled(telegramID, false); err != nil {
@@ -303,6 +306,11 @@ func (b *Bot) loadAutorenewView(telegramID int64) (autorenewView, bool) {
 	return b.autorenewViewFor(telegramID, remUser, dbUser), true
 }
 
+// autorenewOffAlert — ответ на старую кнопку из чата при выключенном рубильнике:
+// inline-кнопки живут вечно, а фича при AUTORENEW_ENABLED=false не должна ни
+// показывать экраны, ни писать в autorenewals.
+const autorenewOffAlert = "Автопродление недоступно"
+
 func autorenewUnavailableAlert(state autorenewCardState) string {
 	switch state {
 	case autorenewOn:
@@ -312,7 +320,7 @@ func autorenewUnavailableAlert(state autorenewCardState) string {
 	case autorenewExpired:
 		return "Продлите подписку — потом можно будет включить автопродление"
 	default:
-		return "Автопродление недоступно"
+		return autorenewOffAlert
 	}
 }
 
@@ -363,6 +371,9 @@ func adminAutorenewLine(view autorenewView) string {
 func (b *Bot) handleAdminAutorenewDisable(c tele.Context) error {
 	if c.Sender().ID != b.config.AdminID {
 		return c.RespondAlert("Недостаточно прав")
+	}
+	if !b.autorenewAvailable() {
+		return c.RespondAlert(autorenewOffAlert)
 	}
 	targetID, err := strconv.ParseInt(c.Data(), 10, 64)
 	if err != nil {

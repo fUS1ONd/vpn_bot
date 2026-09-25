@@ -550,6 +550,15 @@ func (h *paymentCallbackHandler) handleCanceled(payment *database.Payment) error
 	if superseded {
 		return nil
 	}
+	// Автосписание, зависшее в pending, касса может отменить позже — сверка это
+	// найдёт. «Попробуйте снова» человеку, который ничего не делал, не пишем:
+	// неизвестный исход автосписания молчит (Р11), о провале скажет штатное
+	// «подписка истекла».
+	if fromAutorenew, err := h.bot.db.IsAutorenewPayment(fresh.ID); err != nil {
+		slog.Warn("Не удалось определить происхождение отменённого платежа", "error", err, "payment_id", fresh.ID)
+	} else if fromAutorenew {
+		return nil
+	}
 	h.bot.userStates.DeleteIfOneOf(payment.TelegramID, StateWaitPaymentMethod, StateWaitPaymentResult)
 	_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, "❌ Платёж отменён. Вы можете попробовать снова.", h.bot.userKeyboard(payment.TelegramID))
 	return nil

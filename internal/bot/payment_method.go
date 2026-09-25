@@ -17,6 +17,9 @@ import (
 
 // handlePaymentMethod показывает сохранённый способ оплаты.
 func (b *Bot) handlePaymentMethod(c tele.Context) error {
+	if !b.autorenewAvailable() {
+		return c.RespondAlert(autorenewOffAlert)
+	}
 	telegramID := c.Sender().ID
 	view, ok := b.loadAutorenewView(telegramID)
 	if !ok {
@@ -50,6 +53,9 @@ func (b *Bot) paymentMethodScreen(v autorenewView) string {
 // handlePaymentMethodUnlink показывает подтверждение отвязки: какой именно
 // способ отвязывается и что при этом произойдёт.
 func (b *Bot) handlePaymentMethodUnlink(c tele.Context) error {
+	if !b.autorenewAvailable() {
+		return c.RespondAlert(autorenewOffAlert)
+	}
 	telegramID := c.Sender().ID
 	view, ok := b.loadAutorenewView(telegramID)
 	if !ok {
@@ -82,6 +88,9 @@ func (b *Bot) handlePaymentMethodUnlink(c tele.Context) error {
 // только при следующей ручной оплате — вместе со свежим согласием, которое
 // показывается на экране оплаты.
 func (b *Bot) handlePaymentMethodUnlinkConfirm(c tele.Context) error {
+	if !b.autorenewAvailable() {
+		return c.RespondAlert(autorenewOffAlert)
+	}
 	telegramID := c.Sender().ID
 
 	if err := b.db.SetAutorenewEnabled(telegramID, false); err != nil {
