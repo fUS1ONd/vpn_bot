@@ -67,6 +67,17 @@ type Config struct {
 	// обрабатывать, без ссылки — некуда звать.
 	CommunityChatID     int64  // Числовой ID супергруппы (обычно отрицательный, -100…)
 	CommunityInviteLink string // Постоянная инвайт-ссылка с одобрением заявок
+
+	// AutorenewEnabled гасит всё сразу: абзац согласия, save_payment_method,
+	// кнопки и шаг scheduler. Выключено по умолчанию — код выкатывается раньше,
+	// чем касса одобрит рекурренты.
+	AutorenewEnabled bool
+}
+
+// AutorenewingEnabled — включено ли автопродление. Одного флага мало:
+// автосписание возможно только через ЮKassa, по криптоплатежу не списать.
+func (c *Config) AutorenewingEnabled() bool {
+	return c != nil && c.AutorenewEnabled && c.YooKassaShopID != "" && c.YooKassaSecretKey != ""
 }
 
 // CommunityEnabled сообщает, подключён ли Канал. Без обеих переменных бот
@@ -120,6 +131,7 @@ func Load() (*Config, error) {
 		MoynalogServiceName:      getEnvOrDefault("MOYNALOG_SERVICE_NAME", "Sarvizza - Подписка на месяц"),
 		CommunityChatID:          getOptionalInt64("COMMUNITY_CHAT_ID"),
 		CommunityInviteLink:      strings.TrimSpace(os.Getenv("COMMUNITY_INVITE_LINK")),
+		AutorenewEnabled:         getEnvBool("AUTORENEW_ENABLED"),
 	}
 
 	// Парсинг AdminID
@@ -157,6 +169,15 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// getEnvBool: всё, кроме явного «включено», выключает функцию.
+func getEnvBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func getDefaultSubscriptionPrice() int {

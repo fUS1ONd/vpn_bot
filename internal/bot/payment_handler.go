@@ -62,9 +62,11 @@ func (b *Bot) handlePayButton(c tele.Context) error {
 	// Показываем экран выбора способа оплаты
 	b.userStates.Set(telegramID, StateWaitPaymentMethod)
 	msg := fmt.Sprintf("💳 <b>Подписка на 1 месяц — %d руб.</b>\n\nВыберите способ оплаты:", price)
+	msg += b.autorenewConsentNote()
 	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: b.paymentMethodKeyboard(),
+		ParseMode:             tele.ModeHTML,
+		ReplyMarkup:           b.paymentMethodKeyboard(),
+		DisableWebPagePreview: true,
 	})
 }
 
@@ -119,9 +121,12 @@ func (b *Bot) handleCheckPayment(c tele.Context) error {
 	switch status {
 	case "confirmed":
 		b.userStates.Delete(telegramID)
+		// Разметка выбирается тем же хелпером, что и на пути вебхука: путей к
+		// сообщению об успешной оплате два, и расходиться они не должны — в
+		// частности, тестовый платёж админа автопродление не предлагает.
 		return c.Send(b.paymentActivatedMessage(telegramID), &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: b.userKeyboard(telegramID),
+			ReplyMarkup: b.paymentSuccessMarkupFor(telegramID, b.isTestPaymentUser(telegramID)),
 		})
 	case "confirmed_not_activated":
 		b.userStates.Delete(telegramID)
