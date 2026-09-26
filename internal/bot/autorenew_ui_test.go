@@ -260,3 +260,37 @@ func TestAutorenewTermsWarnAboutImminentCharge(t *testing.T) {
 	}
 	require.NotContains(t, b.autorenewTermsText(later), "ближайшие полчаса")
 }
+
+// Выключение с экрана карточки перерисовывает саму карточку и запоминает её, а
+// из сообщения об автосписании — нет: иначе следующее «👤 Моя подписка» удалило
+// бы из чата сообщение о списании денег.
+func TestAutorenewDisableTracksCardOnlyFromCard(t *testing.T) {
+	cases := []struct {
+		name      string
+		data      string
+		wantTrack bool
+	}{
+		{"из карточки", autorenewDisableFromCard, true},
+		{"из сообщения об автосписании", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, db := autorenewTestBot(t, true)
+			require.NoError(t, db.SetAutorenewEnabled(42, true))
+			ctx := &MockContext{
+				sender:   &tele.User{ID: 42},
+				message:  &tele.Message{ID: 7},
+				callback: &tele.Callback{Data: tc.data},
+			}
+
+			require.NoError(t, b.handleAutorenewDisable(ctx))
+
+			require.NotNil(t, ctx.editedMsg, "экран перерисован на месте")
+			id, tracked := b.subCards.get(42)
+			require.Equal(t, tc.wantTrack, tracked)
+			if tc.wantTrack {
+				require.Equal(t, 7, id)
+			}
+		})
+	}
+}

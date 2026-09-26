@@ -190,7 +190,7 @@ func (b *Bot) handleAutorenewOpen(c tele.Context) error {
 		return c.RespondAlert("Автопродление недоступно")
 	}
 
-	if err := editWithInlineFallback(c, b.autorenewScreen(view), AutorenewScreenKeyboard(view)); err != nil {
+	if err := b.editCardInPlace(c, b.autorenewScreen(view), AutorenewScreenKeyboard(view)); err != nil {
 		slog.Error("Не удалось показать экран автопродления", "error", err, "telegram_id", telegramID)
 	}
 	return c.Respond()
@@ -231,7 +231,7 @@ func (b *Bot) handleAutorenewEnable(c tele.Context) error {
 	}
 
 	view.state = autorenewOn
-	if err := editWithInlineFallback(c, b.autorenewScreen(view), AutorenewScreenKeyboard(view)); err != nil {
+	if err := b.editCardInPlace(c, b.autorenewScreen(view), AutorenewScreenKeyboard(view)); err != nil {
 		slog.Error("Не удалось перерисовать экран автопродления", "error", err, "telegram_id", telegramID)
 	}
 	return c.Respond(&tele.CallbackResponse{Text: "Автопродление включено"})
@@ -271,7 +271,11 @@ func (b *Bot) handleAutorenewDisable(c tele.Context) error {
 			msg = b.autorenewScreen(view) + "\n\n<i>Автопродление выключено. Дальше продлевать нужно вручную.</i>"
 		}
 	}
-	if err := editWithInlineFallback(c, msg, markup); err != nil {
+	edit := editWithInlineFallback
+	if c.Data() == autorenewDisableFromCard {
+		edit = b.editCardInPlace
+	}
+	if err := edit(c, msg, markup); err != nil {
 		slog.Error("Не удалось перерисовать экран после выключения", "error", err, "telegram_id", telegramID)
 	}
 	return c.Respond(&tele.CallbackResponse{Text: "Автопродление выключено"})

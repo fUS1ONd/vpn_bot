@@ -121,6 +121,21 @@ func sendWithInlineFallback(c tele.Context, msg string, markup *tele.ReplyMarkup
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
+// editWithInlineFallback — версия sendWithInlineFallback для редактирования
+// сообщений, которые карточкой не являются (например, сообщения об оплате):
+// в отличие от editCardInPlace, сообщение не запоминается как карточка, иначе
+// следующее «👤 Моя подписка» удалило бы его из чата.
+func editWithInlineFallback(c tele.Context, msg string, markup *tele.ReplyMarkup) error {
+	err := c.Edit(msg, &tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: markup})
+	if err == nil {
+		return nil
+	}
+
+	slog.Warn("Failed to edit message, sending new one",
+		"error", err, "telegram_id", c.Sender().ID)
+	return sendWithInlineFallback(c, msg, markup)
+}
+
 // handleSubscriptionCard перерисовывает карточку подписки в текущем сообщении.
 // Используется как возврат из экрана устройств и при отмене перевыпуска.
 func (b *Bot) handleSubscriptionCard(c tele.Context) error {

@@ -27,7 +27,7 @@ func (b *Bot) handlePaymentMethod(c tele.Context) error {
 	}
 
 	hasMethod := view.methodTitle != ""
-	if err := editWithInlineFallback(c, b.paymentMethodScreen(view), SavedMethodKeyboard(hasMethod)); err != nil {
+	if err := b.editCardInPlace(c, b.paymentMethodScreen(view), SavedMethodKeyboard(hasMethod)); err != nil {
 		slog.Error("Не удалось показать экран способа оплаты", "error", err, "telegram_id", telegramID)
 	}
 	return c.Respond()
@@ -75,7 +75,7 @@ func (b *Bot) handlePaymentMethodUnlink(c tele.Context) error {
 			"Дальше подписку нужно будет продлевать вручную.", view.expireAt.Format("02.01.2006"))
 	}
 
-	if err := editWithInlineFallback(c, msg, SavedMethodUnlinkKeyboard()); err != nil {
+	if err := b.editCardInPlace(c, msg, SavedMethodUnlinkKeyboard()); err != nil {
 		slog.Error("Не удалось показать подтверждение отвязки", "error", err, "telegram_id", telegramID)
 	}
 	return c.Respond()
@@ -102,7 +102,7 @@ func (b *Bot) handlePaymentMethodUnlinkConfirm(c tele.Context) error {
 	msg := "<b>💳 Способ оплаты отвязан</b>\n\n" +
 		"Мы больше не храним его, автопродление выключено. " +
 		"Продлевать подписку теперь нужно вручную."
-	if err := editWithInlineFallback(c, msg, SavedMethodKeyboard(false)); err != nil {
+	if err := b.editCardInPlace(c, msg, SavedMethodKeyboard(false)); err != nil {
 		slog.Error("Не удалось перерисовать экран после отвязки", "error", err, "telegram_id", telegramID)
 	}
 	return c.Respond(&tele.CallbackResponse{Text: "Способ оплаты отвязан"})

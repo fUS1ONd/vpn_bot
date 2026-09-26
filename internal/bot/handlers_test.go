@@ -84,6 +84,14 @@ func (c *MockContext) Edit(what any, opts ...any) error {
 	return nil
 }
 
+// Data возвращает payload callback-кнопки (пусто для текстовых сообщений).
+func (c *MockContext) Data() string {
+	if c.callback == nil {
+		return ""
+	}
+	return c.callback.Data
+}
+
 // Callback возвращает callback-запрос апдейта (nil для текстовых сообщений).
 func (c *MockContext) Callback() *tele.Callback {
 	return c.callback
