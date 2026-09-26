@@ -34,6 +34,8 @@ type MockContext struct {
 	callback    *tele.Callback
 	respondText string
 	editErr     error
+	deleted     bool
+	deleteErr   error
 	query       *tele.Query
 	queryAnswer *tele.QueryResponse
 }
@@ -81,6 +83,15 @@ func (c *MockContext) Edit(what any, opts ...any) error {
 	}
 	c.editedMsg = what
 	c.editedOpts = opts
+	return nil
+}
+
+// Delete имитирует удаление сообщения, из которого пришёл callback.
+func (c *MockContext) Delete() error {
+	if c.deleteErr != nil {
+		return c.deleteErr
+	}
+	c.deleted = true
 	return nil
 }
 

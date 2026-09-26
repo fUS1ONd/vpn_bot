@@ -337,3 +337,50 @@ func TestStaleScreenTapsKeepLiveScreenTracked(t *testing.T) {
 	require.True(t, tracked)
 	assert.Equal(t, liveMessageID, messageID)
 }
+
+// Оплата, принятая вебхуком или сверкой, удаляет экран ожидания: об оплате
+// скажет итоговое сообщение, и второе в чате было бы дублем.
+func TestPaidPaymentDeletesItsScreen(t *testing.T) {
+	stub := &arEdgeStub{expireAt: time.Now().UTC().Add(10 * 24 * time.Hour)}
+	b, db, _ := setupAutorenewEdgeBot(t, stub)
+	id := createScreenPayment(t, db, "pending", nil)
+	payment, err := db.GetPaymentByID(id)
+	require.NoError(t, err)
+
+	var deleted []int
+	var edits []string
+	b.deletePaymentScreen = func(chatID int64, messageID int) error {
+		assert.Equal(t, arEdgeUserID, chatID)
+		deleted = append(deleted, messageID)
+		return nil
+	}
+	b.editPaymentScreen = func(_ int64, _ int, text string) error {
+		edits = append(edits, text)
+		return nil
+	}
+
+	b.paymentScreens.set(arEdgeUserID, id, payScreenMessageID)
+	b.dropPaymentScreen(payment)
+	assert.Equal(t, []int{payScreenMessageID}, deleted)
+	assert.Empty(t, edits)
+
+	// Не удалилось — экран хотя бы теряет кнопки по закрытому платежу.
+	b.deletePaymentScreen = func(int64, int) error { return assert.AnError }
+	b.paymentScreens.set(arEdgeUserID, id, payScreenMessageID)
+	b.dropPaymentScreen(payment)
+	assert.Equal(t, []string{paymentScreenPaidText}, edits)
+}
+
+// Экран под пальцем уже убран (вебхук успел раньше): удалить и поправить его
+// нельзя, и итог новым сообщением при этом не дублируется.
+func TestDropScreenUnderGoneMessageSendsNothing(t *testing.T) {
+	stub := &arEdgeStub{expireAt: time.Now().UTC().Add(10 * 24 * time.Hour)}
+	b, _, _ := setupAutorenewEdgeBot(t, stub)
+
+	ctx := payScreenCallback("")
+	ctx.deleteErr = assert.AnError
+	ctx.editErr = assert.AnError
+	b.dropScreenUnder(ctx)
+
+	assert.Empty(t, ctx.sentMsgs)
+}

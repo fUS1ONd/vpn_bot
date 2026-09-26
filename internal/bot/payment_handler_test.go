@@ -351,7 +351,7 @@ func TestHandleCheckPaymentReturnsDetailedSuccessMessage(t *testing.T) {
 		}),
 	})
 
-	// «Я оплатил» на платёжном экране: экран гасится, итог приходит отдельным
+	// «Я оплатил» на платёжном экране: экран удаляется, итог приходит одним
 	// сообщением вместе с обновлённой reply-клавиатурой.
 	ctx := &MockContext{
 		sender:   &tele.User{ID: userID},
@@ -369,7 +369,8 @@ func TestHandleCheckPaymentReturnsDetailedSuccessMessage(t *testing.T) {
 	assert.Contains(t, msg, "Лимит трафика снят")
 	assert.NotContains(t, msg, "Подписка активирована.")
 	assert.Len(t, ctx.sentMsgs, 1)
-	assert.Equal(t, paymentScreenPaidText, ctx.editedMsg)
+	assert.True(t, ctx.deleted, "экран удаляется: второе сообщение об оплате было бы дублем")
+	assert.Nil(t, ctx.editedMsg)
 	assert.True(t, ctx.responded)
 
 	stored, err := db.GetPaymentByID(paymentID)

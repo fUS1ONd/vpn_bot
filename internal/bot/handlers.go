@@ -74,6 +74,7 @@ type Bot struct {
 	deleteUserMessage           func(c tele.Context, messageID int) error            // шов удаления прежней карточки
 	paymentScreens              paymentScreenTracker                                 // сообщение с ожиданием оплаты по платежу на пользователя
 	editPaymentScreen           func(chatID int64, messageID int, text string) error // шов правки платёжного экрана из вебхука
+	deletePaymentScreen         func(chatID int64, messageID int) error              // шов удаления платёжного экрана из вебхука
 	communityDeclineMu          sync.Mutex                                           // Делает «проверить кулдаун и занять его» одной операцией
 	communityDeclineCooldown    sync.Map                                             // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
 	communityMentionMu          sync.Mutex                                           // Делает «прочитать кулдаун приписки и занять его» одной операцией
@@ -131,6 +132,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	bot.deleteCardMessage = newCardDeleter(b)
 	bot.deleteUserMessage = newUserMessageDeleter(b)
 	bot.editPaymentScreen = newPaymentScreenEditor(b)
+	bot.deletePaymentScreen = newPaymentScreenDeleter(b)
 	bot.chatMemberOf = func(chatID, userID int64) (*tele.ChatMember, error) {
 		return b.ChatMemberOf(&tele.Chat{ID: chatID}, &tele.User{ID: userID})
 	}

@@ -287,8 +287,8 @@ func (b *Bot) paymentActivatedMessage(telegramID int64) string {
 
 func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Payment, notifyUser bool) {
 	// Экран ожидания оплаты больше не нужен: кнопки «Оплатить» и «Я оплатил»
-	// под ним относились бы к закрытому платежу.
-	h.bot.retirePaymentScreen(payment, paymentScreenPaidText)
+	// под ним относились бы к закрытому платежу, а об оплате скажет итог.
+	h.bot.dropPaymentScreen(payment)
 
 	if notifyUser {
 		_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, h.bot.paymentConfirmationMessage(payment), h.bot.paymentSuccessMarkup(payment))

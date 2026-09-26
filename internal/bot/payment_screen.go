@@ -89,6 +89,16 @@ func newPaymentScreenEditor(api *tele.Bot) func(chatID int64, messageID int, tex
 	}
 }
 
+// newPaymentScreenDeleter — шов удаления платёжного экрана вне контекста апдейта.
+func newPaymentScreenDeleter(api *tele.Bot) func(chatID int64, messageID int) error {
+	return func(chatID int64, messageID int) error {
+		return api.Delete(&tele.StoredMessage{
+			MessageID: strconv.Itoa(messageID),
+			ChatID:    chatID,
+		})
+	}
+}
+
 const (
 	paymentScreenPaidText     = "✅ Оплата получена."
 	paymentScreenCanceledText = "❌ Платёж отменён. Вы можете попробовать снова."
@@ -109,6 +119,49 @@ func (b *Bot) retirePaymentScreen(payment *database.Payment, text string) bool {
 		return false
 	}
 	return true
+}
+
+// dropPaymentScreen убирает экран ожидания оплаченного платежа. Экран
+// удаляется, а не правится: следом приходит сообщение об оплате, и два
+// сообщения об одном событии в чате — дубль. Итог нельзя написать в сам экран:
+// только новое сообщение обновляет reply-клавиатуру («Оплатить» → «Продлить»).
+// Не удалилось — экран хотя бы теряет кнопки по закрытому платежу.
+func (b *Bot) dropPaymentScreen(payment *database.Payment) {
+	messageID, ok := b.paymentScreens.take(payment.TelegramID, payment.ID)
+	if !ok {
+		return
+	}
+	if b.deletePaymentScreen != nil {
+		err := b.deletePaymentScreen(payment.TelegramID, messageID)
+		if err == nil {
+			return
+		}
+		slog.Warn("Не удалось удалить платёжный экран, снимаем с него кнопки",
+			"error", err, "telegram_id", payment.TelegramID, "payment_id", payment.ID)
+	}
+	if b.editPaymentScreen == nil {
+		return
+	}
+	if err := b.editPaymentScreen(payment.TelegramID, messageID, paymentScreenPaidText); err != nil &&
+		!errors.Is(err, tele.ErrSameMessageContent) {
+		slog.Warn("Не удалось закрыть платёжный экран",
+			"error", err, "telegram_id", payment.TelegramID, "payment_id", payment.ID)
+	}
+}
+
+// dropScreenUnder — то же для экрана под пальцем («Я оплатил»). Новым
+// сообщением итог здесь не дублируется: экран мог уже убрать вебхук или
+// подтверждение, прошедшее в этой же проверке, и тогда ни удалить, ни
+// поправить его нельзя — и не нужно.
+func (b *Bot) dropScreenUnder(c tele.Context) {
+	b.forgetScreenUnder(c)
+	if err := c.Delete(); err == nil {
+		return
+	}
+	if err := c.Edit(paymentScreenPaidText, &tele.SendOptions{ParseMode: tele.ModeHTML}); err != nil &&
+		!errors.Is(err, tele.ErrSameMessageContent) {
+		slog.Warn("Не удалось закрыть платёжный экран", "error", err, "telegram_id", c.Sender().ID)
+	}
 }
 
 // moscowLocation — часовой пояс, в котором пользователю называется время.
