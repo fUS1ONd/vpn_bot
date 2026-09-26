@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,7 +46,8 @@ func onlyNotice(t *testing.T, capture *telegramCapture, substr string) sentMessa
 	return found[0]
 }
 
-// payOpenData — callback_data кнопки, открывающей экран оплаты.
+// payOpenData — callback_data кнопки, открывающей экран оплаты: telebot
+// кодирует Unique как "\f<unique>".
 const payOpenData = "\f" + cbPayOpen
 
 var edgeRef = remnawave.UserRef{UUID: "uuid-edge"}
@@ -92,6 +94,36 @@ func TestExpiredNoticeCarriesPayButtonWithAutorenewConsent(t *testing.T) {
 
 	msg := onlyNotice(t, capture, "Ваша подписка истекла")
 	assert.Equal(t, []sentButton{{Text: "💳 Продлить за 400 ₽", Data: payOpenData}}, sentButtons(t, msg))
+}
+
+// Автосписание цикла не прошло — предупреждения возвращаются, и с кнопкой.
+func TestExpiryNoticeAfterFailedAutorenewCarriesPayButton(t *testing.T) {
+	expireAt := time.Now().UTC().Add(12 * time.Hour)
+	b, db, capture := setupAutorenewEdgeBot(t, &arEdgeStub{expireAt: expireAt})
+	require.True(t, b.autorenewSuppressesExpiryNotice(arEdgeUserID, expireAt))
+	require.NoError(t, db.RecordAutorenewAttempt(&database.AutorenewAttempt{
+		TelegramID: arEdgeUserID, ExpireAt: expireAt, AttemptNo: 1, Outcome: database.AutorenewOutcomeDeclined,
+	}))
+	require.False(t, b.autorenewSuppressesExpiryNotice(arEdgeUserID, expireAt))
+
+	b.processPaidUser(arEdgeUserID, edgeRef, expireAt, time.Now().UTC())
+
+	msg := onlyNotice(t, capture, "менее чем через 24 часа")
+	assert.Equal(t, []sentButton{{Text: "💳 Продлить за 400 ₽", Data: payOpenData}}, sentButtons(t, msg))
+}
+
+// Режим обслуживания скрывает оплату — и под уведомлением тоже.
+func TestRenewNoticeInMaintenanceHasNoButton(t *testing.T) {
+	expireAt := time.Now().UTC().Add(60 * time.Hour)
+	b, db, capture := setupAutorenewEdgeBot(t, &arEdgeStub{expireAt: expireAt})
+	require.NoError(t, db.SetAutorenewEnabled(arEdgeUserID, false))
+	b.setMaintenanceMode(true)
+
+	b.processPaidUser(arEdgeUserID, edgeRef, expireAt, time.Now().UTC())
+
+	msg := onlyNotice(t, capture, "заканчивается через 3 дня")
+	assert.Empty(t, sentButtons(t, msg))
+	assert.Contains(t, msg.Text, "Нажмите", "без кнопки — прежний текст")
 }
 
 func TestTrialNoticeCarriesPayButton(t *testing.T) {

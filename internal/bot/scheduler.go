@@ -148,7 +148,7 @@ func (b *Bot) processTrialUser(telegramID int64, ref remnawave.UserRef, expireAt
 	// За 1 день до конца триала
 	if notificationWindow(now, expireAt, 0, 24*time.Hour) {
 		msg := "⏳ Ваш пробный период заканчивается менее чем через 24 часа.\n\nОплатите подписку, чтобы сохранить доступ к VPN."
-		b.sendPayNotification(telegramID, notificationTrialExpire1d, "💳 Оплатить подписку — %d ₽", msg, msg)
+		b.sendPayNotification(telegramID, notificationTrialExpire1d, trialPayButtonLabel, msg, msg)
 	}
 
 	// Триал истёк — кик
@@ -314,8 +314,11 @@ func (b *Bot) retryConfirmedNotActivated() {
 	}
 }
 
-// renewButtonLabel — подпись кнопки оплаты под уведомлениями оплаченной подписки.
-const renewButtonLabel = "💳 Продлить за %d ₽"
+// Форматы подписи кнопки оплаты под уведомлениями, %d — цена.
+const (
+	renewButtonLabel    = "💳 Продлить за %d ₽"
+	trialPayButtonLabel = "💳 Оплатить подписку — %d ₽"
+)
 
 // sendNotification отправляет уведомление, если оно ещё не было отправлено
 func (b *Bot) sendNotification(telegramID int64, notificationType, message string) {
@@ -336,11 +339,16 @@ func (b *Bot) sendPayNotification(telegramID int64, notificationType, label, wit
 	})
 }
 
-// payOpenMarkup собирает кнопку оплаты или nil, если оплатить нечем. Цена
-// здесь только для подписи: нажатие открывает живой экран, который заново
-// проверяет цену, режим обслуживания и предел 90 дней.
+// payOpenMarkup собирает кнопку оплаты или nil, если оплатить нечем. Условия
+// те же, при которых оплата видна в меню (userKeyboard). Цена здесь только для
+// подписи: нажатие открывает живой экран, который заново проверяет цену, режим
+// обслуживания и предел 90 дней.
 func (b *Bot) payOpenMarkup(telegramID int64, label string) *tele.ReplyMarkup {
 	if b.platega == nil && b.yookassa == nil {
+		return nil
+	}
+	// Режим обслуживания скрывает оплату (CLAUDE.md, п. 7).
+	if b.isMaintenanceMode() {
 		return nil
 	}
 	user, err := b.db.GetUserByTelegramID(telegramID)
