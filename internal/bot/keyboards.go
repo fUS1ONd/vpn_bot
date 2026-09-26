@@ -3,10 +3,12 @@ package bot
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 
 	tele "gopkg.in/telebot.v3"
 
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
 
@@ -37,6 +39,21 @@ const (
 	cbPaymentMethod        = "pm_open"    // экран сохранённого способа оплаты
 	cbPaymentMethodUnlink  = "pm_unlink"  // запрос отвязки способа
 	cbPaymentMethodConfirm = "pm_unlink_ok"
+)
+
+// Unique-идентификаторы inline-кнопок платёжного экрана
+const (
+	cbPayMethod = "pay_method" // выбор способа оплаты (Data = провайдер)
+	cbPayCheck  = "pay_check"  // «Я оплатил» — ручная проверка оплаты
+	cbPayCancel = "pay_cancel" // отмена (Data = id платежа или пусто на шаге выбора способа)
+	cbPayOpen   = "pay_open"   // открыть экран оплаты из уведомления планировщика
+)
+
+// Unique-идентификаторы inline-кнопок «Повторить» в сообщениях об ошибке
+const (
+	cbRetryPayment      = "retry_pay"       // повторить создание платежа тем же способом
+	cbRetryPaymentCheck = "retry_pay_check" // повторить проверку оплаты
+	cbRetryInvite       = "retry_invite"    // повторить создание приглашения
 )
 
 // Unique-идентификаторы inline-кнопок багрепорта
@@ -84,7 +101,8 @@ const (
 	BtnRenew        = "💳 Продлить подписку"
 	BtnPayYooKassa  = "⚡ Карта / СБП / SberPay"
 	BtnPayCrypto    = "🪙 Крипта"
-	BtnCheckPayment = "🔄 Проверить оплату"
+	BtnCheckPayment = "🔄 Проверить оплату" // reply-кнопка старого флоу: живёт в истории чатов
+	BtnPaidCheck    = "🔄 Я оплатил"
 
 	// Кнопка серверов (мониторинг)
 	BtnServers = "📡 Серверы"
@@ -117,6 +135,7 @@ const (
 	BtnInviteCreate = "📨 Создать приглашение"
 	BtnInviteList   = "📋 Мои приглашения"
 	BtnInviteBack   = "🔙 В меню"
+	BtnInviteShare  = "📤 Поделиться"
 
 	// Админ-кнопки статистики приглашений
 	BtnAdminReferrals        = "🤝 Приглашения"
@@ -162,9 +181,10 @@ func ReferralInvitesKeyboard(invites []database.Invite, page int, hasNext bool) 
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
 	for _, invite := range invites {
+		share := ReferralShareButton(invite.Code)
 		resend := menu.Data("📨 "+invite.Code, cbReferralResend, invite.Code)
 		revoke := menu.Data("🗑 Отозвать", cbReferralRevoke, invite.Code)
-		rows = append(rows, menu.Row(resend, revoke))
+		rows = append(rows, menu.Row(share, resend, revoke))
 	}
 	var nav tele.Row
 	if page > 0 {
@@ -178,6 +198,20 @@ func ReferralInvitesKeyboard(invites []database.Invite, page int, hasNext bool) 
 	}
 	rows = append(rows, menu.Row(menu.Data("🔙 Закрыть", cbReferralBack)))
 	menu.Inline(rows...)
+	return menu
+}
+
+// ReferralShareButton — кнопка «Поделиться»: открывает нативный выбор чата и
+// подставляет туда inline-запрос с кодом. Сообщение уходит не по нажатию кнопки,
+// а по выбору карточки, которую отдаёт handleReferralShareQuery.
+func ReferralShareButton(code string) tele.Btn {
+	return tele.Btn{Text: BtnInviteShare, InlineQuery: code}
+}
+
+// ReferralShareKeyboard — одна кнопка «Поделиться» под сообщением с приглашением.
+func ReferralShareKeyboard(code string) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(menu.Row(ReferralShareButton(code)))
 	return menu
 }
 
@@ -312,27 +346,45 @@ func ConfirmKeyboard() *tele.ReplyMarkup {
 	return menu
 }
 
-// PaymentMethodKeyboard возвращает меню выбора способа оплаты
+// PaymentMethodKeyboard — inline-кнопки шага выбора способа оплаты.
+// Показываются только способы, для которых настроен клиент кассы.
 func PaymentMethodKeyboard(hasYooKassa, hasPlatega bool) *tele.ReplyMarkup {
-	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
 	if hasYooKassa {
-		rows = append(rows, menu.Row(menu.Text(BtnPayYooKassa)))
+		rows = append(rows, menu.Row(menu.Data(BtnPayYooKassa, cbPayMethod, paymentprovider.YooKassa)))
 	}
 	if hasPlatega {
-		rows = append(rows, menu.Row(menu.Text(BtnPayCrypto)))
+		rows = append(rows, menu.Row(menu.Data(BtnPayCrypto, cbPayMethod, paymentprovider.Platega)))
 	}
-	rows = append(rows, menu.Row(menu.Text(BtnCancel)))
-	menu.Reply(rows...)
+	rows = append(rows, menu.Row(menu.Data(BtnCancel, cbPayCancel)))
+	menu.Inline(rows...)
 	return menu
 }
 
-// PaymentWaitKeyboard возвращает меню ожидания оплаты
-func PaymentWaitKeyboard() *tele.ReplyMarkup {
-	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
-		menu.Row(menu.Text(BtnCheckPayment), menu.Text(BtnCancel)),
+// PayOpenKeyboard — одна кнопка, открывающая экран оплаты. Сумма в подписи
+// справочная: экран при нажатии пересчитывает цену и способы заново.
+func PayOpenKeyboard(label string) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(menu.Row(menu.Data(label, cbPayOpen)))
+	return menu
+}
+
+// PaymentWaitKeyboard — inline-кнопки шага ожидания оплаты. URL-кнопка
+// ставится только на валидную ссылку: битый URL Telegram отвергает вместе со
+// всем сообщением, и тогда ссылка уходит в текст экрана.
+func PaymentWaitKeyboard(payURL string, amount int, paymentID int64) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+	if isValidSubscriptionURL(payURL) {
+		rows = append(rows, menu.Row(menu.URL(fmt.Sprintf("💳 Оплатить %d ₽", amount), payURL)))
+	}
+	id := strconv.FormatInt(paymentID, 10)
+	rows = append(rows,
+		menu.Row(menu.Data(BtnPaidCheck, cbPayCheck, id)),
+		menu.Row(menu.Data(BtnCancel, cbPayCancel, id)),
 	)
+	menu.Inline(rows...)
 	return menu
 }
 
@@ -513,14 +565,14 @@ func deviceLabel(d remnawave.HwidDevice) string {
 	return truncateDeviceLabel(label)
 }
 
-// DevicesManagementKeyboard — список устройств как inline-кнопки (нажатие = удаление),
+// DevicesManagementKeyboard — список устройств как inline-кнопки (нажатие = отвязка),
 // плюс «Сбросить все» (если есть устройства) и «Закрыть».
 func DevicesManagementKeyboard(devices []remnawave.HwidDevice) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
 
 	for i, d := range devices {
-		btn := menu.Data("🔄 "+deviceLabel(d), cbDeviceDelete, fmt.Sprintf("%d", i))
+		btn := menu.Data("🗑 "+deviceLabel(d), cbDeviceDelete, fmt.Sprintf("%d", i))
 		rows = append(rows, menu.Row(btn))
 	}
 

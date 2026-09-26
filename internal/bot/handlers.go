@@ -56,24 +56,31 @@ type Bot struct {
 	adminPriceMu                sync.RWMutex
 	adminPriceData              map[int64]adminChangePriceSession // pending-данные изменения цены для админа
 	bugReportMu                 sync.RWMutex
-	bugReportData               map[int64]bugReportSession // pending-данные багрепорта
-	bugReportCooldown           sync.Map                   // telegram_id -> time.Time последней отправки
-	adminExtendCooldown         sync.Map                   // telegram_id -> time.Time последнего продления (защита от дабл-клика)
-	unmatchedEventReported      sync.Map                   // object_id -> struct{}, чтобы повторные доставки не спамили владельца
-	ignoredConfirmationReported sync.Map                   // payment_id -> struct{}, одна жалоба на непринятую оплату
-	revivedPaymentReported      sync.Map                   // payment_id -> struct{}, одно сообщение о воскрешённом платеже
-	receiptsInFlight            sync.WaitGroup             // Запущенные пробития чеков — чтобы дождаться их при остановке
-	receiptsStopMu              sync.RWMutex               // Закрывает приём новых пробитий, чтобы Add не гонялся с Wait
-	receiptsStopped             bool                       // true после Stop(): новые пробития не начинаем
-	receiptAuthBlocked          atomic.Bool                // Кабинет не принял вход — проход по чекам прерывается до следующего раза
-	receiptAlerted              sync.Map                   // ключ алерта по чекам -> struct{}, защита от повторов
-	subRevokeCooldown           sync.Map                   // telegram_id -> time.Time последнего перевыпуска ссылки
-	communityDeclineMu          sync.Mutex                 // Делает «проверить кулдаун и занять его» одной операцией
-	communityDeclineCooldown    sync.Map                   // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
-	communityMentionMu          sync.Mutex                 // Делает «прочитать кулдаун приписки и занять его» одной операцией
-	communityPendingAlerted     sync.Map                   // telegram_id -> struct{}, защита от потока алертов о зависших заявках
-	chatMemberOf                chatMemberFunc             // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
-	panelAuthAlerted            sync.Map                   // ключ алерта про токен панели -> struct{}, защита от повторов
+	bugReportData               map[int64]bugReportSession                                              // pending-данные багрепорта
+	bugReportCooldown           sync.Map                                                                // telegram_id -> time.Time последней отправки
+	adminExtendCooldown         sync.Map                                                                // telegram_id -> time.Time последнего продления (защита от дабл-клика)
+	unmatchedEventReported      sync.Map                                                                // object_id -> struct{}, чтобы повторные доставки не спамили владельца
+	ignoredConfirmationReported sync.Map                                                                // payment_id -> struct{}, одна жалоба на непринятую оплату
+	revivedPaymentReported      sync.Map                                                                // payment_id -> struct{}, одно сообщение о воскрешённом платеже
+	receiptsInFlight            sync.WaitGroup                                                          // Запущенные пробития чеков — чтобы дождаться их при остановке
+	receiptsStopMu              sync.RWMutex                                                            // Закрывает приём новых пробитий, чтобы Add не гонялся с Wait
+	receiptsStopped             bool                                                                    // true после Stop(): новые пробития не начинаем
+	receiptAuthBlocked          atomic.Bool                                                             // Кабинет не принял вход — проход по чекам прерывается до следующего раза
+	receiptAlerted              sync.Map                                                                // ключ алерта по чекам -> struct{}, защита от повторов
+	subRevokeCooldown           sync.Map                                                                // telegram_id -> time.Time последнего перевыпуска ссылки
+	subCards                    cardTracker                                                             // id последней карточки «Моя подписка» на пользователя
+	sendCardMessage             func(c tele.Context, msg string, markup *tele.ReplyMarkup) (int, error) // шов отправки карточки: нужен её message_id
+	deleteCardMessage           func(c tele.Context, messageID int) error
+	deleteUserMessage           func(c tele.Context, messageID int) error            // шов удаления прежней карточки
+	paymentScreens              paymentScreenTracker                                 // сообщение с ожиданием оплаты по платежу на пользователя
+	editPaymentScreen           func(chatID int64, messageID int, text string) error // шов правки платёжного экрана из вебхука
+	deletePaymentScreen         func(chatID int64, messageID int) error              // шов удаления платёжного экрана из вебхука
+	communityDeclineMu          sync.Mutex                                           // Делает «проверить кулдаун и занять его» одной операцией
+	communityDeclineCooldown    sync.Map                                             // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
+	communityMentionMu          sync.Mutex                                           // Делает «прочитать кулдаун приписки и занять его» одной операцией
+	communityPendingAlerted     sync.Map                                             // telegram_id -> struct{}, защита от потока алертов о зависших заявках
+	chatMemberOf                chatMemberFunc                                       // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
+	panelAuthAlerted            sync.Map                                             // ключ алерта про токен панели -> struct{}, защита от повторов
 }
 
 // chatMemberFunc — единственный поход бота за составом Канала.
@@ -121,21 +128,21 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 		adminPriceData:  make(map[int64]adminChangePriceSession),
 		bugReportData:   make(map[int64]bugReportSession),
 	}
+	bot.sendCardMessage = newCardSender(b)
+	bot.deleteCardMessage = newCardDeleter(b)
+	bot.deleteUserMessage = newUserMessageDeleter(b)
+	bot.editPaymentScreen = newPaymentScreenEditor(b)
+	bot.deletePaymentScreen = newPaymentScreenDeleter(b)
 	bot.chatMemberOf = func(chatID, userID int64) (*tele.ChatMember, error) {
 		return b.ChatMemberOf(&tele.Chat{ID: chatID}, &tele.User{ID: userID})
 	}
 	bot.userLimiter = newUserRateLimiter(3, 5, bot.shutdownCh) // 3 req/s, burst 5
 
 	// Rate limiting middleware — защита от спама командами
-	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
-		return func(c tele.Context) error {
-			if c.Sender() != nil && !bot.userLimiter.allow(c.Sender().ID) {
-				slog.Warn("Rate limit exceeded", "telegram_id", c.Sender().ID)
-				return nil // Молча игнорируем
-			}
-			return next(c)
-		}
-	})
+	b.Use(bot.rateLimitMiddleware)
+
+	// Уборка нажатий reply-кнопок: навигации не место в истории переписки
+	b.Use(bot.dropReplyTapMiddleware)
 
 	// Middleware для логирования
 	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
@@ -216,6 +223,25 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	btnSubRevokeCancel := subMenu.Data("", cbSubRevokeCancel)
 
 	b.Handle(&btnSubCard, bot.handleSubscriptionCard)
+
+	// Inline-кнопки платёжного экрана (роутинг по Unique)
+	payMenu := &tele.ReplyMarkup{}
+	btnPayMethod := payMenu.Data("", cbPayMethod)
+	btnPayCheck := payMenu.Data("", cbPayCheck)
+	btnPayCancel := payMenu.Data("", cbPayCancel)
+	b.Handle(&btnPayMethod, bot.handlePayMethodCallback)
+	b.Handle(&btnPayCheck, bot.handlePayCheckCallback)
+	b.Handle(&btnPayCancel, bot.handlePayCancelCallback)
+	btnPayOpen := payMenu.Data("", cbPayOpen)
+	b.Handle(&btnPayOpen, bot.handlePayOpen)
+
+	errMenu := &tele.ReplyMarkup{}
+	btnRetryPayment := errMenu.Data("", cbRetryPayment)
+	btnRetryPaymentCheck := errMenu.Data("", cbRetryPaymentCheck)
+	btnRetryInvite := errMenu.Data("", cbRetryInvite)
+	b.Handle(&btnRetryPayment, bot.handleRetryPayment)
+	b.Handle(&btnRetryPaymentCheck, bot.handleRetryPaymentCheck)
+	b.Handle(&btnRetryInvite, bot.handleRetryInvite)
 	b.Handle(&btnSubRevoke, bot.handleSubRevoke)
 	b.Handle(&btnSubRevokeOK, bot.handleSubRevokeConfirm)
 	b.Handle(&btnSubRevokeCancel, bot.handleSubRevokeCancel)
@@ -234,7 +260,8 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnArDisable, bot.handleAutorenewDisable)
 	b.Handle(&btnArDismiss, bot.handleAutorenewDismiss)
 	btnArPay := arMenu.Data("", cbAutorenewPayManually)
-	b.Handle(&btnArPay, bot.handleAutorenewPayManually)
+	// «Продлить вручную» после неудачного автосписания — тот же вход в оплату.
+	b.Handle(&btnArPay, bot.handlePayOpen)
 
 	// Inline-кнопки сохранённого способа оплаты
 	pmMenu := &tele.ReplyMarkup{}
@@ -279,6 +306,10 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnRefRevokeOK, bot.handleReferralRevokeConfirm)
 	b.Handle(&btnRefPage, bot.handleReferralPage)
 	b.Handle(&btnRefBack, bot.handleReferralClose)
+
+	// Inline-режим используется только кнопкой «Поделиться»: бот отдаёт
+	// спрашивающему его же активные приглашения.
+	b.Handle(tele.OnQuery, bot.handleReferralShareQuery)
 
 	adminRefMenu := &tele.ReplyMarkup{}
 	btnAdminRefOverview := adminRefMenu.Data("", cbAdminReferralOverview)
@@ -357,6 +388,13 @@ func (b *Bot) handleStart(c tele.Context) error {
 			payload = strings.TrimSpace(msg.Payload)
 		}
 
+		// Кнопка «Создать приглашение» из пустого inline-ответа приводит сюда же,
+		// но её параметр — не код: приняв его за код, бот встретил бы человека
+		// сообщением о несуществующем приглашении.
+		if payload == StartParamInvites {
+			payload = ""
+		}
+
 		if payload != "" {
 			// Пытаемся автоматически активировать код из deep link
 			err := b.processInviteCode(c, payload)
@@ -426,11 +464,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	telegramID := c.Sender().ID
 	state := b.userStates.Get(telegramID)
 	text := c.Text()
-
-	if isPaymentFlowState(state) && isMenuNavigationButton(text) {
-		b.userStates.Delete(telegramID)
-		state = StateNone
-	}
 
 	// В шаге ввода комментария багрепорта навигационная кнопка меню должна
 	// сбросить флоу (иначе текст кнопки уйдёт в комментарий), кроме «Пропустить».
@@ -546,29 +579,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processAdminChangePriceMigrationConfirm(c, text)
 		}
 
-	case StateWaitPaymentMethod:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			return c.Send("Отменено.", &tele.SendOptions{ReplyMarkup: b.userKeyboard(telegramID)})
-		}
-		if provider, ok := paymentProviderFromButton(text); ok {
-			return b.handlePaymentMethodSelected(c, provider)
-		}
-		return c.Send("Выберите способ оплаты из меню:", &tele.SendOptions{ReplyMarkup: b.paymentMethodKeyboard()})
-
-	case StateWaitPaymentResult:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			return c.Send("Возврат в меню. Платёж не отменён — он протухнет автоматически.", &tele.SendOptions{
-				ReplyMarkup: b.userKeyboard(telegramID),
-			})
-		}
-		if text == BtnCheckPayment {
-			return b.handleCheckPayment(c)
-		}
-		return c.Send("Нажмите \"🔄 Проверить оплату\" или \"🚫 Отмена\".", &tele.SendOptions{
-			ReplyMarkup: PaymentWaitKeyboard(),
-		})
 	}
 
 	// Админ-кнопки
@@ -626,6 +636,10 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case BtnStatus:
 		return b.handleStatus(c)
 	case BtnPay, BtnRenew:
+		return b.handlePayButton(c)
+	case BtnPayYooKassa, BtnPayCrypto:
+		// Reply-клавиатура выбора способа из старого флоу могла остаться у
+		// пользователя: открываем платёжный экран заново.
 		return b.handlePayButton(c)
 	case BtnCheckPayment:
 		return b.handleCheckPayment(c)
@@ -695,7 +709,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		slog.Error("Failed to create user in Remnawave", "error", err)
 		// Откатываем инвайт — пользователь не создан
 		_ = b.db.UnclaimInvite(code, telegramID)
-		return c.Send("Ошибка создания аккаунта. Попробуйте позже или обратитесь к администратору.")
+		return b.sendErrorExit(c, "❌ Не удалось создать аккаунт", retryAction{})
 	}
 
 	// Цена берётся из snapshot инвайта, first-touch — из всей истории referral.
@@ -709,7 +723,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		if err != nil {
 			slog.Error("Failed to resolve first referral inviter", "error", err, "telegram_id", telegramID)
 			b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.Ref())
-			return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
+			return b.sendErrorExit(c, "❌ Не удалось создать аккаунт", retryAction{})
 		}
 	}
 
@@ -721,7 +735,7 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		slog.Error("Failed to create user in DB", "error", err)
 		// Claim освобождается только после подтверждённого удаления из Remnawave.
 		b.rollbackCreatedRemnawaveUser(code, telegramID, remnawaveUser.Ref())
-		return c.Send("Ошибка создания аккаунта. Попробуйте позже.")
+		return b.sendErrorExit(c, "❌ Не удалось создать аккаунт", retryAction{})
 	}
 
 	// Отправляем уведомление админу о новом пользователе (асинхронно)
@@ -806,14 +820,17 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	remnawaveUser, err := b.remnawaveUser(telegramID)
 	if err != nil {
 		slog.Error("Failed to get user from Remnawave", "error", err)
-		return c.Send("Ошибка получения статуса. Попробуйте позже.")
+		return b.sendErrorExit(c, "❌ Не удалось получить статус подписки", retryAction{unique: cbSubCard})
 	}
 
 	// Карточка подписки самодостаточна: статус, ссылка и inline-кнопки
 	// (страница подписки, устройства, перевыпуск). Reply-клавиатура главного
 	// меню остаётся снизу нетронутой, отдельное подменю не нужно.
+	// Карточка живая: с reply-кнопки мы гарантированно внизу чата, поэтому
+	// присылаем новую и убираем предыдущую — иначе в чате копятся карточки с
+	// устаревшими данными и живыми кнопками на уже перевыпущенную ссылку.
 	msg, markup := b.buildSubscriptionCard(telegramID, remnawaveUser)
-	return sendWithInlineFallback(c, msg, markup)
+	return b.replaceCard(c, msg, markup)
 }
 
 // handleInfo показывает помощь, контакты и ссылки на документы сервиса
@@ -942,10 +959,6 @@ func (b *Bot) syncUserInfo(c tele.Context) {
 			slog.Error("Failed to sync username to Remnawave", "error", err, "telegram_id", telegramID)
 		}
 	}
-}
-
-func isPaymentFlowState(state string) bool {
-	return state == StateWaitPaymentMethod || state == StateWaitPaymentResult
 }
 
 func isMenuNavigationButton(text string) bool {

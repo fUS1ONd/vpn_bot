@@ -288,6 +288,10 @@ func TestApplyRevokeTreatsChangedURLAsSuccessWhenResponseLost(t *testing.T) {
 	assert.Equal(t, "https://sub.example.com:8443/newshort", remUser.SubscriptionURL)
 }
 
-func TestRevokeDoneWarnsAboutStaleCards(t *testing.T) {
-	assert.Contains(t, MsgRevokeDone, "более старых сообщениях")
+// TestRevokeDoneDoesNotWarnAboutStaleCards: абзац про кнопки в старых карточках
+// заклеивал симптом — теперь карточка живая и старых сообщений не остаётся,
+// поэтому предупреждать не о чем. Возврат текста означал бы, что живая карточка
+// сломалась.
+func TestRevokeDoneDoesNotWarnAboutStaleCards(t *testing.T) {
+	assert.NotContains(t, MsgRevokeDone, "более старых сообщениях")
 }

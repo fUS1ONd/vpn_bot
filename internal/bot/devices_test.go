@@ -18,6 +18,9 @@ func TestBuildDevicesMessage(t *testing.T) {
 	}
 	msg := buildDevicesMessage(devices)
 	require.Contains(t, msg, "Подключено устройств: 1")
+	// В домене нет «удаления устройства», есть сброс HWID-привязки.
+	require.Contains(t, msg, "отвязать")
+	require.NotContains(t, msg, "удалить")
 }
 
 func TestDeviceByIndex(t *testing.T) {

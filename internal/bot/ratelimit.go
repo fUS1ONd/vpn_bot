@@ -1,8 +1,11 @@
 package bot
 
 import (
+	"log/slog"
 	"sync"
 	"time"
+
+	tele "gopkg.in/telebot.v3"
 )
 
 // userRateLimiter — per-user rate limiter для команд бота.
@@ -19,6 +22,10 @@ type userRateLimiter struct {
 type userBucket struct {
 	tokens   float64
 	lastTime time.Time
+	// warnedText — предупреждение о превышении лимита уже отправлено текстом.
+	// Живёт ровно столько же, сколько бакет: cleanupLoop выбрасывает его вместе
+	// с записью, и следующая серия спама снова получит одно объяснение.
+	warnedText bool
 }
 
 // newUserRateLimiter создаёт rate limiter для пользователей бота.
@@ -64,6 +71,27 @@ func (rl *userRateLimiter) allow(telegramID int64) bool {
 	return true
 }
 
+// claimTextWarning столбит право на единственное текстовое предупреждение о
+// превышении лимита за жизнь бакета: первый вызов возвращает true, дальнейшие —
+// false. Отвечать на каждый дроп нельзя: исходящие у бота лимитированы примерно
+// одним сообщением в секунду на чат, а входящий поток спамеру ничего не стоит —
+// мы бы усиливали флуд за свой счёт.
+//
+// Бакет к этому моменту всегда существует: claim зовут сразу после allow,
+// вернувшего false. Если его всё же нет — предупреждать не о чем, молчим и не
+// заводим запись на пустом месте.
+func (rl *userRateLimiter) claimTextWarning(telegramID int64) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	b, ok := rl.buckets[telegramID]
+	if !ok || b.warnedText {
+		return false
+	}
+	b.warnedText = true
+	return true
+}
+
 // cleanupLoop удаляет устаревшие записи раз в 5 минут.
 func (rl *userRateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
@@ -84,4 +112,52 @@ func (rl *userRateLimiter) cleanupLoop() {
 			rl.mu.Unlock()
 		}
 	}
+}
+
+// rateLimitMiddleware отсекает спам и объясняет пользователю, что произошло.
+// Лимитер защищает не Telegram (входящие никто не режет), а панель: за каждым
+// нажатием стоит запрос в Remnawave, и панель одна на всех.
+func (b *Bot) rateLimitMiddleware(next tele.HandlerFunc) tele.HandlerFunc {
+	return func(c tele.Context) error {
+		sender := c.Sender()
+		if sender == nil || b.userLimiter.allow(sender.ID) {
+			return next(c)
+		}
+		slog.Warn("Rate limit exceeded", "telegram_id", sender.ID)
+		return b.reportRateLimited(c)
+	}
+}
+
+// reportRateLimited сообщает о превышении лимита. Middleware не знает про экраны
+// и состояния: он отвечает «слишком быстро» и выходит, ничего не открывая, не
+// редактируя и не трогая userStates — превышение лимита не должно ронять
+// начатый флоу.
+func (b *Bot) reportRateLimited(c tele.Context) error {
+	// Callback молча не дропаем никогда: без ответа телеграм-клиент крутит на
+	// кнопке часики, которые не разрешаются ничем, и человек жмёт ещё чаще,
+	// удлиняя блокировку. Дедупликация не нужна — всплывашка не уходит в чат и
+	// не тратит квоту исходящих.
+	if c.Callback() != nil {
+		return c.Respond(&tele.CallbackResponse{Text: MsgRateLimitedCallback})
+	}
+	// Inline-запрос уходит на каждую набранную букву, поэтому под лимит он
+	// попадает легче всех. Без ответа в поле ввода остаются вечные часики, и
+	// человек правит текст снова — то есть бьёт в лимит ещё сильнее.
+	if c.Query() != nil {
+		return c.Answer(&tele.QueryResponse{
+			Results:      tele.Results{},
+			CacheTime:    shareCacheTime,
+			IsPersonal:   true,
+			SwitchPMText: MsgRateLimitedInline,
+			// Параметр обязателен: с одним лишь текстом Telegram ответ отвергает.
+			SwitchPMParameter: StartParamInvites,
+		})
+	}
+	if c.Message() == nil {
+		return nil
+	}
+	if !b.userLimiter.claimTextWarning(c.Sender().ID) {
+		return nil
+	}
+	return c.Send(MsgRateLimitedText, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }

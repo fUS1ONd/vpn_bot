@@ -44,6 +44,10 @@ var (
 // revokeErrorAlert возвращает текст алерта пользователю для ошибки applyRevoke.
 // Тексты различают падение сброса устройств и падение самого перевыпуска, чтобы
 // пользователь понимал, изменилось ли что-то на самом деле.
+//
+// Алерт не несёт клавиатуры, поэтому выход из ошибки называется словами: там,
+// где повтор может не помочь, адресат указывается прямо в тексте. Сам контакт
+// не подставляем — он живёт в «ℹ️ Информации», а у алерта лимит в 200 символов.
 func revokeErrorAlert(err error) string {
 	var cooldownErr revokeCooldownError
 	if errors.As(err, &cooldownErr) {
@@ -64,11 +68,11 @@ func revokeErrorAlert(err error) string {
 	case errors.Is(err, errRevokeUnavailable):
 		return "Перевыпуск недоступен: подписка неактивна"
 	case errors.Is(err, errRevokeLoadFailed):
-		return "Ошибка получения данных подписки. Попробуйте позже."
+		return "Не удалось получить данные подписки. Попробуйте позже, а если не проходит — напишите в поддержку (раздел «ℹ️ Информация»)."
 	case errors.Is(err, errRevokeDevicesFailed):
 		return "❌ Не удалось сбросить устройства. Ссылка не изменилась, попробуйте ещё раз."
 	default:
-		return "❌ Не удалось перевыпустить ссылку. Устройства сброшены — переподключите их по прежней ссылке."
+		return "❌ Не удалось перевыпустить ссылку. Устройства сброшены — переподключите их по прежней ссылке. Если не работает, напишите в поддержку (раздел «ℹ️ Информация»)."
 	}
 }
 
@@ -117,16 +121,17 @@ func sendWithInlineFallback(c tele.Context, msg string, markup *tele.ReplyMarkup
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
-// editWithInlineFallback — версия sendWithInlineFallback для редактирования.
-// Если отредактировать не удалось (сообщение устарело или клавиатуру отверг
-// Telegram), отправляем карточку новым сообщением.
+// editWithInlineFallback — версия sendWithInlineFallback для редактирования
+// сообщений, которые карточкой не являются (например, сообщения об оплате):
+// в отличие от editCardInPlace, сообщение не запоминается как карточка, иначе
+// следующее «👤 Моя подписка» удалило бы его из чата.
 func editWithInlineFallback(c tele.Context, msg string, markup *tele.ReplyMarkup) error {
 	err := c.Edit(msg, &tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: markup})
 	if err == nil {
 		return nil
 	}
 
-	slog.Warn("Failed to edit subscription card, sending new message",
+	slog.Warn("Failed to edit message, sending new one",
 		"error", err, "telegram_id", c.Sender().ID)
 	return sendWithInlineFallback(c, msg, markup)
 }
@@ -148,7 +153,7 @@ func (b *Bot) handleSubscriptionCard(c tele.Context) error {
 	}
 
 	msg, markup := b.buildSubscriptionCard(telegramID, remUser)
-	if err := editWithInlineFallback(c, msg, markup); err != nil {
+	if err := b.editCardInPlace(c, msg, markup); err != nil {
 		slog.Error("Failed to render subscription card", "error", err, "telegram_id", telegramID)
 	}
 	return c.Respond()
@@ -162,7 +167,7 @@ func (b *Bot) handleSubRevoke(c tele.Context) error {
 
 	// Фоллбэк обязателен: без него транзиентная ошибка Edit оставляет пользователя
 	// с погасшими «часиками» и неизменившимся экраном — кнопка выглядит мёртвой.
-	if err := editWithInlineFallback(c, MsgRevokeConfirm, SubscriptionRevokeConfirmKeyboard()); err != nil {
+	if err := b.editCardInPlace(c, MsgRevokeConfirm, SubscriptionRevokeConfirmKeyboard()); err != nil {
 		slog.Error("Failed to show revoke confirmation", "error", err, "telegram_id", c.Sender().ID)
 		return c.RespondAlert("Не удалось открыть подтверждение. Попробуйте ещё раз.")
 	}
@@ -184,7 +189,7 @@ func (b *Bot) handleSubRevokeConfirm(c tele.Context) error {
 	}
 
 	msg, markup := b.buildSubscriptionCard(telegramID, remUser)
-	if err := editWithInlineFallback(c, MsgRevokeDone+msg, markup); err != nil {
+	if err := b.editCardInPlace(c, MsgRevokeDone+msg, markup); err != nil {
 		slog.Error("Failed to render card after revoke", "error", err, "telegram_id", telegramID)
 	}
 	return c.Respond(&tele.CallbackResponse{Text: "Ссылка перевыпущена"})

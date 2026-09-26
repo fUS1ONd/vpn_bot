@@ -19,6 +19,8 @@ import (
 type sentMessage struct {
 	ChatID string
 	Text   string
+	// Markup — reply_markup как ушёл в Telegram (JSON), пусто без разметки.
+	Markup string
 }
 
 // telegramCapture подменяет Telegram Bot API и запоминает отправленные сообщения:
@@ -56,15 +58,16 @@ func parseSentMessage(body string) sentMessage {
 	var payload struct {
 		ChatID any    `json:"chat_id"`
 		Text   string `json:"text"`
+		Markup string `json:"reply_markup"`
 	}
 	if err := json.Unmarshal([]byte(body), &payload); err == nil && payload.Text != "" {
-		return sentMessage{ChatID: fmt.Sprint(payload.ChatID), Text: payload.Text}
+		return sentMessage{ChatID: fmt.Sprint(payload.ChatID), Text: payload.Text, Markup: payload.Markup}
 	}
 	values, err := url.ParseQuery(body)
 	if err != nil {
 		return sentMessage{}
 	}
-	return sentMessage{ChatID: values.Get("chat_id"), Text: values.Get("text")}
+	return sentMessage{ChatID: values.Get("chat_id"), Text: values.Get("text"), Markup: values.Get("reply_markup")}
 }
 
 func (c *telegramCapture) all() []sentMessage {

@@ -21,6 +21,12 @@ services:
       - MOCK_PANEL_PORT=8081
       # 2.8.1 или 3.2.3 — одним стендом проверяются обе ветки контракта.
       - MOCK_PANEL_VERSION=${MOCK_PANEL_VERSION:-2.8.1}
+      # Пользователи панели сохраняются рядом с базой бота: stand-down
+      # сохраняет обе стороны, stand-reset сносит обе. Без этого после
+      # перезапуска стенда бот помнил пользователей, которых заглушка уже не знала.
+      - MOCK_STATE_PATH=/app/data/mockpanel.json
+    volumes:
+      - ./data-test:/app/data
     # Порт наружу нужен только для пульта (POST /mock/user): боту заглушка видна
     # по имени сервиса внутри сети. Слушаем на localhost, не на 0.0.0.0.
     ports:
@@ -60,6 +66,10 @@ services:
       - YOOKASSA_RETURN_URL=${YOOKASSA_RETURN_URL}
       - YOOKASSA_FEE_PERCENT=${YOOKASSA_FEE_PERCENT:-3.5}
       - AUTORENEW_ENABLED=${AUTORENEW_ENABLED:-true}
+      # Platega опциональна: пустые значения — кнопки «Крипта» нет. Тестового
+      # режима у Platega нет, заданные ключи будут боевыми.
+      - PLATEGA_MERCHANT_ID=${PLATEGA_MERCHANT_ID:-}
+      - PLATEGA_SECRET=${PLATEGA_SECRET:-}
       - CALLBACK_PORT=8080
     ports:
       - "127.0.0.1:${TEST_CALLBACK_PORT:-8090}:8080"

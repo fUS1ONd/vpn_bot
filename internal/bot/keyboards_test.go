@@ -1,10 +1,12 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tele "gopkg.in/telebot.v3"
 
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
@@ -65,6 +67,9 @@ func TestDevicesManagementKeyboard(t *testing.T) {
 	require.Len(t, kb.InlineKeyboard, 4)
 	require.Equal(t, "dev_del", kb.InlineKeyboard[0][0].Unique)
 	require.Equal(t, "0", kb.InlineKeyboard[0][0].Data)
+	// Нажатие отвязывает устройство, поэтому подпись не должна обещать обновление.
+	require.True(t, strings.HasPrefix(kb.InlineKeyboard[0][0].Text, "🗑 "),
+		"подпись устройства: %q", kb.InlineKeyboard[0][0].Text)
 	require.Equal(t, "dev_del", kb.InlineKeyboard[1][0].Unique)
 	require.Equal(t, "1", kb.InlineKeyboard[1][0].Data)
 	require.Equal(t, "dev_reset_all", kb.InlineKeyboard[2][0].Unique)
@@ -295,29 +300,30 @@ func TestUserMenuHasBugReport(t *testing.T) {
 	require.Contains(t, labels, BtnBugReport)
 }
 
-func TestPaymentKeyboardsContainExpectedButtons(t *testing.T) {
-	methods := PaymentMethodKeyboard(true, true)
-	wait := PaymentWaitKeyboard()
-
-	var methodButtons []string
-	for _, row := range methods.ReplyKeyboard {
-		for _, btn := range row {
-			methodButtons = append(methodButtons, btn.Text)
-		}
+// inlineButtons раскладывает inline-клавиатуру в плоский список кнопок.
+func inlineButtons(markup *tele.ReplyMarkup) []tele.InlineButton {
+	var buttons []tele.InlineButton
+	for _, row := range markup.InlineKeyboard {
+		buttons = append(buttons, row...)
 	}
+	return buttons
+}
 
-	var waitButtons []string
-	for _, row := range wait.ReplyKeyboard {
-		for _, btn := range row {
-			waitButtons = append(waitButtons, btn.Text)
-		}
-	}
+func TestPaymentMethodKeyboardIsInline(t *testing.T) {
+	keyboard := PaymentMethodKeyboard(true, true)
+	require.Empty(t, keyboard.ReplyKeyboard, "шаг выбора способа не должен подменять reply-клавиатуру")
 
-	assert.Contains(t, methodButtons, BtnPayYooKassa)
-	assert.Contains(t, methodButtons, BtnPayCrypto)
-	assert.Contains(t, methodButtons, BtnCancel)
-	assert.Contains(t, waitButtons, BtnCheckPayment)
-	assert.Contains(t, waitButtons, BtnCancel)
+	buttons := inlineButtons(keyboard)
+	require.Len(t, buttons, 3)
+	assert.Equal(t, BtnPayYooKassa, buttons[0].Text)
+	assert.Equal(t, cbPayMethod, buttons[0].Unique)
+	assert.Equal(t, "yookassa", buttons[0].Data)
+	assert.Equal(t, BtnPayCrypto, buttons[1].Text)
+	assert.Equal(t, cbPayMethod, buttons[1].Unique)
+	assert.Equal(t, "platega", buttons[1].Data)
+	assert.Equal(t, BtnCancel, buttons[2].Text)
+	assert.Equal(t, cbPayCancel, buttons[2].Unique)
+	assert.Empty(t, buttons[2].Data)
 }
 
 func TestPaymentMethodKeyboardHidesUnavailableProviders(t *testing.T) {
@@ -330,15 +336,32 @@ func TestPaymentMethodKeyboardHidesUnavailableProviders(t *testing.T) {
 		{"only Platega", false, true, BtnPayCrypto, BtnPayYooKassa},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			keyboard := PaymentMethodKeyboard(tc.yoo, tc.platega)
 			var labels []string
-			for _, row := range keyboard.ReplyKeyboard {
-				for _, button := range row {
-					labels = append(labels, button.Text)
-				}
+			for _, button := range inlineButtons(PaymentMethodKeyboard(tc.yoo, tc.platega)) {
+				labels = append(labels, button.Text)
 			}
 			assert.Contains(t, labels, tc.want)
 			assert.NotContains(t, labels, tc.absent)
 		})
+	}
+}
+
+func TestPaymentWaitKeyboard(t *testing.T) {
+	buttons := inlineButtons(PaymentWaitKeyboard("https://pay.example/42", 400, 42))
+	require.Len(t, buttons, 3)
+	assert.Equal(t, "💳 Оплатить 400 ₽", buttons[0].Text)
+	assert.Equal(t, "https://pay.example/42", buttons[0].URL)
+	assert.Equal(t, BtnPaidCheck, buttons[1].Text)
+	assert.Equal(t, cbPayCheck, buttons[1].Unique)
+	assert.Equal(t, "42", buttons[1].Data)
+	assert.Equal(t, BtnCancel, buttons[2].Text)
+	assert.Equal(t, cbPayCancel, buttons[2].Unique)
+	assert.Equal(t, "42", buttons[2].Data)
+}
+
+// Битый URL Telegram отвергает вместе со всем сообщением — кнопки на него нет.
+func TestPaymentWaitKeyboardSkipsInvalidURL(t *testing.T) {
+	for _, button := range inlineButtons(PaymentWaitKeyboard("not a url", 400, 42)) {
+		assert.Empty(t, button.URL)
 	}
 }
