@@ -318,3 +318,22 @@ func TestCanceledPaymentWithoutScreenStillNotifies(t *testing.T) {
 
 	assert.NotEmpty(t, capture.matching("Платёж отменён"))
 }
+
+// Нажатия на старом сообщении не должны отвязывать живой экран нового платежа:
+// иначе вебхук об оплате не снимет с него кнопки.
+func TestStaleScreenTapsKeepLiveScreenTracked(t *testing.T) {
+	stub := &arEdgeStub{expireAt: time.Now().UTC().Add(10 * 24 * time.Hour)}
+	b, db, _ := setupAutorenewEdgeBot(t, stub)
+	old := createScreenPayment(t, db, "expired", nil)
+	live := createScreenPayment(t, db, "pending", nil)
+	const liveMessageID = 77
+	b.paymentScreens.set(arEdgeUserID, live, liveMessageID)
+
+	require.NoError(t, b.handlePayCancelCallback(payScreenCallback(strconv.FormatInt(old, 10))), "отмена старого ожидания")
+	require.NoError(t, b.handlePayCancelCallback(payScreenCallback("")), "отмена выбора способа")
+	require.NoError(t, b.handlePayCheckCallback(payScreenCallback("")), "«Я оплатил» на старом сообщении")
+
+	messageID, tracked := b.paymentScreens.take(arEdgeUserID, live)
+	require.True(t, tracked)
+	assert.Equal(t, liveMessageID, messageID)
+}

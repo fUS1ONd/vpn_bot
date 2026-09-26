@@ -58,10 +58,22 @@ func (t *paymentScreenTracker) take(telegramID, paymentID int64) (int, bool) {
 	return screen.messageID, true
 }
 
-func (t *paymentScreenTracker) forget(telegramID int64) {
+// forgetMessage забывает экран, только если он показан именно в этом
+// сообщении: нажатие на старом сообщении не должно отвязывать живой экран
+// нового платежа — иначе вебхук не снимет с него кнопки.
+func (t *paymentScreenTracker) forgetMessage(telegramID int64, messageID int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.screens, telegramID)
+	if screen, ok := t.screens[telegramID]; ok && screen.messageID == messageID {
+		delete(t.screens, telegramID)
+	}
+}
+
+// forgetScreenUnder забывает экран, на котором нажата кнопка.
+func (b *Bot) forgetScreenUnder(c tele.Context) {
+	if m := c.Message(); m != nil {
+		b.paymentScreens.forgetMessage(c.Sender().ID, m.ID)
+	}
 }
 
 // newPaymentScreenEditor собирает шов редактирования платёжного экрана вне
@@ -208,7 +220,7 @@ func (b *Bot) handlePayCheckCallback(c tele.Context) error {
 // клавиатуру и честно говорит, что ссылка ещё действует.
 func (b *Bot) handlePayCancelCallback(c tele.Context) error {
 	telegramID := c.Sender().ID
-	b.paymentScreens.forget(telegramID)
+	b.forgetScreenUnder(c)
 
 	msg := "Оплата отменена."
 	if raw := c.Data(); raw != "" {

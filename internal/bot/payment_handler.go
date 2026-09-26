@@ -130,7 +130,7 @@ func (b *Bot) handleCheckPayment(c tele.Context) error {
 		if fromScreen {
 			// Экран гасим, а итог шлём отдельно: с ним приходит обновлённая
 			// reply-клавиатура («Оплатить» становится «Продлить»).
-			b.paymentScreens.forget(telegramID)
+			b.forgetScreenUnder(c)
 			if err := b.closePaymentScreen(c, paymentScreenPaidText, nil); err != nil {
 				slog.Warn("Не удалось закрыть платёжный экран", "error", err, "telegram_id", telegramID)
 			}
@@ -163,7 +163,7 @@ func (b *Bot) finishCheck(c tele.Context, msg string) error {
 	if c.Callback() == nil {
 		return c.Send(msg, &tele.SendOptions{ReplyMarkup: b.userKeyboard(telegramID)})
 	}
-	b.paymentScreens.forget(telegramID)
+	b.forgetScreenUnder(c)
 	err := b.closePaymentScreen(c, msg, nil)
 	respondCallback(c)
 	return err
