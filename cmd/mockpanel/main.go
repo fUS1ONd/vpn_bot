@@ -208,8 +208,11 @@ func (c *chaos) setLatency(d time.Duration) {
 
 // newServer собирает маршруты стенда. Отдельная функция, а не тело main, чтобы
 // тесты поднимали её через httptest без сети и переменных окружения.
-func newServer() http.Handler {
-	s := newStore()
+func newServer() http.Handler { return newServerWith(newStore(), "") }
+
+// newServerWith — то же поверх готового хранилища. Непустой statePath включает
+// сохранение состояния на диск (см. state.go).
+func newServerWith(s *store, statePath string) http.Handler {
 	c := &chaos{}
 
 	api := http.NewServeMux()
@@ -221,7 +224,11 @@ func newServer() http.Handler {
 	// Пульт — вне рычагов: иначе включённый отказ невозможно было бы выключить.
 	registerControlRoutes(root, s, c)
 
-	return logRequests(root)
+	var h http.Handler = root
+	if statePath != "" {
+		h = withPersistence(s, statePath, root)
+	}
+	return logRequests(h)
 }
 
 // registerPanelRoutes — маршруты контракта Remnawave.
@@ -735,14 +742,23 @@ func envOr(key, fallback string) string {
 
 func main() {
 	port := envOr("MOCK_PANEL_PORT", "8081")
-	slog.Info("Mock Remnawave panel started", "port", port, "version", panelVersion)
+	statePath := os.Getenv("MOCK_STATE_PATH")
+	s := newStore()
+	if statePath != "" {
+		if err := s.load(statePath); err != nil {
+			slog.Error("Не удалось прочитать состояние заглушки", "error", err, "path", statePath)
+			os.Exit(1)
+		}
+	}
+	slog.Info("Mock Remnawave panel started", "port", port, "version", panelVersion,
+		"state", statePath, "users", len(s.users))
 
 	// ReadTimeout обязателен: клиент, открывший запрос и не дославший тело,
 	// иначе занимал бы обработчик бесконечно. Стенд молча вставал бы, и
 	// разбираться в этом пришлось бы посреди ручной проверки.
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           newServer(),
+		Handler:           newServerWith(s, statePath),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      60 * time.Second, // больше максимальной /mock/latency
