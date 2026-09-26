@@ -689,14 +689,21 @@ func TestОтменаЗаменённогоПлатежаНеПишетЧело�
 	env := newEdgeEnv(t)
 	env.platega.onGet = plategaSays(platega.StatusCanceled)
 	old := env.pending(t, paymentprovider.Platega, time.Hour)
-	env.pending(t, paymentprovider.YooKassa, 5*time.Minute)
-	env.bot.userStates.Set(edgeUserID, StateWaitPaymentResult)
+	fresh := env.pending(t, paymentprovider.YooKassa, 5*time.Minute)
+	env.bot.paymentScreens.set(edgeUserID, fresh, 77)
+	var edited []int
+	env.bot.editPaymentScreen = func(_ int64, messageID int, _ string) error {
+		edited = append(edited, messageID)
+		return nil
+	}
 
 	env.bot.reconcilePendingPayment(old, time.Now().UTC(), "test")
 
 	assert.Equal(t, "canceled", env.status(t, old))
 	assert.Empty(t, env.tg.matching("Платёж отменён"))
-	assert.Equal(t, StateWaitPaymentResult, env.bot.userStates.Get(edgeUserID))
+	assert.Empty(t, edited, "экран нового платежа должен остаться с кнопками")
+	_, tracked := env.bot.paymentScreens.take(edgeUserID, fresh)
+	assert.True(t, tracked)
 }
 
 // Chargeback, найденный сверкой, обязан привести к тому же, что и chargeback из

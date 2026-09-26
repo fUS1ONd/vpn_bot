@@ -71,13 +71,15 @@ type Bot struct {
 	subCards                    cardTracker                                                             // id последней карточки «Моя подписка» на пользователя
 	sendCardMessage             func(c tele.Context, msg string, markup *tele.ReplyMarkup) (int, error) // шов отправки карточки: нужен её message_id
 	deleteCardMessage           func(c tele.Context, messageID int) error
-	deleteUserMessage           func(c tele.Context, messageID int) error // шов удаления прежней карточки
-	communityDeclineMu          sync.Mutex                                // Делает «проверить кулдаун и занять его» одной операцией
-	communityDeclineCooldown    sync.Map                                  // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
-	communityMentionMu          sync.Mutex                                // Делает «прочитать кулдаун приписки и занять его» одной операцией
-	communityPendingAlerted     sync.Map                                  // telegram_id -> struct{}, защита от потока алертов о зависших заявках
-	chatMemberOf                chatMemberFunc                            // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
-	panelAuthAlerted            sync.Map                                  // ключ алерта про токен панели -> struct{}, защита от повторов
+	deleteUserMessage           func(c tele.Context, messageID int) error            // шов удаления прежней карточки
+	paymentScreens              paymentScreenTracker                                 // сообщение с ожиданием оплаты по платежу на пользователя
+	editPaymentScreen           func(chatID int64, messageID int, text string) error // шов правки платёжного экрана из вебхука
+	communityDeclineMu          sync.Mutex                                           // Делает «проверить кулдаун и занять его» одной операцией
+	communityDeclineCooldown    sync.Map                                             // telegram_id -> time.Time последнего объяснения отказа по заявке в Канал
+	communityMentionMu          sync.Mutex                                           // Делает «прочитать кулдаун приписки и занять его» одной операцией
+	communityPendingAlerted     sync.Map                                             // telegram_id -> struct{}, защита от потока алертов о зависших заявках
+	chatMemberOf                chatMemberFunc                                       // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
+	panelAuthAlerted            sync.Map                                             // ключ алерта про токен панели -> struct{}, защита от повторов
 }
 
 // chatMemberFunc — единственный поход бота за составом Канала.
@@ -128,6 +130,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	bot.sendCardMessage = newCardSender(b)
 	bot.deleteCardMessage = newCardDeleter(b)
 	bot.deleteUserMessage = newUserMessageDeleter(b)
+	bot.editPaymentScreen = newPaymentScreenEditor(b)
 	bot.chatMemberOf = func(chatID, userID int64) (*tele.ChatMember, error) {
 		return b.ChatMemberOf(&tele.Chat{ID: chatID}, &tele.User{ID: userID})
 	}
@@ -218,6 +221,15 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	btnSubRevokeCancel := subMenu.Data("", cbSubRevokeCancel)
 
 	b.Handle(&btnSubCard, bot.handleSubscriptionCard)
+
+	// Inline-кнопки платёжного экрана (роутинг по Unique)
+	payMenu := &tele.ReplyMarkup{}
+	btnPayMethod := payMenu.Data("", cbPayMethod)
+	btnPayCheck := payMenu.Data("", cbPayCheck)
+	btnPayCancel := payMenu.Data("", cbPayCancel)
+	b.Handle(&btnPayMethod, bot.handlePayMethodCallback)
+	b.Handle(&btnPayCheck, bot.handlePayCheckCallback)
+	b.Handle(&btnPayCancel, bot.handlePayCancelCallback)
 
 	errMenu := &tele.ReplyMarkup{}
 	btnRetryPayment := errMenu.Data("", cbRetryPayment)
@@ -448,11 +460,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	state := b.userStates.Get(telegramID)
 	text := c.Text()
 
-	if isPaymentFlowState(state) && isMenuNavigationButton(text) {
-		b.userStates.Delete(telegramID)
-		state = StateNone
-	}
-
 	// В шаге ввода комментария багрепорта навигационная кнопка меню должна
 	// сбросить флоу (иначе текст кнопки уйдёт в комментарий), кроме «Пропустить».
 	if state == StateWaitBugComment && text != BtnBugSkip && isMenuNavigationButton(text) {
@@ -567,29 +574,6 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.processAdminChangePriceMigrationConfirm(c, text)
 		}
 
-	case StateWaitPaymentMethod:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			return c.Send("Отменено.", &tele.SendOptions{ReplyMarkup: b.userKeyboard(telegramID)})
-		}
-		if provider, ok := paymentProviderFromButton(text); ok {
-			return b.handlePaymentMethodSelected(c, provider)
-		}
-		return c.Send("Выберите способ оплаты из меню:", &tele.SendOptions{ReplyMarkup: b.paymentMethodKeyboard()})
-
-	case StateWaitPaymentResult:
-		if text == BtnCancel {
-			b.userStates.Delete(telegramID)
-			return c.Send("Возврат в меню. Платёж не отменён — он протухнет автоматически.", &tele.SendOptions{
-				ReplyMarkup: b.userKeyboard(telegramID),
-			})
-		}
-		if text == BtnCheckPayment {
-			return b.handleCheckPayment(c)
-		}
-		return c.Send("Нажмите \"🔄 Проверить оплату\" или \"🚫 Отмена\".", &tele.SendOptions{
-			ReplyMarkup: PaymentWaitKeyboard(),
-		})
 	}
 
 	// Админ-кнопки
@@ -647,6 +631,10 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 	case BtnStatus:
 		return b.handleStatus(c)
 	case BtnPay, BtnRenew:
+		return b.handlePayButton(c)
+	case BtnPayYooKassa, BtnPayCrypto:
+		// Reply-клавиатура выбора способа из старого флоу могла остаться у
+		// пользователя: открываем платёжный экран заново.
 		return b.handlePayButton(c)
 	case BtnCheckPayment:
 		return b.handleCheckPayment(c)
@@ -966,10 +954,6 @@ func (b *Bot) syncUserInfo(c tele.Context) {
 			slog.Error("Failed to sync username to Remnawave", "error", err, "telegram_id", telegramID)
 		}
 	}
-}
-
-func isPaymentFlowState(state string) bool {
-	return state == StateWaitPaymentMethod || state == StateWaitPaymentResult
 }
 
 func isMenuNavigationButton(text string) bool {

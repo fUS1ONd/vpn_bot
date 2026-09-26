@@ -286,8 +286,9 @@ func (b *Bot) paymentActivatedMessage(telegramID int64) string {
 }
 
 func (h *paymentCallbackHandler) finalizeActivatedPayment(payment *database.Payment, notifyUser bool) {
-	// Сбрасываем состояние только если пользователь всё ещё в платёжном flow
-	h.bot.userStates.DeleteIfOneOf(payment.TelegramID, StateWaitPaymentMethod, StateWaitPaymentResult)
+	// Экран ожидания оплаты больше не нужен: кнопки «Оплатить» и «Я оплатил»
+	// под ним относились бы к закрытому платежу.
+	h.bot.retirePaymentScreen(payment, paymentScreenPaidText)
 
 	if notifyUser {
 		_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, h.bot.paymentConfirmationMessage(payment), h.bot.paymentSuccessMarkup(payment))
@@ -559,8 +560,12 @@ func (h *paymentCallbackHandler) handleCanceled(payment *database.Payment) error
 	} else if fromAutorenew {
 		return nil
 	}
-	h.bot.userStates.DeleteIfOneOf(payment.TelegramID, StateWaitPaymentMethod, StateWaitPaymentResult)
-	_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, "❌ Платёж отменён. Вы можете попробовать снова.", h.bot.userKeyboard(payment.TelegramID))
+	// Экран ожидания оплаты сам становится сообщением об отмене; отдельное
+	// сообщение нужно, только если экрана нет или его не удалось поправить.
+	if h.bot.retirePaymentScreen(payment, paymentScreenCanceledText) {
+		return nil
+	}
+	_ = h.bot.sendSchedulerMessageWithKeyboard(payment.TelegramID, paymentScreenCanceledText, h.bot.userKeyboard(payment.TelegramID))
 	return nil
 }
 

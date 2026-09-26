@@ -361,7 +361,7 @@ func TestAdminTestPaymentPriceShowsPaymentButtonAndUsesConfiguredAmount(t *testi
 	msg, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
 	assert.Contains(t, msg, "10 руб")
-	assert.Equal(t, StateWaitPaymentMethod, b.userStates.Get(adminID))
+	assert.Equal(t, StateNone, b.userStates.Get(adminID), "платёжный экран не держит состояний в памяти")
 }
 
 func TestAdminTestPaymentPriceDisabledHidesPaymentButton(t *testing.T) {
@@ -768,21 +768,26 @@ func TestHandleTextMessage_AdminUserInfoCardStateClearedOnOtherInput(t *testing.
 	assert.Equal(t, StateNone, b.userStates.Get(adminID))
 }
 
-func TestHandleTextMessage_PaymentFlowResetsOnMainMenuButtons(t *testing.T) {
-	b, _ := setupTestBot(t)
+// Reply-клавиатура выбора способа из старого флоу могла остаться у
+// пользователя после выката: её кнопка открывает новый платёжный экран.
+func TestHandleTextMessage_LegacyPaymentMethodButtonOpensScreen(t *testing.T) {
+	b, db := setupTestBot(t)
 	userID := int64(12345)
-	b.userStates.Set(userID, StateWaitPaymentMethod)
+	price := 400
+	_, err := db.CreateUser(userID, "payer", "Payer", strPtrTest("uuid-12345"), nil, &price, nil)
+	require.NoError(t, err)
+	b.platega = platega.NewClient("merchant", "secret")
+	b.remnawave.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, assert.AnError
+	})})
 
 	ctx := &MockContext{
 		sender:  &tele.User{ID: userID, Username: "payer"},
-		message: &tele.Message{Text: BtnInfo},
+		message: &tele.Message{Text: BtnPayCrypto},
 	}
-
-	err := b.handleTextMessage(ctx)
-	require.NoError(t, err)
+	require.NoError(t, b.handleTextMessage(ctx))
 
 	msg, ok := ctx.sentMsg.(string)
 	require.True(t, ok)
-	assert.Equal(t, BuildInfoMessage(b.config), msg)
-	assert.Equal(t, StateNone, b.userStates.Get(userID), "при выходе в главное меню state оплаты должен сбрасываться")
+	assert.Contains(t, msg, "Выберите способ оплаты")
 }

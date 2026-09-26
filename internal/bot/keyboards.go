@@ -3,10 +3,12 @@ package bot
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 
 	tele "gopkg.in/telebot.v3"
 
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
 
@@ -37,6 +39,13 @@ const (
 	cbPaymentMethod        = "pm_open"    // экран сохранённого способа оплаты
 	cbPaymentMethodUnlink  = "pm_unlink"  // запрос отвязки способа
 	cbPaymentMethodConfirm = "pm_unlink_ok"
+)
+
+// Unique-идентификаторы inline-кнопок платёжного экрана
+const (
+	cbPayMethod = "pay_method" // выбор способа оплаты (Data = провайдер)
+	cbPayCheck  = "pay_check"  // «Я оплатил» — ручная проверка оплаты
+	cbPayCancel = "pay_cancel" // отмена (Data = id платежа или пусто на шаге выбора способа)
 )
 
 // Unique-идентификаторы inline-кнопок «Повторить» в сообщениях об ошибке
@@ -91,7 +100,8 @@ const (
 	BtnRenew        = "💳 Продлить подписку"
 	BtnPayYooKassa  = "⚡ Карта / СБП / SberPay"
 	BtnPayCrypto    = "🪙 Крипта"
-	BtnCheckPayment = "🔄 Проверить оплату"
+	BtnCheckPayment = "🔄 Проверить оплату" // reply-кнопка старого флоу: живёт в истории чатов
+	BtnPaidCheck    = "🔄 Я оплатил"
 
 	// Кнопка серверов (мониторинг)
 	BtnServers = "📡 Серверы"
@@ -335,27 +345,37 @@ func ConfirmKeyboard() *tele.ReplyMarkup {
 	return menu
 }
 
-// PaymentMethodKeyboard возвращает меню выбора способа оплаты
+// PaymentMethodKeyboard — inline-кнопки шага выбора способа оплаты.
+// Показываются только способы, для которых настроен клиент кассы.
 func PaymentMethodKeyboard(hasYooKassa, hasPlatega bool) *tele.ReplyMarkup {
-	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
+	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
 	if hasYooKassa {
-		rows = append(rows, menu.Row(menu.Text(BtnPayYooKassa)))
+		rows = append(rows, menu.Row(menu.Data(BtnPayYooKassa, cbPayMethod, paymentprovider.YooKassa)))
 	}
 	if hasPlatega {
-		rows = append(rows, menu.Row(menu.Text(BtnPayCrypto)))
+		rows = append(rows, menu.Row(menu.Data(BtnPayCrypto, cbPayMethod, paymentprovider.Platega)))
 	}
-	rows = append(rows, menu.Row(menu.Text(BtnCancel)))
-	menu.Reply(rows...)
+	rows = append(rows, menu.Row(menu.Data(BtnCancel, cbPayCancel)))
+	menu.Inline(rows...)
 	return menu
 }
 
-// PaymentWaitKeyboard возвращает меню ожидания оплаты
-func PaymentWaitKeyboard() *tele.ReplyMarkup {
-	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
-	menu.Reply(
-		menu.Row(menu.Text(BtnCheckPayment), menu.Text(BtnCancel)),
+// PaymentWaitKeyboard — inline-кнопки шага ожидания оплаты. URL-кнопка
+// ставится только на валидную ссылку: битый URL Telegram отвергает вместе со
+// всем сообщением, и тогда ссылка уходит в текст экрана.
+func PaymentWaitKeyboard(payURL string, amount int, paymentID int64) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+	if isValidSubscriptionURL(payURL) {
+		rows = append(rows, menu.Row(menu.URL(fmt.Sprintf("💳 Оплатить %d ₽", amount), payURL)))
+	}
+	id := strconv.FormatInt(paymentID, 10)
+	rows = append(rows,
+		menu.Row(menu.Data(BtnPaidCheck, cbPayCheck, id)),
+		menu.Row(menu.Data(BtnCancel, cbPayCancel, id)),
 	)
+	menu.Inline(rows...)
 	return menu
 }
 

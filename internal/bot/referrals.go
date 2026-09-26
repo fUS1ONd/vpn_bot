@@ -16,11 +16,7 @@ import (
 const referralHistoryPageSize = 10
 
 func moscowTime(value time.Time) string {
-	location, err := time.LoadLocation("Europe/Moscow")
-	if err != nil {
-		location = time.FixedZone("МСК", 3*60*60)
-	}
-	return value.In(location).Format("02.01.2006 15:04 МСК")
+	return value.In(moscowLocation()).Format("02.01.2006 15:04 МСК")
 }
 
 func (b *Bot) referralInviteMessage(invite *database.Invite) string {

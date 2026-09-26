@@ -3,16 +3,11 @@ package bot
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/platega"
 	tele "gopkg.in/telebot.v3"
-)
-
-// Состояния оплаты
-const (
-	StateWaitPaymentMethod = "wait_payment_method" // Ожидание выбора способа оплаты
-	StateWaitPaymentResult = "wait_payment_result" // Ожидание оплаты (показана ссылка)
 )
 
 // handlePayButton обрабатывает нажатие "Оплатить подписку" / "Продлить подписку"
@@ -59,113 +54,126 @@ func (b *Bot) handlePayButton(c tele.Context) error {
 		}
 	}
 
-	// Показываем экран выбора способа оплаты
-	b.userStates.Set(telegramID, StateWaitPaymentMethod)
-	msg := fmt.Sprintf("💳 <b>Подписка на 1 месяц — %d руб.</b>\n\nВыберите способ оплаты:", price)
-	msg += b.autorenewConsentNote()
-	return c.Send(msg, &tele.SendOptions{
+	// Экран выбора способа всегда новым сообщением: с inline-кнопки сюда
+	// приходят из сообщения об автосписании, и затирать его нельзя.
+	return c.Send(b.paymentMethodScreenText(price), &tele.SendOptions{
 		ParseMode:             tele.ModeHTML,
 		ReplyMarkup:           b.paymentMethodKeyboard(),
 		DisableWebPagePreview: true,
 	})
 }
 
-// handlePaymentMethodSelected обрабатывает выбор способа оплаты
+// handlePaymentMethodSelected создаёт платёж выбранным способом и переводит
+// платёжный экран в ожидание оплаты. Логика createPaymentForProvider не
+// трогается: здесь меняется только то, как показан результат.
 func (b *Bot) handlePaymentMethodSelected(c tele.Context, provider string) error {
 	telegramID := c.Sender().ID
+
+	// Кнопка способа живёт в чате сколько угодно: режим обслуживания мог
+	// включиться уже после показа экрана.
+	if b.isMaintenanceMode() {
+		return b.closePaymentScreen(c, "⚙️ Платёжная система временно на обслуживании. Попробуйте позже.", nil)
+	}
 
 	payment, redirectURL, err := b.createPaymentForProvider(telegramID, provider)
 	if err != nil {
 		slog.Error("Ошибка создания платежа", "error", err, "telegram_id", telegramID)
 
 		// Обработка специфических ошибок
-		if err.Error() == "subscription price not set" {
-			return c.Send("❌ Цена подписки не установлена.", &tele.SendOptions{
-				ReplyMarkup: b.userKeyboard(telegramID),
-			})
+		switch {
+		case err.Error() == "subscription price not set":
+			return b.closePaymentScreen(c, "❌ Цена подписки не установлена.", nil)
+		case strings.HasPrefix(err.Error(), "subscription_too_far"):
+			return b.closePaymentScreen(c, "ℹ️ Подписка уже оплачена надолго вперёд.\nПродлить можно не раньше чем за 90 дней до окончания.", nil)
 		}
 
-		// Состояние оставляем: пользователь всё ещё на экране выбора способа,
-		// и reply-клавиатура даёт ему второй способ и «Отмена». Сбросив его, мы
-		// бы отняли выход у того, кто как раз пытается заплатить.
-		return b.sendErrorExit(c, "❌ Не удалось создать платёж\n\nДеньги не списаны.",
-			retryAction{unique: cbRetryPayment, data: provider})
+		return b.closePaymentScreen(c, b.errorExitText("❌ Не удалось создать платёж\n\nДеньги не списаны."),
+			b.errorExitKeyboard(retryAction{unique: cbRetryPayment, data: provider}))
 	}
 
-	b.userStates.Set(telegramID, StateWaitPaymentResult)
-
-	msg := fmt.Sprintf("✅ <b>Платёж создан!</b>\n\n"+
-		"Перейдите по ссылке для оплаты:\n%s\n\n"+
-		"Сумма: <b>%d руб.</b>\n\n"+
-		"После оплаты подписка будет активирована автоматически.\n"+
-		"Обычно это занимает до 1 минуты.",
-		redirectURL, payment.Amount)
-
-	return c.Send(msg, &tele.SendOptions{
-		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: PaymentWaitKeyboard(),
-	})
+	msg := b.paymentWaitScreenText(payment, redirectURL, time.Now().UTC())
+	markup := PaymentWaitKeyboard(redirectURL, payment.Amount, payment.ID)
+	if messageID, ok := b.showPaymentScreen(c, msg, markup); ok {
+		b.paymentScreens.set(telegramID, payment.ID, messageID)
+	}
+	return nil
 }
 
-// handleCheckPayment обрабатывает кнопку "Проверить оплату"
+// handleCheckPayment — ручная проверка оплаты: «🔄 Я оплатил» на платёжном
+// экране и reply-кнопка «Проверить оплату» из старых сообщений в истории.
 func (b *Bot) handleCheckPayment(c tele.Context) error {
 	telegramID := c.Sender().ID
+	fromScreen := c.Callback() != nil
 
 	status, err := b.checkPaymentStatus(telegramID)
 	if err != nil {
 		slog.Error("Ошибка проверки статуса платежа", "error", err, "telegram_id", telegramID)
+		if fromScreen {
+			// Экран с его кнопками остаётся как был — он по-прежнему верен.
+			respondCallback(c)
+		}
 		return b.sendErrorExit(c, "❌ Не удалось проверить оплату\n\nЕсли вы уже оплатили, подписка включится сама в течение минуты.",
 			retryAction{unique: cbRetryPaymentCheck})
 	}
 
 	switch status {
-	case "confirmed":
-		b.userStates.Delete(telegramID)
+	case "confirmed", "confirmed_not_activated":
+		msg := "✅ Оплата подтверждена, но активация подписки ещё не завершена.\n\nМы повторим попытку автоматически и отдельно сообщим о результате."
 		// Разметка выбирается тем же хелпером, что и на пути вебхука: путей к
 		// сообщению об успешной оплате два, и расходиться они не должны — в
 		// частности, тестовый платёж админа автопродление не предлагает.
-		return c.Send(b.paymentActivatedMessage(telegramID), &tele.SendOptions{
+		markup := b.userKeyboard(telegramID)
+		if status == "confirmed" {
+			msg = b.paymentActivatedMessage(telegramID)
+			markup = b.paymentSuccessMarkupFor(telegramID, b.isTestPaymentUser(telegramID))
+		}
+		if fromScreen {
+			// Экран гасим, а итог шлём отдельно: с ним приходит обновлённая
+			// reply-клавиатура («Оплатить» становится «Продлить»).
+			b.paymentScreens.forget(telegramID)
+			if err := b.closePaymentScreen(c, paymentScreenPaidText, nil); err != nil {
+				slog.Warn("Не удалось закрыть платёжный экран", "error", err, "telegram_id", telegramID)
+			}
+			respondCallback(c)
+		}
+		return c.Send(msg, &tele.SendOptions{
 			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: b.paymentSuccessMarkupFor(telegramID, b.isTestPaymentUser(telegramID)),
-		})
-	case "confirmed_not_activated":
-		b.userStates.Delete(telegramID)
-		return c.Send("✅ Оплата подтверждена, но активация подписки ещё не завершена.\n\nМы повторим попытку автоматически и отдельно сообщим о результате.", &tele.SendOptions{
-			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: b.userKeyboard(telegramID),
+			ReplyMarkup: markup,
 		})
 	case "not_found":
-		b.userStates.Delete(telegramID)
-		return c.Send("Активных платежей не найдено.", &tele.SendOptions{
-			ReplyMarkup: b.userKeyboard(telegramID),
-		})
+		return b.finishCheck(c, "Активных платежей не найдено.")
 	case "canceled", platega.StatusCanceled:
-		b.userStates.Delete(telegramID)
-		return c.Send("❌ Платёж отменён. Вы можете попробовать снова.", &tele.SendOptions{
-			ReplyMarkup: b.userKeyboard(telegramID),
-		})
+		return b.finishCheck(c, paymentScreenCanceledText)
 	case "chargebacked", platega.StatusChargebacked:
-		b.userStates.Delete(telegramID)
-		return c.Send("⚠️ По платежу выполнен возврат средств. Доступ будет отключён или уже отключён. Если это ошибка, обратитесь к администратору.", &tele.SendOptions{
-			ReplyMarkup: b.userKeyboard(telegramID),
-		})
+		return b.finishCheck(c, "⚠️ По платежу выполнен возврат средств. Доступ будет отключён или уже отключён. Если это ошибка, обратитесь к администратору.")
 	default:
-		// pending или другой промежуточный статус
-		return c.Send("⏳ Оплата пока не поступила. Подождите немного и проверьте снова.", &tele.SendOptions{
-			ReplyMarkup: PaymentWaitKeyboard(),
-		})
+		// pending или другой промежуточный статус: экран остаётся с кнопками.
+		const notYet = "⏳ Оплата пока не поступила. Подождите немного и проверьте снова."
+		if fromScreen {
+			return c.Respond(&tele.CallbackResponse{Text: notYet, ShowAlert: true})
+		}
+		return c.Send(notYet, &tele.SendOptions{ReplyMarkup: b.userKeyboard(telegramID)})
 	}
 }
 
-// paymentMethodFromButton определяет метод оплаты по тексту кнопки
-func paymentProviderFromButton(text string) (string, bool) {
-	switch text {
-	case BtnPayYooKassa:
-		return "yookassa", true
-	case BtnPayCrypto:
-		return "platega", true
-	default:
-		return "", false
+// finishCheck завершает проверку итогом, после которого платить нечего: на
+// экране итог заменяет его, без экрана — приходит сообщением.
+func (b *Bot) finishCheck(c tele.Context, msg string) error {
+	telegramID := c.Sender().ID
+	if c.Callback() == nil {
+		return c.Send(msg, &tele.SendOptions{ReplyMarkup: b.userKeyboard(telegramID)})
+	}
+	b.paymentScreens.forget(telegramID)
+	err := b.closePaymentScreen(c, msg, nil)
+	respondCallback(c)
+	return err
+}
+
+// respondCallback гасит «часики» на нажатой кнопке. Ошибка ответа флоу не
+// ломает: действие уже выполнено.
+func respondCallback(c tele.Context) {
+	if err := c.Respond(); err != nil {
+		slog.Warn("Failed to respond to callback", "error", err, "telegram_id", c.Sender().ID)
 	}
 }
 
@@ -187,10 +195,8 @@ func (b *Bot) handleRetryPayment(c tele.Context) error {
 	return b.handlePaymentMethodSelected(c, args[0])
 }
 
-// handleRetryPaymentCheck повторяет проверку оплаты.
+// handleRetryPaymentCheck повторяет проверку оплаты. Нажатие приходит из
+// сообщения об ошибке, и итог проверки заменяет его так же, как платёжный экран.
 func (b *Bot) handleRetryPaymentCheck(c tele.Context) error {
-	if err := c.Respond(); err != nil {
-		slog.Warn("Failed to respond to payment check retry", "error", err, "telegram_id", c.Sender().ID)
-	}
 	return b.handleCheckPayment(c)
 }
