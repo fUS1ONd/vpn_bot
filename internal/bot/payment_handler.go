@@ -63,6 +63,18 @@ func (b *Bot) handlePayButton(c tele.Context) error {
 	})
 }
 
+// handlePayOpen — inline-кнопка оплаты под чужим сообщением (уведомление
+// планировщика, неудачное автосписание). Все проверки handlePayButton
+// выполняются в момент нажатия: сообщение могло пролежать сутки, и подписка за
+// это время могла быть уже оплачена.
+func (b *Bot) handlePayOpen(c tele.Context) error {
+	if err := b.handlePayButton(c); err != nil {
+		slog.Error("Не удалось открыть оплату по inline-кнопке", "error", err, "telegram_id", c.Sender().ID)
+		return c.RespondAlert("Не удалось открыть оплату. Откройте «💳 Продлить подписку» в меню.")
+	}
+	return c.Respond()
+}
+
 // handlePaymentMethodSelected создаёт платёж выбранным способом и переводит
 // платёжный экран в ожидание оплаты. Логика createPaymentForProvider не
 // трогается: здесь меняется только то, как показан результат.

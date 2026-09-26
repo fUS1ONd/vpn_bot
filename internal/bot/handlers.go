@@ -232,6 +232,8 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnPayMethod, bot.handlePayMethodCallback)
 	b.Handle(&btnPayCheck, bot.handlePayCheckCallback)
 	b.Handle(&btnPayCancel, bot.handlePayCancelCallback)
+	btnPayOpen := payMenu.Data("", cbPayOpen)
+	b.Handle(&btnPayOpen, bot.handlePayOpen)
 
 	errMenu := &tele.ReplyMarkup{}
 	btnRetryPayment := errMenu.Data("", cbRetryPayment)
@@ -258,7 +260,8 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnArDisable, bot.handleAutorenewDisable)
 	b.Handle(&btnArDismiss, bot.handleAutorenewDismiss)
 	btnArPay := arMenu.Data("", cbAutorenewPayManually)
-	b.Handle(&btnArPay, bot.handleAutorenewPayManually)
+	// «Продлить вручную» после неудачного автосписания — тот же вход в оплату.
+	b.Handle(&btnArPay, bot.handlePayOpen)
 
 	// Inline-кнопки сохранённого способа оплаты
 	pmMenu := &tele.ReplyMarkup{}

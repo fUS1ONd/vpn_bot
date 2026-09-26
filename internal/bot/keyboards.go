@@ -46,6 +46,7 @@ const (
 	cbPayMethod = "pay_method" // выбор способа оплаты (Data = провайдер)
 	cbPayCheck  = "pay_check"  // «Я оплатил» — ручная проверка оплаты
 	cbPayCancel = "pay_cancel" // отмена (Data = id платежа или пусто на шаге выбора способа)
+	cbPayOpen   = "pay_open"   // открыть экран оплаты из уведомления планировщика
 )
 
 // Unique-идентификаторы inline-кнопок «Повторить» в сообщениях об ошибке
@@ -358,6 +359,14 @@ func PaymentMethodKeyboard(hasYooKassa, hasPlatega bool) *tele.ReplyMarkup {
 	}
 	rows = append(rows, menu.Row(menu.Data(BtnCancel, cbPayCancel)))
 	menu.Inline(rows...)
+	return menu
+}
+
+// PayOpenKeyboard — одна кнопка, открывающая экран оплаты. Сумма в подписи
+// справочная: экран при нажатии пересчитывает цену и способы заново.
+func PayOpenKeyboard(label string) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(menu.Row(menu.Data(label, cbPayOpen)))
 	return menu
 }
 

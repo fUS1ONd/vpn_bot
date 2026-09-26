@@ -291,16 +291,6 @@ func (b *Bot) handleAutorenewDismiss(c tele.Context) error {
 	return c.Respond(&tele.CallbackResponse{Text: "Хорошо. Включить можно в «Моя подписка»"})
 }
 
-// handleAutorenewPayManually ведёт из сообщения о неудачной попытке туда же,
-// куда «💳 Продлить подписку».
-func (b *Bot) handleAutorenewPayManually(c tele.Context) error {
-	if err := b.handlePayButton(c); err != nil {
-		slog.Error("Не удалось открыть оплату из сообщения об автосписании", "error", err, "telegram_id", c.Sender().ID)
-		return c.RespondAlert("Не удалось открыть оплату. Откройте «💳 Продлить подписку» в меню.")
-	}
-	return c.Respond()
-}
-
 // loadAutorenewView перечитывает состояние: inline-кнопки живут в чате вечно и
 // остаются нажимаемыми после того, как подписка истекла.
 func (b *Bot) loadAutorenewView(telegramID int64) (autorenewView, bool) {
