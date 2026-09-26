@@ -81,8 +81,6 @@ type Bot struct {
 	communityPendingAlerted     sync.Map                                             // telegram_id -> struct{}, защита от потока алертов о зависших заявках
 	chatMemberOf                chatMemberFunc                                       // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
 	panelAuthAlerted            sync.Map                                             // ключ алерта про токен панели -> struct{}, защита от повторов
-	notifyTyping                func(c tele.Context) error                           // шов ChatAction typing; nil — без индикации
-	callbackAnswerDeadline      time.Duration                                        // срок callback-сторожа; 0 — callbackAnswerDeadline
 }
 
 // chatMemberFunc — единственный поход бота за составом Канала.
@@ -138,7 +136,6 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	bot.chatMemberOf = func(chatID, userID int64) (*tele.ChatMember, error) {
 		return b.ChatMemberOf(&tele.Chat{ID: chatID}, &tele.User{ID: userID})
 	}
-	bot.notifyTyping = func(c tele.Context) error { return c.Notify(tele.Typing) }
 	bot.userLimiter = newUserRateLimiter(3, 5, bot.shutdownCh) // 3 req/s, burst 5
 
 	// Rate limiting middleware — защита от спама командами
@@ -146,10 +143,6 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 
 	// Уборка нажатий reply-кнопок: навигации не место в истории переписки
 	b.Use(bot.dropReplyTapMiddleware)
-
-	// Callback-сторож: «часики» на кнопке гаснут вовремя, даже если обработчик
-	// ждёт панель или кассу. Стоит после rate limit — тот отвечает сам.
-	b.Use(bot.callbackDeadlineMiddleware)
 
 	// Middleware для логирования
 	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
@@ -711,12 +704,6 @@ func (b *Bot) processInviteCode(c tele.Context, code string) error {
 		trafficLimitBytes = int64(b.config.TrialTrafficLimitGB) * 1024 * 1024 * 1024
 	}
 
-	// Создание пользователя в панели — самый долгий шаг регистрации. Итог
-	// приходит новым сообщением (с ним ставится reply-клавиатура, правкой её не
-	// поставить), поэтому промежуточное сообщение потом удаляется, а не правится.
-	progressID, progressShown := b.showProgress(c, MsgAccountCreating)
-	defer b.dropProgress(c, progressID, progressShown)
-
 	remnawaveUser, err := b.remnawave.CreateUser(telegramID, username, expireAt, trafficLimitBytes)
 	if err != nil {
 		slog.Error("Failed to create user in Remnawave", "error", err)
@@ -828,9 +815,6 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	if err != nil || user == nil {
 		return c.Send(MsgNotRegistered, &tele.SendOptions{ParseMode: tele.ModeHTML})
 	}
-
-	// Карточка — до трёх запросов в панель подряд.
-	b.showTyping(c)
 
 	// Получаем данные из Remnawave
 	remnawaveUser, err := b.remnawaveUser(telegramID)

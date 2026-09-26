@@ -101,7 +101,6 @@ func newPaymentScreenDeleter(api *tele.Bot) func(chatID int64, messageID int) er
 
 const (
 	paymentScreenPaidText     = "✅ Оплата получена."
-	paymentScreenCreatingText = "⏳ Создаю платёж…"
 	paymentScreenCanceledText = "❌ Платёж отменён. Вы можете попробовать снова."
 )
 
@@ -234,20 +233,6 @@ func (b *Bot) showPaymentScreen(c tele.Context, msg string, markup *tele.ReplyMa
 		slog.Error("Не удалось отправить платёжный экран", "error", err, "telegram_id", c.Sender().ID)
 	}
 	return 0, false
-}
-
-// showPaymentCreating переводит экран под пальцем в ожидание создания платежа.
-// Экран без клавиатуры: итог создания заменит его целиком. Вне inline-нажатия
-// экрана нет — хватает «печатает…».
-func (b *Bot) showPaymentCreating(c tele.Context) {
-	if c.Callback() == nil || c.Message() == nil {
-		b.showTyping(c)
-		return
-	}
-	err := c.Edit(paymentScreenCreatingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
-	if err != nil && !errors.Is(err, tele.ErrSameMessageContent) {
-		slog.Warn("Не удалось показать создание платежа", "error", err, "telegram_id", c.Sender().ID)
-	}
 }
 
 // closePaymentScreen заменяет текст экрана под пальцем, снимая клавиатуру.

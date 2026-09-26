@@ -185,7 +185,6 @@ func (b *Bot) handleBugReportStart(c tele.Context) error {
 	b.bugReportData[telegramID] = bugReportSession{}
 	b.bugReportMu.Unlock()
 
-	b.showTyping(c)
 	hosts, err := b.enabledHosts()
 	if err != nil || len(hosts) == 0 {
 		// Хостов нет/ошибка — не блокируем юзера, сразу к выбору категории.
