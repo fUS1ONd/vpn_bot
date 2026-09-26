@@ -40,7 +40,8 @@ func (b *Bot) handlePayButton(c tele.Context) error {
 		})
 	}
 
-	// Проверка лимита 90 дней
+	// Проверка лимита 90 дней — поход в панель.
+	b.showTyping(c)
 	remUser, err := b.remnawave.GetUserByTelegramID(telegramID)
 	if err == nil && remUser != nil && remUser.Status == "ACTIVE" && remUser.ExpireAt.Year() < 2099 {
 		daysLeft := int(remUser.ExpireAt.Sub(time.Now().UTC()).Hours() / 24)
@@ -87,6 +88,11 @@ func (b *Bot) handlePaymentMethodSelected(c tele.Context, provider string) error
 		return b.closePaymentScreen(c, "⚙️ Платёжная система временно на обслуживании. Попробуйте позже.", nil)
 	}
 
+	// Касса может отвечать десятки секунд (до трёх попыток). Экран сразу
+	// говорит, что нажатие принято, и теряет кнопки — повторное нажатие на
+	// время ожидания не заведёт второй запрос.
+	b.showPaymentCreating(c)
+
 	payment, redirectURL, err := b.createPaymentForProvider(telegramID, provider)
 	if err != nil {
 		slog.Error("Ошибка создания платежа", "error", err, "telegram_id", telegramID)
@@ -116,6 +122,9 @@ func (b *Bot) handlePaymentMethodSelected(c tele.Context, provider string) error
 func (b *Bot) handleCheckPayment(c tele.Context) error {
 	telegramID := c.Sender().ID
 	fromScreen := c.Callback() != nil
+	if !fromScreen {
+		b.showTyping(c)
+	}
 
 	status, err := b.checkPaymentStatus(telegramID)
 	if err != nil {
