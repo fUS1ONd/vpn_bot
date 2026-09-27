@@ -81,6 +81,10 @@ const (
 	cbAdminReferralRevokeOK = "adm_ref_revoke_ok"
 	cbAdminReferralBack     = "adm_ref_back"
 	cbAdminAutorenewOff     = "adm_ar_off" // выключение автопродления админом (Data = targetID)
+	// Снятие удержания несовпавшего автосписания владельцем (Data = targetID).
+	cbAdminMismatchResolve   = "adm_mm_resolve" // экран подтверждения
+	cbAdminMismatchResolveOK = "adm_mm_ok"      // подтверждение
+	cbAdminMismatchBack      = "adm_mm_back"    // назад в карточку
 )
 
 // Текстовые константы кнопок
@@ -706,6 +710,26 @@ func AdminReferralRevokeConfirmKeyboard(targetID int64, code string) *tele.Reply
 	yes := menu.Data("✅ Отозвать", cbAdminReferralRevokeOK, fmt.Sprintf("%d", targetID), code)
 	back := menu.Data("🔙 Назад", cbAdminUserReferrals, fmt.Sprintf("%d", targetID), "0")
 	menu.Inline(menu.Row(yes), menu.Row(back))
+	return menu
+}
+
+// withAdminMismatchResolveButton добавляет в карточку кнопку разбора.
+func withAdminMismatchResolveButton(markup *tele.ReplyMarkup, targetID int64) *tele.ReplyMarkup {
+	if markup == nil {
+		markup = &tele.ReplyMarkup{}
+	}
+	btn := markup.Data("✅ Автосписание разобрано", cbAdminMismatchResolve, fmt.Sprintf("%d", targetID))
+	markup.InlineKeyboard = append(markup.InlineKeyboard, []tele.InlineButton{*btn.Inline()})
+	return markup
+}
+
+// AdminMismatchResolveKeyboard — подтверждение снятия удержания.
+func AdminMismatchResolveKeyboard(targetID int64) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	idStr := fmt.Sprintf("%d", targetID)
+	ok := menu.Data("✅ Снять удержание", cbAdminMismatchResolveOK, idStr)
+	back := menu.Data("🔙 Назад", cbAdminMismatchBack, idStr)
+	menu.Inline(menu.Row(ok), menu.Row(back))
 	return menu
 }
 

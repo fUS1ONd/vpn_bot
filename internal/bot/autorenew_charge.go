@@ -480,14 +480,16 @@ func (b *Bot) finishSuccessfulAutorenew(payment *database.Payment, charged *paym
 		// Несовпадение идёт через общую точку с заголовком автосписания: одно
 		// подробное сообщение на платёж, сверка и вебхук второго не пришлют.
 		// Сбой нашей базы внутри проверки несовпадением не считается и
-		// сообщается всегда.
+		// сообщается всегда. Человеку о несовпадении — своё сообщение,
+		// отправка вне мьютекса, как у успешной ветки.
 		if mismatch, isMismatch := asPaymentMismatch(err); isMismatch {
-			b.reportAutorenewMismatch(payment, mismatch)
-		} else {
-			b.sendAdminAlert(fmt.Sprintf(
-				"⚠️ Автосписание #%d (%d ₽, пользователь %d): не удалось сверить ответ ЮKassa с локальной записью. Разберите операцию вручную.",
-				payment.ID, price, telegramID))
+			b.reportAutorenewMismatch(payment, mismatch, "autorenew")
+			notify := b.holdAndNotifyAutorenewMismatch(payment, mismatch)
+			return func() { notify() }
 		}
+		b.sendAdminAlert(fmt.Sprintf(
+			"⚠️ Автосписание #%d (%d ₽, пользователь %d): не удалось сверить ответ ЮKassa с локальной записью. Разберите операцию вручную.",
+			payment.ID, price, telegramID))
 		return nil
 	}
 

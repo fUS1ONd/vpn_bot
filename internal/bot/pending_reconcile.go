@@ -136,11 +136,14 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 		return
 	}
 
-	// Сообщение владельцу решается под мьютексом, а уходит после него: поход в
-	// Telegram не должен держать оплату человека. Отложенный вызов объявлен до
-	// захвата мьютекса и потому выполняется уже после его освобождения.
+	// Сообщения владельцу и человеку решаются под мьютексом, а уходят после него:
+	// поход в Telegram не должен держать оплату человека. Отложенные вызовы
+	// объявлены до захвата мьютекса и потому выполняются уже после его
+	// освобождения — и на любом пути, как того требует deliverOnce.
 	notifyOwner := func() bool { return false }
 	defer func() { notifyOwner() }()
+	notifyUser := noNotice
+	defer func() { notifyUser() }()
 
 	mu := getPaymentMutex(payment.TelegramID)
 	mu.Lock()
@@ -163,7 +166,7 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 	if mismatch, ok := asPaymentMismatch(err); ok {
 		// Провайдер ответил, но не то, что записано у нас: это не молчание, и
 		// ждать тут нечего. Подписку не выдаём; судьбу денег решает владелец.
-		b.reportPaymentMismatch(payment, mismatch, source)
+		notifyUser = b.reportMismatchAndPrepareNotice(payment, mismatch, source)
 		if deadlinePassed {
 			slog.Error("Сверка платежа: ответ провайдера так и не сошёлся с записью, платёж закрыт",
 				"payment_id", payment.ID, "provider", payment.Provider, "provider_status", mismatch.ProviderStatus, "source", source)

@@ -58,6 +58,11 @@ func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 		b.reportUnmatchedYooKassaEvent(event, providerPaymentID)
 		return nil
 	}
+	// Сообщение человеку уходит после снятия мьютекса: defer объявлен раньше
+	// Unlock и поэтому выполняется позже — и на любом пути, как того требует
+	// deliverOnce.
+	notifyUser := noNotice
+	defer func() { notifyUser() }()
 	mu := getPaymentMutex(payment.TelegramID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -69,7 +74,7 @@ func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 		if mismatch, ok := asPaymentMismatch(err); ok {
 			// Повторная доставка ответа кассы не изменит: отвечаем успехом, а
 			// несовпадение доносим сами.
-			b.reportPaymentMismatch(payment, mismatch, "webhook")
+			notifyUser = b.reportMismatchAndPrepareNotice(payment, mismatch, "webhook")
 			return nil
 		}
 		return err
@@ -790,6 +795,11 @@ func (b *Bot) paymentPrice(telegramID int64, user *database.User) (int, bool) {
 // с параллельным callback и сверкой. Несовпадение ответа с записью возвращается
 // ошибкой, различимой через errors.Is(err, errPaymentMismatch).
 func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
+	// Сообщение человеку уходит после снятия мьютекса: defer объявлен раньше
+	// Unlock и поэтому выполняется позже — и на любом пути, как того требует
+	// deliverOnce.
+	notifyUser := noNotice
+	defer func() { notifyUser() }()
 	// Берём мьютекс ДО чтения из БД — та же блокировка, что и в callback
 	mu := getPaymentMutex(telegramID)
 	mu.Lock()
@@ -817,7 +827,9 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	// подписку выдаёт только ответ, сошедшийся с записью.
 	if err := b.verifyProviderPayment(pending, status); err != nil {
 		if mismatch, ok := asPaymentMismatch(err); ok {
-			b.reportPaymentMismatch(pending, mismatch, "manual-check")
+			// Кнопка могла найти висящую запись автосписания: человеку — то же
+			// сообщение о списании, что и с других входов, одно на платёж.
+			notifyUser = b.reportMismatchAndPrepareNotice(pending, mismatch, "manual-check")
 		}
 		return "", err
 	}
