@@ -130,10 +130,6 @@ func (b *Bot) reportPaymentMismatchWithHeadline(payment *database.Payment, misma
 	if mismatch.ProviderStatus != paymentprovider.StatusSucceeded {
 		return
 	}
-	if !b.claimPaymentMismatchReport(payment.ID) {
-		return
-	}
-
 	recipient := ""
 	if mismatch.recipientChecked() {
 		recipient = fmt.Sprintf("\nПолучатель: наш <code>%s</code>, в ответе <code>%s</code>",
@@ -151,22 +147,10 @@ func (b *Bot) reportPaymentMismatchWithHeadline(payment *database.Payment, misma
 	))
 }
 
-// claimPaymentMismatchReport занимает право сообщить владельцу о несовпадении по
-// платежу: true — первым, сообщать; false — о платеже уже сообщили. Одно
-// сообщение на платёж, с какого бы входа несовпадение ни пришло.
-func (b *Bot) claimPaymentMismatchReport(paymentID int64) bool {
-	_, alreadyReported := b.paymentMismatchReported.LoadOrStore(paymentID, struct{}{})
-	return !alreadyReported
-}
-
-// sendPaymentMismatchAlert отправляет владельцу сообщение, право на которое уже
-// занято claimPaymentMismatchReport. Не принятое Telegram сообщение право
-// возвращает: иначе пометка «уже сообщили» стояла бы без сообщения, а человеку
-// на ручной проверке сказали бы, что мы разбираемся.
+// sendPaymentMismatchAlert отправляет владельцу сообщение о несовпадении — одно
+// на платёж, с какого бы входа несовпадение ни пришло. Не принятое Telegram
+// сообщение пометку снимает (deliverOnce): иначе она стояла бы без сообщения, а
+// человеку на ручной проверке сказали бы, что мы разбираемся.
 func (b *Bot) sendPaymentMismatchAlert(paymentID int64, msg string) {
-	if err := b.sendSchedulerMessage(b.config.AdminID, msg); err != nil {
-		b.paymentMismatchReported.Delete(paymentID)
-		slog.Error("Не удалось сообщить владельцу о несовпадении, повторим при следующей встрече",
-			"error", err, "payment_id", paymentID)
-	}
+	b.adminAlertOnce(&b.paymentMismatchReported, paymentID, "несовпадение ответа провайдера", msg)()
 }
