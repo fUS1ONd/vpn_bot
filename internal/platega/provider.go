@@ -2,6 +2,7 @@ package platega
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -34,7 +35,10 @@ func (p *Provider) GetPayment(id string) (*paymentprovider.Payment, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &paymentprovider.Payment{ID: status.ID, Status: normalizeStatus(status.Status), Amount: int(status.PaymentDetails.Amount), Currency: status.PaymentDetails.Currency, PaymentMethod: status.PaymentMethod}, nil
+	// Сумма приходит числом с плавающей точкой: усечение превратило бы 399.9999999
+	// в 399 и дало ложное несовпадение с записью на 400 ₽. Округляем до рубля
+	// (половина — вверх): расхождение меньше рубля несовпадением не считаем.
+	return &paymentprovider.Payment{ID: status.ID, Status: normalizeStatus(status.Status), Amount: int(math.Round(status.PaymentDetails.Amount)), Currency: status.PaymentDetails.Currency, PaymentMethod: status.PaymentMethod}, nil
 }
 func normalizeStatus(s string) string {
 	switch s {

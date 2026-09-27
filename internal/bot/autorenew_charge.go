@@ -477,9 +477,17 @@ func (b *Bot) finishSuccessfulAutorenew(payment *database.Payment, charged *paym
 	// Подписку выдаём только по сверенному ответу API — как и на вебхуке.
 	if err := b.verifyYooKassaPayment(payment, charged); err != nil {
 		slog.Error("Автосписание: ответ кассы не сошёлся с локальной записью", "error", err, "payment_id", payment.ID)
-		b.sendAdminAlert(fmt.Sprintf(
-			"⚠️ Автосписание #%d (%d ₽, пользователь %d): ответ ЮKassa не сошёлся с локальной записью. Разберите операцию вручную.",
-			payment.ID, price, telegramID))
+		// Несовпадение идёт через общую точку с заголовком автосписания: одно
+		// подробное сообщение на платёж, сверка и вебхук второго не пришлют.
+		// Сбой нашей базы внутри проверки несовпадением не считается и
+		// сообщается всегда.
+		if mismatch, isMismatch := asPaymentMismatch(err); isMismatch {
+			b.reportAutorenewMismatch(payment, mismatch)
+		} else {
+			b.sendAdminAlert(fmt.Sprintf(
+				"⚠️ Автосписание #%d (%d ₽, пользователь %d): не удалось сверить ответ ЮKassa с локальной записью. Разберите операцию вручную.",
+				payment.ID, price, telegramID))
+		}
 		return nil
 	}
 

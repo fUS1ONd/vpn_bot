@@ -13,7 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestYooKassaWebhookRejectsMismatchedAuthoritativePayment(t *testing.T) {
+// Ответ API не сошёлся с записью: подписку не выдаём, но кассе отвечаем успехом —
+// повторная доставка ничего не изменит, — а владелец узнаёт о «оплачено» один раз.
+func TestYooKassaWebhookAcknowledgesMismatchedPaymentAndNotifiesOwnerOnce(t *testing.T) {
 	db, err := database.New(t.TempDir() + "/bot.db")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
@@ -25,11 +27,18 @@ func TestYooKassaWebhookRejectsMismatchedAuthoritativePayment(t *testing.T) {
 	client.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"id":"yo-real","status":"succeeded","amount":{"value":"1.00","currency":"RUB"},"recipient":{"account_id":"shop-1"}}`)), Header: make(http.Header)}, nil
 	})})
-	b := &Bot{db: db, config: &config.Config{YooKassaShopID: "shop-1"}, yookassa: client, userStates: newStateMap()}
-	require.Error(t, b.HandleYooKassaWebhook("payment.succeeded", externalID))
+	b := &Bot{db: db, config: &config.Config{AdminID: 999, YooKassaShopID: "shop-1"}, yookassa: client, userStates: newStateMap()}
+	capture := captureTelegram(t, b)
+
+	require.NoError(t, b.HandleYooKassaWebhook("payment.succeeded", externalID))
+	require.NoError(t, b.HandleYooKassaWebhook("payment.succeeded", externalID), "повторная доставка тоже получает успех")
+
 	p, err := db.GetPaymentByID(id)
 	require.NoError(t, err)
-	require.Equal(t, "pending", p.Status)
+	require.Equal(t, "pending", p.Status, "по несовпавшему ответу подписка не выдаётся")
+	alerts := capture.matching(mismatchAlertMarker)
+	require.Len(t, alerts, 1, "одно оповещение на платёж, сколько бы доставок ни пришло")
+	require.Equal(t, "999", alerts[0].ChatID)
 }
 
 func TestYooKassaWebhookAcknowledgesUnmatchedEventAndNotifiesOwner(t *testing.T) {

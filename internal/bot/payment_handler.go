@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/fus1ond/vpn_bot/internal/platega"
 	tele "gopkg.in/telebot.v3"
 )
@@ -118,6 +119,17 @@ func (b *Bot) handleCheckPayment(c tele.Context) error {
 	fromScreen := c.Callback() != nil
 
 	status, err := b.checkPaymentStatus(telegramID)
+	if mismatch, ok := asPaymentMismatch(err); ok {
+		if mismatch.ProviderStatus == paymentprovider.StatusSucceeded {
+			// «Подписка включится сама» здесь было бы неправдой: по такому ответу
+			// её не выдаст ни один вход. Владелец уже получил сообщение.
+			return b.finishCheck(c, paymentMismatchUserText)
+		}
+		// Провайдер говорит «не оплачено», хоть ответ и не сошёлся: денег нет,
+		// разбирать владельцу нечего. Статус провайдера к записи не применяется,
+		// поэтому и человеку показываем ожидание оплаты, а не отмену или возврат.
+		status, err = paymentprovider.StatusPending, nil
+	}
 	if err != nil {
 		slog.Error("Ошибка проверки статуса платежа", "error", err, "telegram_id", telegramID)
 		if fromScreen {
@@ -164,6 +176,11 @@ func (b *Bot) handleCheckPayment(c tele.Context) error {
 		return c.Send(notYet, &tele.SendOptions{ReplyMarkup: b.userKeyboard(telegramID)})
 	}
 }
+
+// paymentMismatchUserText — итог ручной проверки, когда провайдер говорит
+// «оплачено», но ответ не сошёлся с записью платежа.
+const paymentMismatchUserText = "⚠️ Оплата не прошла автоматическую проверку.\n\n" +
+	"Мы уже разбираемся — платить повторно не нужно."
 
 // finishCheck завершает проверку итогом, после которого платить нечего: на
 // экране итог заменяет его, без экрана — приходит сообщением.
