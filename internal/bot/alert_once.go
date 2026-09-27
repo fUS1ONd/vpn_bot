@@ -15,13 +15,18 @@ import (
 // Пометка занимается сразу, до отправки: параллельные входы дубля не пришлют.
 // Отправка при ошибке снимает пометку и пишет slog.Error; результат — доставлено
 // ли сообщение этим вызовом. Если пометка уже занята, возвращается отправка,
-// которая ничего не делает и отвечает false.
+// которая ничего не делает и отвечает false. label — метка для лога.
+//
+// Возвращённую отправку обязательно вызвать на любом пути, включая ранние
+// выходы: занятая и не отправленная пометка — ровно то состояние, от которого
+// защищает помощник (сообщения нет, а повторять его никто не станет до
+// перезапуска).
 //
 // Занятие и отправка разделены намеренно: решение «сообщать или нет»
 // принимается там, где известны данные платежа (в том числе под мьютексом
 // платежа), а сетевой вызов можно выполнить позже, вне критической секции.
 // Когда разделять нечего, отправку вызывают сразу: deliverOnce(...)().
-func deliverOnce(reported *sync.Map, paymentID int64, what string, send func() error) func() bool {
+func deliverOnce(reported *sync.Map, paymentID int64, label string, send func() error) func() bool {
 	if _, alreadyReported := reported.LoadOrStore(paymentID, struct{}{}); alreadyReported {
 		return func() bool { return false }
 	}
@@ -29,7 +34,7 @@ func deliverOnce(reported *sync.Map, paymentID int64, what string, send func() e
 		if err := send(); err != nil {
 			reported.Delete(paymentID)
 			slog.Error("Сообщение не доставлено, повторим при следующей встрече",
-				"what", what, "error", err, "payment_id", paymentID)
+				"label", label, "error", err, "payment_id", paymentID)
 			return false
 		}
 		return true
@@ -37,8 +42,8 @@ func deliverOnce(reported *sync.Map, paymentID int64, what string, send func() e
 }
 
 // adminAlertOnce — deliverOnce для сообщения владельцу.
-func (b *Bot) adminAlertOnce(reported *sync.Map, paymentID int64, what, msg string) func() bool {
-	return deliverOnce(reported, paymentID, what, func() error {
+func (b *Bot) adminAlertOnce(reported *sync.Map, paymentID int64, label, msg string) func() bool {
+	return deliverOnce(reported, paymentID, label, func() error {
 		return b.sendSchedulerMessage(b.config.AdminID, msg)
 	})
 }
