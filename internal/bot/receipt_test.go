@@ -569,6 +569,78 @@ func TestSummaryAppearsOnceADayWhilePendingReceiptsExist(t *testing.T) {
 	assert.Len(t, capture.matching("Не пробито чеков"), 2)
 }
 
+// holdReceiptLock занимает замок чека платежа, как это делает идущее фоновое
+// пробитие. Возвращает функцию, отпускающую замок; если тест её не вызвал,
+// замок отпускается при завершении теста: карта замков общая на процесс.
+func holdReceiptLock(t *testing.T, paymentID int64) func() {
+	t.Helper()
+	mu := getReceiptMutex(paymentID)
+	require.True(t, mu.TryLock(), "замок чека не должен быть занят до начала теста")
+	var once sync.Once
+	release := func() { once.Do(mu.Unlock) }
+	t.Cleanup(release)
+	return release
+}
+
+// Подтверждение оплаты совпало с плановым проходом: чек в эту секунду пробивается
+// в фоне. Сводка о нём ложная — через доли секунды чек будет пробит.
+func TestSummarySkipsReceiptBeingIssuedRightNow(t *testing.T) {
+	b, db, capture := newReceiptTestBot(t, &fnsStub{})
+	id := confirmedPayment(t, db, "yookassa", 400, time.Now().UTC())
+	release := holdReceiptLock(t, id)
+
+	b.issuePendingReceipts()
+	assert.Empty(t, capture.matching("Не пробито чеков"), "чек пробивается прямо сейчас — сводки нет")
+
+	// Фоновое пробитие закончилось неудачей и отпустило замок: следующий проход
+	// пробивает чек сам, и сводке снова не о чем сообщать.
+	release()
+	b.issuePendingReceipts()
+	assert.Empty(t, capture.matching("Не пробито чеков"))
+	pending, err := db.PaymentsNeedingReceipt()
+	require.NoError(t, err)
+	assert.Empty(t, pending, "чек пробит следующим проходом")
+}
+
+// Кабинет вернул ошибку, фонового пробития нет — чек действительно не пробит,
+// и сводка приходит, как раньше. Проверка замка в итоге не оставляет его занятым:
+// следующий проход снова пробует пробить чек.
+func TestSummaryReportsReceiptThatReallyFailed(t *testing.T) {
+	stub := &fnsStub{failWith: func(int) (int, string) {
+		return http.StatusInternalServerError, `{"message":"лежит"}`
+	}}
+	b, db, capture := newReceiptTestBot(t, stub)
+	confirmedPayment(t, db, "yookassa", 400, time.Now().UTC())
+
+	b.issuePendingReceipts()
+	summaries := capture.matching("Не пробито чеков")
+	require.Len(t, summaries, 1)
+	assert.Contains(t, summaries[0].Text, "Не пробито чеков: 1.")
+
+	b.issuePendingReceipts()
+	assert.Equal(t, 2, stub.createdCount(), "замок чека после итога свободен — повтор не заблокирован")
+}
+
+// Чек, застрявший больше суток, как раз пробивается в фоне: оповещение о нём
+// ложное. Если пробитие не удастся, оповещение придёт следующим проходом.
+func TestStuckReceiptAlertSkipsReceiptBeingIssuedRightNow(t *testing.T) {
+	stub := &fnsStub{failWith: func(int) (int, string) {
+		return http.StatusInternalServerError, `{"message":"лежит"}`
+	}}
+	b, db, capture := newReceiptTestBot(t, stub)
+	id := confirmedPayment(t, db, "yookassa", 400, time.Now().UTC().Add(-26*time.Hour))
+	release := holdReceiptLock(t, id)
+
+	b.issuePendingReceipts()
+	assert.Empty(t, capture.matching("не пробит больше суток"), "чек пробивается прямо сейчас — оповещения нет")
+	assert.Empty(t, capture.matching("Не пробито чеков"))
+
+	release()
+	b.issuePendingReceipts()
+	assert.Len(t, capture.matching("не пробит больше суток"), 1, "пробитие не удалось — оповещение приходит")
+	assert.Len(t, capture.matching("Не пробито чеков"), 1)
+}
+
 func TestAuthErrorAlertsOnFirstAttempt(t *testing.T) {
 	stub := &fnsStub{failWith: func(int) (int, string) {
 		return http.StatusUnauthorized, `{"message":"неверный пароль"}`
@@ -819,4 +891,98 @@ func TestStopClosesReceiptsWithoutRacingTheCounter(t *testing.T) {
 	receipt, err := db.GetReceipt(id)
 	require.NoError(t, err)
 	assert.Nil(t, receipt, "и следов в базе не оставляют — чек добьёт проход после перезапуска")
+}
+
+// Сводка по части очереди: один чек пробивается в фоне, другой реально не пробит.
+// Счётчик и «самый старый платёж» в сводке обязаны описывать только реально
+// непробитые, иначе владелец пойдёт в кабинет искать чек, который уже пробит,
+// и не найдёт настоящий старейший хвост.
+func TestSummaryCountsOnlyReallyFailedWhenAnotherReceiptIsInFlight(t *testing.T) {
+	stub := &fnsStub{failWith: func(int) (int, string) {
+		return http.StatusInternalServerError, `{"message":"лежит"}`
+	}}
+	b, db, capture := newReceiptTestBot(t, stub)
+	inFlightAt := time.Now().UTC().Add(-72 * time.Hour)
+	failedAt := time.Now().UTC()
+	inFlight := confirmedPayment(t, db, "yookassa", 400, inFlightAt)
+	confirmedPayment(t, db, "yookassa", 450, failedAt)
+	holdReceiptLock(t, inFlight)
+
+	b.issuePendingReceipts()
+
+	summaries := capture.matching("Не пробито чеков")
+	require.Len(t, summaries, 1, "реально непробитый чек в сводку попадает")
+	assert.Contains(t, summaries[0].Text, "Не пробито чеков: 1.")
+	assert.Contains(t, summaries[0].Text, moynalog.MoscowDate(failedAt),
+		"самый старый — среди реально непробитых")
+	assert.NotContains(t, summaries[0].Text, moynalog.MoscowDate(inFlightAt),
+		"дата пробивающегося сейчас чека в сводку не протекает")
+	assert.Empty(t, capture.matching("не пробит больше суток"),
+		"старый чек пробивается прямо сейчас — оповещения о застрявшем нет")
+}
+
+// Кабинет не принял вход: проход встал на первом платеже, до третьего не дошёл,
+// а второй в эту секунду пробивается в фоне. Не пробитые из-за отказа входа и не
+// достигнутые проходом чеки обязаны остаться в сводке (история 3 спеки) — фильтр
+// убирает только идущее пробитие, а не всё, что проход не тронул.
+func TestAuthBlockedPassStillReportsUnreachedReceiptsButNotInFlightOne(t *testing.T) {
+	b, db, capture := newReceiptTestBot(t, &fnsStub{})
+	b.moynalog.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/api/v1/auth/lkfl" {
+			return jsonResponse(http.StatusUnauthorized, `{"message":"неверный пароль"}`), nil
+		}
+		return nil, fmt.Errorf("до пробития дело дойти не должно")
+	})})
+	now := time.Now().UTC()
+	confirmedPayment(t, db, "yookassa", 400, now.Add(-3*time.Hour))
+	inFlight := confirmedPayment(t, db, "yookassa", 400, now.Add(-2*time.Hour))
+	confirmedPayment(t, db, "yookassa", 400, now.Add(-1*time.Hour))
+	holdReceiptLock(t, inFlight)
+
+	b.issuePendingReceipts()
+
+	summaries := capture.matching("Не пробито чеков")
+	require.Len(t, summaries, 1)
+	assert.Contains(t, summaries[0].Text, "Не пробито чеков: 2.",
+		"отвергнутый входом и недостигнутый чеки в сводке, пробивающийся — нет")
+}
+
+// Фоновое пробитие стартовало ровно в тот момент, когда фильтр итога держал замок
+// чека: TryLock не удался, и пробитие молча ушло. Чек при этом не теряется — его
+// добивает следующий проход, и ни ложной сводки, ни оповещения о застрявшем нет.
+func TestReceiptSkippedByAsyncPathWhileSummaryFilterHoldsLockIsIssuedByNextPass(t *testing.T) {
+	stub := &fnsStub{}
+	b, db, capture := newReceiptTestBot(t, stub)
+	id := confirmedPayment(t, db, "yookassa", 400, time.Now().UTC())
+
+	release := holdReceiptLock(t, id) // замок держит фильтр итога
+	b.issueReceiptAsync(id)
+	b.waitReceipts()
+	assert.Zero(t, stub.createdCount(), "фоновое пробитие уступило замок и ничего не сделало")
+	release()
+
+	b.issuePendingReceipts()
+
+	receipt, err := db.GetReceipt(id)
+	require.NoError(t, err)
+	require.NotNil(t, receipt, "чек не потерялся — следующий проход его подобрал")
+	assert.Equal(t, database.ReceiptStateCreated, receipt.State)
+	assert.Equal(t, 1, stub.createdCount(), "ровно один чек")
+	assert.Empty(t, capture.matching("Не пробито чеков"))
+}
+
+// Бот останавливается: проход прерван, а фоновое пробитие ещё держит замок.
+// Итог при остановке пробивающийся чек не считает и маркер сводки на пустом
+// итоге не ставит — иначе суточный ритм сдвинулся бы из-за ложной сводки.
+func TestStoppingPassExcludesInFlightReceipt(t *testing.T) {
+	b, db, capture := newReceiptTestBot(t, &fnsStub{})
+	id := confirmedPayment(t, db, "yookassa", 400, time.Now().UTC())
+	holdReceiptLock(t, id)
+
+	b.stopReceipts()
+	b.issuePendingReceipts()
+	assert.Empty(t, capture.matching("Не пробито чеков"), "пробивающийся чек в итог остановки не попадает")
+	sentAt, err := db.NotificationSentAt(b.config.AdminID, notificationReceiptsSummary)
+	require.NoError(t, err)
+	assert.Nil(t, sentAt, "пустой итог не ставит маркер сводки")
 }

@@ -222,9 +222,31 @@ func (b *Bot) issuePendingReceipts() {
 		slog.Error("Scheduler: не удалось пересчитать непробитые чеки", "error", err)
 		return
 	}
+	remaining = withoutReceiptsInFlight(remaining)
 	now := time.Now().UTC()
 	b.reportStuckReceipts(remaining, now)
 	b.reportReceiptsSummary(remaining, now)
+}
+
+// withoutReceiptsInFlight убирает из итога платежи, чек которых пробивается прямо
+// сейчас: их замок держит фоновое пробитие после подтверждения оплаты. Проход такой
+// платёж пропустил, а повторная выборка его видит — без фильтра владелец получил бы
+// сводку о чеке, который будет пробит через доли секунды. Если пробитие в итоге не
+// удастся, чек попадёт в итог следующего прохода.
+//
+// Проверка неблокирующая: ждать фоновое пробитие значит держать весь шаг планировщика
+// на походе в ФНС. Взятый замок сразу отпускается — работы по платежу здесь нет.
+func withoutReceiptsInFlight(pending []database.PendingReceipt) []database.PendingReceipt {
+	settled := make([]database.PendingReceipt, 0, len(pending))
+	for _, item := range pending {
+		mu := getReceiptMutex(item.PaymentID)
+		if !mu.TryLock() {
+			continue
+		}
+		mu.Unlock()
+		settled = append(settled, item)
+	}
+	return settled
 }
 
 // warnReceiptsIntegrationDisabled предупреждает о выключенной интеграции при
