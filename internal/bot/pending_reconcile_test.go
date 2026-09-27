@@ -26,7 +26,17 @@ type yooKassaStub struct {
 	code       int    // код ответа на GET; 0 — успех
 	status     string // статус платежа в кассе
 	capturedAt string // момент списания; пусто — поля нет
+	amount     string // сумма в ответе; пусто — сумма локальной записи (400.00)
+	recipient  string // получатель в ответе; пусто — наш магазин
 	gets       int
+}
+
+// setMismatch заставляет кассу отвечать суммой и получателем, которые не сходятся
+// с локальной записью; пустое значение оставляет поле совпадающим.
+func (s *yooKassaStub) setMismatch(amount, recipient string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.amount, s.recipient = amount, recipient
 }
 
 func (s *yooKassaStub) set(status, capturedAt string) {
@@ -59,10 +69,17 @@ func (s *yooKassaStub) client() *yookassa.Client {
 		if s.capturedAt != "" {
 			captured = fmt.Sprintf(`,"captured_at":%q`, s.capturedAt)
 		}
+		amount, recipient := s.amount, s.recipient
+		if amount == "" {
+			amount = "400.00"
+		}
+		if recipient == "" {
+			recipient = "shop"
+		}
 		id := strings.TrimPrefix(r.URL.Path, "/v3/payments/")
 		return jsonResponse(http.StatusOK, fmt.Sprintf(
-			`{"id":%q,"status":%q,"amount":{"value":"400.00","currency":"RUB"},"recipient":{"account_id":"shop"}%s}`,
-			id, s.status, captured)), nil
+			`{"id":%q,"status":%q,"amount":{"value":%q,"currency":"RUB"},"recipient":{"account_id":%q}%s}`,
+			id, s.status, amount, recipient, captured)), nil
 	})})
 	return c
 }

@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -152,6 +153,22 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 	deadlinePassed := payment.Status == "pending" && !now.Before(payment.CreatedAt.Add(pendingMaxAge))
 
 	verified, err := b.verifiedProviderState(payment)
+	if mismatch, ok := asPaymentMismatch(err); ok {
+		// Провайдер ответил, но не то, что записано у нас: это не молчание, и
+		// ждать тут нечего. Подписку не выдаём; судьбу денег решает владелец.
+		b.reportPaymentMismatch(payment, mismatch, source)
+		if deadlinePassed {
+			slog.Error("Сверка платежа: ответ провайдера так и не сошёлся с записью, платёж закрыт",
+				"payment_id", payment.ID, "provider", payment.Provider, "provider_status", mismatch.ProviderStatus, "source", source)
+			b.expirePendingPayment(payment)
+		}
+		return
+	}
+	if errors.Is(err, errLocalVerification) {
+		slog.Error("Сверка платежа: сбой нашей базы при записи ответа провайдера, сверим позже",
+			"error", err, "payment_id", payment.ID, "provider", payment.Provider, "source", source)
+		return
+	}
 	if err != nil {
 		if deadlinePassed {
 			slog.Warn("Сверка платежа: провайдер не дал ответа к сроку, платёж закрыт",
@@ -239,10 +256,18 @@ func (b *Bot) verifiedProviderState(payment *database.Payment) (*paymentprovider
 		return nil, err
 	}
 	if err := b.verifyProviderPayment(payment, verified); err != nil {
-		return nil, err
+		if _, ok := asPaymentMismatch(err); ok {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %w", errLocalVerification, err)
 	}
 	return verified, nil
 }
+
+// errLocalVerification — провайдер ответил и ответ сошёлся, но записать его в
+// нашу базу не вышло. Это не молчание провайдера: закрывать по сроку нельзя —
+// за ответом могут стоять принятые деньги, — сверим ещё раз следующим проходом.
+var errLocalVerification = errors.New("не удалось записать сверенный ответ провайдера")
 
 func (b *Bot) expirePendingPayment(payment *database.Payment) {
 	if err := b.db.ExpirePendingPayment(payment.ID); err != nil {

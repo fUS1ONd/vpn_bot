@@ -66,6 +66,12 @@ func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 		return fmt.Errorf("load YooKassa payment: %w", err)
 	}
 	if err := b.verifyYooKassaPayment(payment, verified); err != nil {
+		if mismatch, ok := asPaymentMismatch(err); ok {
+			// Повторная доставка ответа кассы не изменит: отвечаем успехом, а
+			// несовпадение доносим сами.
+			b.reportPaymentMismatch(payment, mismatch, "webhook")
+			return nil
+		}
 		return err
 	}
 	h := &paymentCallbackHandler{bot: b}
@@ -785,9 +791,10 @@ func (b *Bot) paymentPrice(telegramID int64, user *database.User) (int, bool) {
 	return *user.SubscriptionPrice, true
 }
 
-// checkPaymentStatus ручная проверка статуса платежа через Platega API.
+// checkPaymentStatus — ручная проверка статуса платежа через API провайдера.
 // Защищён мьютексом по telegram_id для предотвращения race condition
-// с параллельным callback от Platega.
+// с параллельным callback и сверкой. Несовпадение ответа с записью возвращается
+// ошибкой, различимой через errors.Is(err, errPaymentMismatch).
 func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	// Берём мьютекс ДО чтения из БД — та же блокировка, что и в callback
 	mu := getPaymentMutex(telegramID)
@@ -812,10 +819,13 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("check status: %w", err)
 	}
-	if pending.Provider == paymentprovider.YooKassa {
-		if err := b.verifyYooKassaPayment(pending, status); err != nil {
-			return "", err
+	// Ответ сверяется с записью у любого провайдера — как на вебхуке и в сверке:
+	// подписку выдаёт только ответ, сошедшийся с записью.
+	if err := b.verifyProviderPayment(pending, status); err != nil {
+		if mismatch, ok := asPaymentMismatch(err); ok {
+			b.reportPaymentMismatch(pending, mismatch, "manual-check")
 		}
+		return "", err
 	}
 
 	if status.Status == paymentprovider.StatusSucceeded {
@@ -862,21 +872,24 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 }
 
 // verifyProviderPayment сверяет ответ провайдера с локальной записью: платёж на
-// другую сумму или чужой платёж подпиской не оплачивается.
+// другую сумму или чужой платёж подпиской не оплачивается. Несовпадение
+// возвращается как *paymentMismatchError (errors.Is(err, errPaymentMismatch)).
 func (b *Bot) verifyProviderPayment(payment *database.Payment, verified *paymentprovider.Payment) error {
 	if payment.Provider == paymentprovider.YooKassa {
 		return b.verifyYooKassaPayment(payment, verified)
 	}
-	if payment.ProviderPaymentID == nil || verified.ID != *payment.ProviderPaymentID || verified.Amount != payment.Amount || verified.Currency != "RUB" {
-		return fmt.Errorf("%s payment verification mismatch: local_payment_id=%d", payment.Provider, payment.ID)
+	if mismatch := findPaymentMismatch(payment, verified, "", false); mismatch != nil {
+		return mismatch
 	}
 	return nil
 }
 
 func (b *Bot) verifyYooKassaPayment(payment *database.Payment, verified *paymentprovider.Payment) error {
-	if payment.ProviderPaymentID == nil || verified.ID != *payment.ProviderPaymentID || verified.Amount != payment.Amount || verified.Currency != "RUB" || verified.RecipientID != b.config.YooKassaShopID {
-		return fmt.Errorf("YooKassa payment verification mismatch: local_payment_id=%d", payment.ID)
+	if mismatch := findPaymentMismatch(payment, verified, b.config.YooKassaShopID, true); mismatch != nil {
+		return mismatch
 	}
+	// Дальше — записи в нашу базу: их сбой не несовпадение с кассой, а наш
+	// внутренний сбой, поэтому ошибки обычные, без errPaymentMismatch.
 	if verified.PaymentMethod != "" {
 		if err := b.db.UpdatePaymentMethod(payment.ID, verified.PaymentMethod); err != nil {
 			return fmt.Errorf("update payment method: %w", err)
