@@ -59,13 +59,10 @@ func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 		return nil
 	}
 	// Сообщение человеку уходит после снятия мьютекса: defer объявлен раньше
-	// Unlock и поэтому выполняется позже.
-	var notifyUser func()
-	defer func() {
-		if notifyUser != nil {
-			notifyUser()
-		}
-	}()
+	// Unlock и поэтому выполняется позже — и на любом пути, как того требует
+	// deliverOnce.
+	notifyUser := noNotice
+	defer func() { notifyUser() }()
 	mu := getPaymentMutex(payment.TelegramID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -121,28 +118,22 @@ func (b *Bot) reportUnmatchedYooKassaEvent(event, objectID string) {
 // Провайдеру мы отвечаем успехом (повтор доставки ничего не изменит), поэтому
 // без этого сообщения деньги остались бы принятыми втихую.
 func (b *Bot) reportIgnoredPaymentConfirmation(payment *database.Payment) {
-	if _, alreadyReported := b.ignoredConfirmationReported.LoadOrStore(payment.ID, struct{}{}); alreadyReported {
-		return
-	}
-	b.sendAdminAlert(fmt.Sprintf(
+	b.adminAlertOnce(&b.ignoredConfirmationReported, payment.ID, "непринятая оплата", fmt.Sprintf(
 		"⚠️ Платёж #%d (%d ₽, пользователь %d) подтверждён провайдером, но локальный статус <b>%s</b> не допускает подтверждения.\n\n"+
 			"Подписка не выдана и чек не пробит — разберите операцию вручную.",
 		payment.ID, payment.Amount, payment.TelegramID, html.EscapeString(payment.Status),
-	))
+	))()
 }
 
 // reportRevivedPayment сообщает владельцу о принятой оплате по локально закрытому
 // платежу. Клиент своё получает автоматически, но событие аномальное: закрытый
 // платёж, по которому прошли деньги, — повод посмотреть, почему он закрылся.
 func (b *Bot) reportRevivedPayment(payment *database.Payment) {
-	if _, alreadyReported := b.revivedPaymentReported.LoadOrStore(payment.ID, struct{}{}); alreadyReported {
-		return
-	}
-	b.sendAdminAlert(fmt.Sprintf(
+	b.adminAlertOnce(&b.revivedPaymentReported, payment.ID, "воскрешённый платёж", fmt.Sprintf(
 		"ℹ️ Платёж #%d (%d ₽, пользователь %d) был локально закрыт со статусом <b>%s</b>, но провайдер подтвердил оплату.\n\n"+
 			"Платёж принят по ответу провайдера: подписка продлевается, чек пробивается.",
 		payment.ID, payment.Amount, payment.TelegramID, html.EscapeString(payment.Status),
-	))
+	))()
 }
 
 // HandlePaymentCallback обрабатывает callback от Platega
@@ -805,13 +796,10 @@ func (b *Bot) paymentPrice(telegramID int64, user *database.User) (int, bool) {
 // ошибкой, различимой через errors.Is(err, errPaymentMismatch).
 func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	// Сообщение человеку уходит после снятия мьютекса: defer объявлен раньше
-	// Unlock и поэтому выполняется позже.
-	var notifyUser func()
-	defer func() {
-		if notifyUser != nil {
-			notifyUser()
-		}
-	}()
+	// Unlock и поэтому выполняется позже — и на любом пути, как того требует
+	// deliverOnce.
+	notifyUser := noNotice
+	defer func() { notifyUser() }()
 	// Берём мьютекс ДО чтения из БД — та же блокировка, что и в callback
 	mu := getPaymentMutex(telegramID)
 	mu.Lock()

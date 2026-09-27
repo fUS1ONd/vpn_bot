@@ -3,6 +3,7 @@ package bot
 import (
 	"errors"
 	"fmt"
+	"html"
 	"log/slog"
 	"time"
 
@@ -135,14 +136,15 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 		return
 	}
 
-	// Сообщение человеку уходит после снятия мьютекса: defer объявлен раньше
-	// Unlock и поэтому выполняется позже.
-	var notifyUser func()
-	defer func() {
-		if notifyUser != nil {
-			notifyUser()
-		}
-	}()
+	// Сообщения владельцу и человеку решаются под мьютексом, а уходят после него:
+	// поход в Telegram не должен держать оплату человека. Отложенные вызовы
+	// объявлены до захвата мьютекса и потому выполняются уже после его
+	// освобождения — и на любом пути, как того требует deliverOnce.
+	notifyOwner := func() bool { return false }
+	defer func() { notifyOwner() }()
+	notifyUser := noNotice
+	defer func() { notifyUser() }()
+
 	mu := getPaymentMutex(payment.TelegramID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -173,8 +175,14 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 		return
 	}
 	if errors.Is(err, errLocalVerification) {
+		// Закрывать по сроку нельзя и после суток — за ответом могут стоять
+		// принятые деньги. Но и молчать дальше нельзя: при стабильном сбое записи
+		// платёж висел бы pending вечно, а владелец не узнал бы.
 		slog.Error("Сверка платежа: сбой нашей базы при записи ответа провайдера, сверим позже",
 			"error", err, "payment_id", payment.ID, "provider", payment.Provider, "source", source)
+		if deadlinePassed || closedWindowEnding(payment, verified, now) {
+			notifyOwner = b.claimLocalVerificationStuckAlert(payment, verified)
+		}
 		return
 	}
 	if err != nil {
@@ -250,7 +258,8 @@ func (b *Bot) reconcileUserPaymentsBeforeKick(telegramID int64, now time.Time) {
 }
 
 // verifiedProviderState запрашивает у провайдера состояние платежа и сверяет его
-// с локальной записью.
+// с локальной записью. При errLocalVerification ответ провайдера возвращается
+// вместе с ошибкой; при остальных ошибках он nil.
 func (b *Bot) verifiedProviderState(payment *database.Payment) (*paymentprovider.Payment, error) {
 	if payment.ProviderPaymentID == nil {
 		return nil, fmt.Errorf("платёж не дошёл до провайдера")
@@ -267,7 +276,9 @@ func (b *Bot) verifiedProviderState(payment *database.Payment) (*paymentprovider
 		if _, ok := asPaymentMismatch(err); ok {
 			return nil, err
 		}
-		return nil, fmt.Errorf("%w: %w", errLocalVerification, err)
+		// Ответ провайдера отдаём и здесь: он сошёлся, и его статус нужен
+		// владельцу, если сбой записи затянется.
+		return verified, fmt.Errorf("%w: %w", errLocalVerification, err)
 	}
 	return verified, nil
 }
@@ -276,6 +287,40 @@ func (b *Bot) verifiedProviderState(payment *database.Payment) (*paymentprovider
 // нашу базу не вышло. Это не молчание провайдера: закрывать по сроку нельзя —
 // за ответом могут стоять принятые деньги, — сверим ещё раз следующим проходом.
 var errLocalVerification = errors.New("не удалось записать сверенный ответ провайдера")
+
+// closedWindowEnding сообщает, что локально закрытый платёж, за которым провайдер
+// видит оплату, проходит последнюю плановую сверку: срока «сверим снова» у него
+// нет — через сутки от создания он выпадает из сверки навсегда (reconcilable).
+// Ждущему оплаты платежу эта граница не нужна: он сверяется и после суток.
+func closedWindowEnding(payment *database.Payment, verified *paymentprovider.Payment, now time.Time) bool {
+	if payment.Status == "pending" || verified == nil || verified.Status != paymentprovider.StatusSucceeded {
+		return false
+	}
+	return !now.Before(payment.CreatedAt.Add(pendingMaxAge - schedulerInterval))
+}
+
+// claimLocalVerificationStuckAlert занимает сообщение владельцу о платеже, ответ
+// по которому сошёлся, но сутки не записывается в нашу базу, и возвращает его
+// отправку (см. deliverOnce). Одно сообщение на платёж. Ждущий оплаты платёж при
+// этом не закрывается и сверяется дальше; локально закрытый выпадает из сверки,
+// и сообщение — последнее, что о нём скажет бот.
+func (b *Bot) claimLocalVerificationStuckAlert(payment *database.Payment, verified *paymentprovider.Payment) func() bool {
+	providerStatus := "неизвестен"
+	if verified != nil && verified.Status != "" {
+		providerStatus = verified.Status
+	}
+	outcome := "Платёж не закрыт, сверка продолжается."
+	if payment.Status != "pending" {
+		outcome = "Платёж закрыт локально, и сверка по нему на этом заканчивается."
+	}
+	return b.adminAlertOnce(&b.stuckVerificationReported, payment.ID, "сбой записи сверенного ответа", fmt.Sprintf(
+		"⚠️ Платёж #%d (%d ₽, пользователь %d, провайдер %s): ответ провайдера сошёлся с записью, "+
+			"но записать в базу не удаётся уже сутки — разберите вручную.\n\n"+
+			"Статус провайдера: <b>%s</b>\nЛокальный статус: <b>%s</b>\n\n%s",
+		payment.ID, payment.Amount, payment.TelegramID, html.EscapeString(payment.Provider),
+		html.EscapeString(providerStatus), html.EscapeString(payment.Status), outcome,
+	))
+}
 
 func (b *Bot) expirePendingPayment(payment *database.Payment) {
 	if err := b.db.ExpirePendingPayment(payment.ID); err != nil {

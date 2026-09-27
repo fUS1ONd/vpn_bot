@@ -21,9 +21,11 @@ import (
 
 // reportMismatchAndPrepareNotice доносит несовпадение владельцу — для автосписания с
 // его заголовком — и готовит сообщение человеку, если это автосписание и касса
-// говорит «оплачено». Отправка человеку отдаётся замыканием: входы держат
-// getPaymentMutex, а сообщения пользователю уходят вне мьютекса.
-func (b *Bot) reportMismatchAndPrepareNotice(payment *database.Payment, mismatch *paymentMismatchError, source string) func() {
+// говорит «оплачено». Отправка человеку отдаётся замыканием deliverOnce: входы
+// держат getPaymentMutex, а сообщения пользователю уходят вне мьютекса. Замыкание
+// не бывает nil и обязано быть вызвано на любом пути: пометка «уже сообщили»
+// может быть занята им уже здесь.
+func (b *Bot) reportMismatchAndPrepareNotice(payment *database.Payment, mismatch *paymentMismatchError, source string) func() bool {
 	fromAutorenew, err := b.db.IsAutorenewPayment(payment.ID)
 	if err != nil {
 		slog.Error("Не удалось проверить, автосписание ли несовпавший платёж; сообщаем как об обычном",
@@ -31,7 +33,7 @@ func (b *Bot) reportMismatchAndPrepareNotice(payment *database.Payment, mismatch
 	}
 	if !fromAutorenew {
 		b.reportPaymentMismatch(payment, mismatch, source)
-		return nil
+		return noNotice
 	}
 	b.reportAutorenewMismatch(payment, mismatch, source)
 	return b.holdAndNotifyAutorenewMismatch(payment, mismatch)
@@ -50,40 +52,32 @@ func (b *Bot) reportAutorenewMismatch(payment *database.Payment, mismatch *payme
 
 // holdAndNotifyAutorenewMismatch ставит удержание цикла и готовит сообщение
 // человеку по платежу, о котором уже известно, что он автосписания. Ничего не
-// делает и возвращает nil, если касса не говорит «оплачено»: за pending и
+// делает и возвращает noNotice, если касса не говорит «оплачено»: за pending и
 // canceled денег нет.
 //
 // Удержание — пометка paid_mismatch_at в базе: ни напоминаний «продлите», ни
 // отключения, ни кика, пока владелец не разберёт платёж (AutorenewMismatchHold).
 // Сбой записи сообщение человеку не отменяет: следующий вход пометит снова.
-func (b *Bot) holdAndNotifyAutorenewMismatch(payment *database.Payment, mismatch *paymentMismatchError) func() {
+func (b *Bot) holdAndNotifyAutorenewMismatch(payment *database.Payment, mismatch *paymentMismatchError) func() bool {
 	if mismatch.ProviderStatus != paymentprovider.StatusSucceeded {
-		return nil
+		return noNotice
 	}
 	if err := b.db.MarkPaidMismatch(payment.ID); err != nil {
 		slog.Error("Не удалось пометить несовпавшее автосписание, удержание цикла не поставлено",
 			"error", err, "payment_id", payment.ID)
 	}
-	telegramID, paymentID := payment.TelegramID, payment.ID
+	// Одно сообщение на платёж с любого входа; не принятое Telegram снимает
+	// пометку, и его повторит следующий вход. Дедупликация отдельная от алерта
+	// владельцу и живёт в памяти — после перезапуска допустимо ещё одно сообщение.
+	telegramID := payment.TelegramID
 	msg := autorenewMismatchUserText(mismatch)
-	return func() { b.sendAutorenewMismatchUserNotice(telegramID, paymentID, msg) }
+	return deliverOnce(&b.autorenewMismatchNotified, payment.ID, "несовпавшее автосписание — человеку", func() error {
+		return b.sendSchedulerMessage(telegramID, msg)
+	})
 }
 
-// sendAutorenewMismatchUserNotice отправляет одно сообщение на платёж, с какого
-// бы входа несовпадение ни пришло. Пометка занимается до отправки, чтобы
-// параллельные входы не прислали дубль, и снимается, если Telegram сообщение не
-// принял: следующий вход (сверка, повторный вебхук) повторит его. Дедупликация
-// живёт в памяти — после перезапуска допустимо ещё одно сообщение.
-func (b *Bot) sendAutorenewMismatchUserNotice(telegramID, paymentID int64, msg string) {
-	if _, alreadySent := b.autorenewMismatchNotified.LoadOrStore(paymentID, struct{}{}); alreadySent {
-		return
-	}
-	if err := b.sendSchedulerMessage(telegramID, msg); err != nil {
-		b.autorenewMismatchNotified.Delete(paymentID)
-		slog.Error("Не удалось сообщить человеку о несовпавшем автосписании, повторим при следующей встрече",
-			"error", err, "payment_id", paymentID, "telegram_id", telegramID)
-	}
-}
+// noNotice — отправка, которой нет: писать человеку нечего.
+func noNotice() bool { return false }
 
 // autorenewMismatchUserText — сообщение человеку. Следующую попытку не обещаем:
 // по названному кассой платежу её не будет (autorenewCycleUnsettled). Сумму
