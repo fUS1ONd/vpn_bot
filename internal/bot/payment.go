@@ -58,6 +58,14 @@ func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 		b.reportUnmatchedYooKassaEvent(event, providerPaymentID)
 		return nil
 	}
+	// Сообщение человеку уходит после снятия мьютекса: defer объявлен раньше
+	// Unlock и поэтому выполняется позже.
+	var notifyUser func()
+	defer func() {
+		if notifyUser != nil {
+			notifyUser()
+		}
+	}()
 	mu := getPaymentMutex(payment.TelegramID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -70,6 +78,7 @@ func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 			// Повторная доставка ответа кассы не изменит: отвечаем успехом, а
 			// несовпадение доносим сами.
 			b.reportPaymentMismatch(payment, mismatch, "webhook")
+			notifyUser = b.autorenewMismatchUserNotice(payment, mismatch)
 			return nil
 		}
 		return err

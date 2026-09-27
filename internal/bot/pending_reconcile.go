@@ -135,6 +135,14 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 		return
 	}
 
+	// Сообщение человеку уходит после снятия мьютекса: defer объявлен раньше
+	// Unlock и поэтому выполняется позже.
+	var notifyUser func()
+	defer func() {
+		if notifyUser != nil {
+			notifyUser()
+		}
+	}()
 	mu := getPaymentMutex(payment.TelegramID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -157,6 +165,7 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 		// Провайдер ответил, но не то, что записано у нас: это не молчание, и
 		// ждать тут нечего. Подписку не выдаём; судьбу денег решает владелец.
 		b.reportPaymentMismatch(payment, mismatch, source)
+		notifyUser = b.autorenewMismatchUserNotice(payment, mismatch)
 		if deadlinePassed {
 			slog.Error("Сверка платежа: ответ провайдера так и не сошёлся с записью, платёж закрыт",
 				"payment_id", payment.ID, "provider", payment.Provider, "provider_status", mismatch.ProviderStatus, "source", source)

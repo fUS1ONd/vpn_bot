@@ -63,6 +63,7 @@ type Bot struct {
 	ignoredConfirmationReported sync.Map                                                                // payment_id -> struct{}, одна жалоба на непринятую оплату
 	revivedPaymentReported      sync.Map                                                                // payment_id -> struct{}, одно сообщение о воскрешённом платеже
 	paymentMismatchReported     sync.Map                                                                // payment_id -> struct{}, одно сообщение о несовпавшем «оплачено»
+	autorenewMismatchNotified   sync.Map                                                                // payment_id -> struct{}, одно сообщение человеку о несовпавшем автосписании
 	receiptsInFlight            sync.WaitGroup                                                          // Запущенные пробития чеков — чтобы дождаться их при остановке
 	receiptsStopMu              sync.RWMutex                                                            // Закрывает приём новых пробитий, чтобы Add не гонялся с Wait
 	receiptsStopped             bool                                                                    // true после Stop(): новые пробития не начинаем
