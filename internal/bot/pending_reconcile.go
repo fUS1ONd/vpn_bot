@@ -177,7 +177,7 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 		// платёж висел бы pending вечно, а владелец не узнал бы.
 		slog.Error("Сверка платежа: сбой нашей базы при записи ответа провайдера, сверим позже",
 			"error", err, "payment_id", payment.ID, "provider", payment.Provider, "source", source)
-		if deadlinePassed {
+		if deadlinePassed || closedWindowEnding(payment, verified, now) {
 			notifyOwner = b.claimLocalVerificationStuckAlert(payment, verified)
 		}
 		return
@@ -285,22 +285,37 @@ func (b *Bot) verifiedProviderState(payment *database.Payment) (*paymentprovider
 // за ответом могут стоять принятые деньги, — сверим ещё раз следующим проходом.
 var errLocalVerification = errors.New("не удалось записать сверенный ответ провайдера")
 
+// closedWindowEnding сообщает, что локально закрытый платёж, за которым провайдер
+// видит оплату, проходит последнюю плановую сверку: срока «сверим снова» у него
+// нет — через сутки от создания он выпадает из сверки навсегда (reconcilable).
+// Ждущему оплаты платежу эта граница не нужна: он сверяется и после суток.
+func closedWindowEnding(payment *database.Payment, verified *paymentprovider.Payment, now time.Time) bool {
+	if payment.Status == "pending" || verified == nil || verified.Status != paymentprovider.StatusSucceeded {
+		return false
+	}
+	return !now.Before(payment.CreatedAt.Add(pendingMaxAge - schedulerInterval))
+}
+
 // claimLocalVerificationStuckAlert занимает сообщение владельцу о платеже, ответ
-// по которому сошёлся, но больше суток не записывается в нашу базу, и возвращает
-// его отправку (см. deliverOnce). Одно сообщение на платёж; платёж при этом не
-// закрывается, сверка продолжается.
+// по которому сошёлся, но сутки не записывается в нашу базу, и возвращает его
+// отправку (см. deliverOnce). Одно сообщение на платёж. Ждущий оплаты платёж при
+// этом не закрывается и сверяется дальше; локально закрытый выпадает из сверки,
+// и сообщение — последнее, что о нём скажет бот.
 func (b *Bot) claimLocalVerificationStuckAlert(payment *database.Payment, verified *paymentprovider.Payment) func() bool {
 	providerStatus := "неизвестен"
 	if verified != nil && verified.Status != "" {
 		providerStatus = verified.Status
 	}
+	outcome := "Платёж не закрыт, сверка продолжается."
+	if payment.Status != "pending" {
+		outcome = "Платёж закрыт локально, и сверка по нему на этом заканчивается."
+	}
 	return b.adminAlertOnce(&b.stuckVerificationReported, payment.ID, "сбой записи сверенного ответа", fmt.Sprintf(
 		"⚠️ Платёж #%d (%d ₽, пользователь %d, провайдер %s): ответ провайдера сошёлся с записью, "+
-			"но записать в базу не удаётся больше суток — разберите вручную.\n\n"+
-			"Статус провайдера: <b>%s</b>\nЛокальный статус: <b>%s</b>\n\n"+
-			"Платёж не закрыт, сверка продолжается.",
+			"но записать в базу не удаётся уже сутки — разберите вручную.\n\n"+
+			"Статус провайдера: <b>%s</b>\nЛокальный статус: <b>%s</b>\n\n%s",
 		payment.ID, payment.Amount, payment.TelegramID, html.EscapeString(payment.Provider),
-		html.EscapeString(providerStatus), html.EscapeString(payment.Status),
+		html.EscapeString(providerStatus), html.EscapeString(payment.Status), outcome,
 	))
 }
 

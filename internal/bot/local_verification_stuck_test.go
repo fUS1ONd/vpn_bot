@@ -1,10 +1,12 @@
 package bot
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 )
@@ -28,11 +30,31 @@ func TestСверка_СбойЗаписиПослеСрока_ОдноСооб�
 
 	alerts := env.tg.matching(localVerificationStuckMarker)
 	if assert.Len(t, alerts, 1) {
-		assert.Contains(t, alerts[0].Text, "#")
+		assert.Contains(t, alerts[0].Text, fmt.Sprintf("Платёж #%d ", id))
 		assert.Contains(t, alerts[0].Text, paymentprovider.YooKassa)
 		assert.Contains(t, alerts[0].Text, "succeeded")
 	}
 	assert.Equal(t, "pending", env.status(t, id), "сверка продолжается: закрыть платёж значило бы потерять деньги")
+}
+
+// Локально закрытый платёж сверяется только сутки от создания, и дольше суток
+// «ждать» ему некуда: на последнем проходе окна он выпадает из сверки навсегда.
+// Если касса говорит «оплачено», а записать не выходит, владелец должен узнать
+// об этом на последнем проходе, а не никогда.
+func TestСверка_СбойЗаписиЗакрытогоПлатежаВКонцеОкна_ОдноСообщениеВладельцу(t *testing.T) {
+	env := newEdgeEnv(t)
+	env.yoo.onGet = yooSays("succeeded", "2026-09-27T10:00:00Z")
+	id := env.pending(t, paymentprovider.YooKassa, 20*time.Minute)
+	require.NoError(t, env.db.ExpirePendingPayment(id))
+	failProviderPaidAtWrites(t, env.db)
+	lastPass := env.createdAt(t, id).Add(pendingMaxAge - schedulerInterval/2)
+
+	env.bot.reconcilePendingPayment(id, env.createdAt(t, id).Add(time.Hour), "test")
+	assert.Empty(t, env.tg.matching(localVerificationStuckMarker), "до конца окна — только лог")
+
+	env.bot.reconcilePendingPayment(id, lastPass, "test")
+	assert.Len(t, env.tg.matching(localVerificationStuckMarker), 1)
+	assert.Equal(t, "expired", env.status(t, id))
 }
 
 // До срока сбой записи — только лог: сверка ещё успеет записать ответ, и
@@ -61,9 +83,12 @@ func TestСверка_СбойЗаписиПослеСрока_Недостав�
 	afterDeadline := env.createdAt(t, id).Add(pendingMaxAge)
 
 	env.bot.reconcilePendingPayment(id, afterDeadline, "test")
-	env.bot.reconcilePendingPayment(id, afterDeadline.Add(30*time.Minute), "test")
-	env.bot.reconcilePendingPayment(id, afterDeadline.Add(time.Hour), "test")
+	require.Empty(t, delivered.matching(localVerificationStuckMarker), "первая отправка отвергнута Telegram")
 
-	assert.Len(t, delivered.matching(localVerificationStuckMarker), 1)
+	env.bot.reconcilePendingPayment(id, afterDeadline.Add(30*time.Minute), "test")
+	assert.Len(t, delivered.matching(localVerificationStuckMarker), 1, "следующий проход повторяет недоставленное")
+
+	env.bot.reconcilePendingPayment(id, afterDeadline.Add(time.Hour), "test")
+	assert.Len(t, delivered.matching(localVerificationStuckMarker), 1, "доставленное не повторяется")
 	assert.Equal(t, "pending", env.status(t, id))
 }

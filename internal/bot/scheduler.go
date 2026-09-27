@@ -24,13 +24,16 @@ const (
 	notificationGraceKick = "grace_kick" // Кик после grace period
 )
 
+// schedulerInterval — период плановых проходов после первого, стартового.
+const schedulerInterval = 30 * time.Minute
+
 // StartScheduler запускает проверку подписок каждые 30 минут + первый проход при старте.
 func (b *Bot) StartScheduler(ctx context.Context) {
 	// Первый проход при старте — не ждём 30 минут
 	slog.Info("Scheduler: running initial pass on startup")
 	b.runSubscriptionSchedulerPass()
 
-	ticker := time.NewTicker(30 * time.Minute)
+	ticker := time.NewTicker(schedulerInterval)
 	defer ticker.Stop()
 
 	slog.Info("Subscription scheduler started", "interval", "30m")
