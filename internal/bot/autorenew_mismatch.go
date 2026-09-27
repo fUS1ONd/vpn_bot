@@ -15,15 +15,15 @@ import (
 // дублировала сообщение другому.
 //
 // Входы, где несовпадение всплывает (сверка, вебхук ЮKassa, ручная проверка),
-// зовут reportPaymentMismatchFor — она выбирает заголовок владельцу и готовит
+// зовут reportMismatchAndPrepareNotice — она выбирает заголовок владельцу и готовит
 // сообщение человеку. Шаг списания и так знает, что платёж — автосписание, и
-// зовёт reportAutorenewMismatch и autorenewMismatchNotice напрямую.
+// зовёт reportAutorenewMismatch и holdAndNotifyAutorenewMismatch напрямую.
 
-// reportPaymentMismatchFor доносит несовпадение владельцу — для автосписания с
+// reportMismatchAndPrepareNotice доносит несовпадение владельцу — для автосписания с
 // его заголовком — и готовит сообщение человеку, если это автосписание и касса
 // говорит «оплачено». Отправка человеку отдаётся замыканием: входы держат
 // getPaymentMutex, а сообщения пользователю уходят вне мьютекса.
-func (b *Bot) reportPaymentMismatchFor(payment *database.Payment, mismatch *paymentMismatchError, source string) func() {
+func (b *Bot) reportMismatchAndPrepareNotice(payment *database.Payment, mismatch *paymentMismatchError, source string) func() {
 	fromAutorenew, err := b.db.IsAutorenewPayment(payment.ID)
 	if err != nil {
 		slog.Error("Не удалось проверить, автосписание ли несовпавший платёж; сообщаем как об обычном",
@@ -34,7 +34,7 @@ func (b *Bot) reportPaymentMismatchFor(payment *database.Payment, mismatch *paym
 		return nil
 	}
 	b.reportAutorenewMismatch(payment, mismatch, source)
-	return b.autorenewMismatchNotice(payment, mismatch)
+	return b.holdAndNotifyAutorenewMismatch(payment, mismatch)
 }
 
 // reportAutorenewMismatch — алерт владельцу по автосписанию: заголовок говорит,
@@ -48,16 +48,15 @@ func (b *Bot) reportAutorenewMismatch(payment *database.Payment, mismatch *payme
 	b.reportPaymentMismatchWithHeadline(payment, mismatch, source, headline)
 }
 
-// autorenewMismatchNotice — то же для платежа, о котором уже известно, что он
-// автосписания (шаг списания): лишний поход в базу там только добавил бы способ
-// потерять сообщение. nil, если касса не говорит «оплачено»: за pending и
+// holdAndNotifyAutorenewMismatch ставит удержание цикла и готовит сообщение
+// человеку по платежу, о котором уже известно, что он автосписания. Ничего не
+// делает и возвращает nil, если касса не говорит «оплачено»: за pending и
 // canceled денег нет.
 //
-// Заодно платёж помечается в базе (paid_mismatch_at): пометка держит цикл —
-// ни напоминаний «продлите», ни отключения, ни кика, пока владелец не разберёт
-// платёж (autorenewMismatchHeld). Сбой записи сообщение человеку не отменяет:
-// следующий вход пометит снова.
-func (b *Bot) autorenewMismatchNotice(payment *database.Payment, mismatch *paymentMismatchError) func() {
+// Удержание — пометка paid_mismatch_at в базе: ни напоминаний «продлите», ни
+// отключения, ни кика, пока владелец не разберёт платёж (AutorenewMismatchHold).
+// Сбой записи сообщение человеку не отменяет: следующий вход пометит снова.
+func (b *Bot) holdAndNotifyAutorenewMismatch(payment *database.Payment, mismatch *paymentMismatchError) func() {
 	if mismatch.ProviderStatus != paymentprovider.StatusSucceeded {
 		return nil
 	}

@@ -164,7 +164,7 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 	if mismatch, ok := asPaymentMismatch(err); ok {
 		// Провайдер ответил, но не то, что записано у нас: это не молчание, и
 		// ждать тут нечего. Подписку не выдаём; судьбу денег решает владелец.
-		notifyUser = b.reportPaymentMismatchFor(payment, mismatch, source)
+		notifyUser = b.reportMismatchAndPrepareNotice(payment, mismatch, source)
 		if deadlinePassed {
 			slog.Error("Сверка платежа: ответ провайдера так и не сошёлся с записью, платёж закрыт",
 				"payment_id", payment.ID, "provider", payment.Provider, "provider_status", mismatch.ProviderStatus, "source", source)

@@ -71,6 +71,26 @@ func (db *DB) AutorenewMismatchHold(telegramID int64, expireAt time.Time) (Autor
 	return hold, nil
 }
 
+// HasUnresolvedAutorenewMismatch — есть ли у человека несовпавшее «оплачено» по
+// автосписанию, которое владелец не разобрал, в любом цикле. Удержание уходит
+// вместе с циклом (человек оплатил сам, expireAt сдвинулся), а сам платёж —
+// нет: деньги по нему могли уйти второй раз, и карточка владельца обязана
+// продолжать его показывать.
+func (db *DB) HasUnresolvedAutorenewMismatch(telegramID int64) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM payments
+		 WHERE telegram_id = ? AND paid_mismatch_at IS NOT NULL AND mismatch_resolved_at IS NULL
+		   AND status NOT IN ('confirmed', 'confirmed_not_activated')
+		   AND id IN (SELECT payment_id FROM autorenew_attempts WHERE payment_id IS NOT NULL))`,
+		telegramID,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check unresolved autorenew mismatch: %w", err)
+	}
+	return exists, nil
+}
+
 // ResolveAutorenewMismatches — владелец разобрал несовпавшие автосписания
 // человека: удержание снимается со всех его циклов. Возвращает, сколько
 // платежей разобрано.

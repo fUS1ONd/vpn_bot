@@ -320,22 +320,17 @@ func (b *Bot) buildAdminUserInfo(targetID int64) (string, *tele.ReplyMarkup, err
 	// говорить одно и то же.
 	autorenew := b.autorenewViewFor(targetID, remUser, dbUser)
 	msg.WriteString(adminAutorenewLine(autorenew))
-	// Удержание несовпавшего автосписания видно владельцу здесь же, вместе с
+	// Неразобранное несовпавшее автосписание видно владельцу здесь же, вместе с
 	// кнопкой разбора: алерт мог потеряться, карточка — нет.
-	hold, err := b.db.AutorenewMismatchHold(targetID, remUser.ExpireAt)
-	if err != nil {
-		slog.Error("Failed to load autorenew mismatch hold for admin info", "error", err, "telegram_id", targetID)
-	}
-	if hold.Active {
-		msg.WriteString(adminMismatchHoldLine)
-	}
+	mismatchLine := b.adminMismatchLine(targetID, remUser.ExpireAt)
+	msg.WriteString(mismatchLine)
 	fmt.Fprintf(&msg, "%s Статус: %s", statusEmoji, statusLabel)
 
 	// Кнопка привязана к живому согласию, а не к состоянию карточки: согласие
 	// переживает и пропавший Способ, и истёкшую подписку, а человек, попросивший
 	// поддержку выключить списания, обязан получить это выключение.
 	keyboard := AdminUserInfoKeyboardWithReferrals(targetID, remUser, referralSummary.Active, autorenew.consent)
-	if hold.Active {
+	if mismatchLine != "" {
 		keyboard = withAdminMismatchResolveButton(keyboard, targetID)
 	}
 	return msg.String(), keyboard, nil

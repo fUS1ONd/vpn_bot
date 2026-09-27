@@ -3,6 +3,7 @@ package bot
 import (
 	"log/slog"
 	"strconv"
+	"time"
 
 	tele "gopkg.in/telebot.v3"
 )
@@ -14,8 +15,29 @@ import (
 // вернул деньги или решил иначе. Снятие ведёт к штатному отключению человека,
 // с которого списаны деньги, поэтому идёт через подтверждение.
 
-// adminMismatchHoldLine — строка карточки пользователя про удержание.
-const adminMismatchHoldLine = "⏸ Отключение приостановлено: автосписание не сошлось с кассой, ждёт разбора\n"
+// adminMismatchLine — строка карточки пользователя про неразобранное
+// несовпавшее автосписание или "", если разбирать нечего. Неразобранное
+// показывается в любом цикле: человек мог оплатить сам, и удержание ушло вместе
+// с циклом, а деньги по списанию остались. Про удержание строка говорит, только
+// пока оно держит текущий цикл.
+func (b *Bot) adminMismatchLine(targetID int64, expireAt time.Time) string {
+	unresolved, err := b.db.HasUnresolvedAutorenewMismatch(targetID)
+	if err != nil {
+		slog.Error("Не удалось проверить неразобранные автосписания для карточки", "error", err, "telegram_id", targetID)
+		return ""
+	}
+	if !unresolved {
+		return ""
+	}
+	hold, err := b.db.AutorenewMismatchHold(targetID, expireAt)
+	if err != nil {
+		slog.Error("Не удалось проверить удержание для карточки", "error", err, "telegram_id", targetID)
+	}
+	if hold.Active {
+		return "⏸ Отключение приостановлено: автосписание не сошлось с кассой, ждёт разбора\n"
+	}
+	return "⚠️ Автосписание не сошлось с кассой и ждёт разбора\n"
+}
 
 // adminMismatchTarget проверяет права и достаёт targetID из кнопки.
 func (b *Bot) adminMismatchTarget(c tele.Context) (int64, bool) {
@@ -40,7 +62,7 @@ func (b *Bot) handleAdminMismatchResolve(c tele.Context) error {
 	text := "Снять удержание несовпавшего автосписания?\n\n" +
 		"Нажимайте, когда платёж разобран: деньги возвращены или подписка продлена вручную. " +
 		"Если подписка уже истекла, бот отключит человека штатно, а три дня до удаления " +
-		"отсчитаются от этого момента."
+		"отсчитаются от этого момента; если ещё нет — всё пойдёт штатно от даты окончания."
 	if err := c.Edit(text, &tele.SendOptions{ReplyMarkup: AdminMismatchResolveKeyboard(targetID)}); err != nil {
 		return err
 	}

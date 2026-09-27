@@ -334,6 +334,24 @@ func TestАвтосписание_АлертВладельцуИзСверки_�
 	assert.Contains(t, alerts[0].Text, "Отключение приостановлено")
 }
 
+// Человек сам оплатил вручную, expireAt сдвинулся — удержание цикла ушло, но
+// несовпавшее списание никто не разобрал, и деньги могли уйти дважды: карточка
+// обязана продолжать показывать его владельцу вместе с кнопкой разбора.
+func TestАвтосписание_КарточкаАдмина_НеразобранноеВидноИПослеСдвигаЦикла(t *testing.T) {
+	oldCycle := time.Now().UTC().Add(-2 * time.Hour)
+	stub := &arEdgeStub{expireAt: oldCycle.AddDate(0, 1, 0), responses: []string{
+		autorenewMismatchBody("yo-mm-hold-moved", "succeeded"),
+	}}
+	b, db, _ := setupAutorenewEdgeBot(t, stub)
+	markHeldCycle(t, b, db, oldCycle, "yo-mm-hold-moved")
+
+	text, markup, err := b.buildAdminUserInfo(arEdgeUserID)
+	require.NoError(t, err)
+	assert.Contains(t, text, "ждёт разбора")
+	assert.NotContains(t, text, "Отключение приостановлено", "цикл новый — удержания уже нет")
+	assert.NotNil(t, findInlineButton(markup, cbAdminMismatchResolve))
+}
+
 // findInlineButton ищет inline-кнопку по Unique.
 func findInlineButton(markup *tele.ReplyMarkup, unique string) *tele.InlineButton {
 	if markup == nil {
