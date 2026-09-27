@@ -222,6 +222,28 @@ func userTelegram(t *testing.T, b *Bot, failFirstToUser bool) *userTelegramStub 
 	return stub
 }
 
+// Человек нажал «Проверить оплату», пока запись автосписания ещё висит pending:
+// ручная проверка — такой же вход, и сообщение о списании одно на платёж —
+// сверка после неё второго не присылает.
+func TestАвтосписание_НесовпадениеНаРучнойПроверке_ЧеловекПолучаетОдноСообщение(t *testing.T) {
+	expireAt := time.Now().UTC().Add(6 * time.Hour)
+	stub := &arEdgeStub{expireAt: expireAt, responses: []string{
+		autorenewMismatchBody("yo-mm-user-manual", "pending"),
+		autorenewMismatchBody("yo-mm-user-manual", "succeeded"),
+	}}
+	b, _, _ := setupAutorenewEdgeBot(t, stub)
+	tg := userTelegram(t, b, false)
+
+	b.runAutorenewCharges(time.Now().UTC())
+	_, err := b.checkPaymentStatus(arEdgeUserID)
+	require.ErrorIs(t, err, errPaymentMismatch, "предпосылка: ручная проверка нашла запись автосписания")
+	require.Len(t, userMismatchNotices(tg.capture), 1, "ручная проверка — такой же вход")
+	b.reconcilePendingPayments(time.Now().UTC().Add(time.Hour))
+
+	assert.Len(t, userMismatchNotices(tg.capture), 1)
+	assert.False(t, tg.lockedDuringSend.Load(), "сообщение человеку отправлено под мьютексом платежей")
+}
+
 // То же через вебхук ЮKassa: повторная доставка второго сообщения не даёт.
 func TestАвтосписание_ДозрелоДоОплаченоНаВебхуке_ЧеловекПолучаетОдноСообщение(t *testing.T) {
 	expireAt := time.Now().UTC().Add(6 * time.Hour)

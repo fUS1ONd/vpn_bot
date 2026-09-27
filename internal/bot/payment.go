@@ -78,7 +78,7 @@ func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 			// Повторная доставка ответа кассы не изменит: отвечаем успехом, а
 			// несовпадение доносим сами.
 			b.reportPaymentMismatch(payment, mismatch, "webhook")
-			notifyUser = b.autorenewMismatchUserNotice(payment, mismatch)
+			notifyUser = b.prepareAutorenewMismatchNotice(payment, mismatch)
 			return nil
 		}
 		return err
@@ -805,6 +805,14 @@ func (b *Bot) paymentPrice(telegramID int64, user *database.User) (int, bool) {
 // с параллельным callback и сверкой. Несовпадение ответа с записью возвращается
 // ошибкой, различимой через errors.Is(err, errPaymentMismatch).
 func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
+	// Сообщение человеку уходит после снятия мьютекса: defer объявлен раньше
+	// Unlock и поэтому выполняется позже.
+	var notifyUser func()
+	defer func() {
+		if notifyUser != nil {
+			notifyUser()
+		}
+	}()
 	// Берём мьютекс ДО чтения из БД — та же блокировка, что и в callback
 	mu := getPaymentMutex(telegramID)
 	mu.Lock()
@@ -833,6 +841,9 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	if err := b.verifyProviderPayment(pending, status); err != nil {
 		if mismatch, ok := asPaymentMismatch(err); ok {
 			b.reportPaymentMismatch(pending, mismatch, "manual-check")
+			// Кнопка могла найти висящую запись автосписания: человеку — то же
+			// сообщение о списании, что и с других входов, одно на платёж.
+			notifyUser = b.prepareAutorenewMismatchNotice(pending, mismatch)
 		}
 		return "", err
 	}

@@ -484,7 +484,7 @@ func (b *Bot) finishSuccessfulAutorenew(payment *database.Payment, charged *paym
 		// отправка вне мьютекса, как у успешной ветки.
 		if mismatch, isMismatch := asPaymentMismatch(err); isMismatch {
 			b.reportAutorenewMismatch(payment, mismatch)
-			return b.autorenewMismatchUserNotice(payment, mismatch)
+			return b.autorenewMismatchNotice(payment, mismatch)
 		}
 		b.sendAdminAlert(fmt.Sprintf(
 			"⚠️ Автосписание #%d (%d ₽, пользователь %d): не удалось сверить ответ ЮKassa с локальной записью. Разберите операцию вручную.",

@@ -13,15 +13,19 @@ import (
 // он заплатит второй раз руками или пойдёт в банк за chargeback. Владельцу о том
 // же сообщает reportPaymentMismatch — дедупликации у них раздельные, чтобы
 // недоставка одному не гасила и не дублировала сообщение другому.
+//
+// Входы, где несовпадение всплывает (шаг списания, сверка, вебхук ЮKassa, ручная
+// проверка), зовут подготовку сами, рядом с reportPaymentMismatch: та работает под
+// getPaymentMutex, а сообщение человеку должно уйти после его снятия. Новый вход
+// с reportPaymentMismatch обязан делать то же.
 
-// autorenewMismatchUserNotice возвращает отправку сообщения человеку о
-// несовпавшем автосписании или nil, если писать нечего: платёж не автосписания
-// или касса не говорит «оплачено» (за pending и canceled денег нет). Отправка
-// отдаётся замыканием, потому что входы держат getPaymentMutex, а сообщения
-// пользователю уходят вне мьютекса.
-func (b *Bot) autorenewMismatchUserNotice(payment *database.Payment, mismatch *paymentMismatchError) func() {
+// prepareAutorenewMismatchNotice готовит отправку сообщения человеку о
+// несовпавшем платеже, если это платёж автосписания, или возвращает nil, если
+// писать нечего. Отправка отдаётся замыканием: входы держат getPaymentMutex, а
+// сообщения пользователю уходят вне мьютекса.
+func (b *Bot) prepareAutorenewMismatchNotice(payment *database.Payment, mismatch *paymentMismatchError) func() {
 	if mismatch.ProviderStatus != paymentprovider.StatusSucceeded {
-		return nil
+		return nil // денег нет — и в базу идти незачем
 	}
 	fromAutorenew, err := b.db.IsAutorenewPayment(payment.ID)
 	if err != nil {
@@ -30,6 +34,17 @@ func (b *Bot) autorenewMismatchUserNotice(payment *database.Payment, mismatch *p
 		return nil
 	}
 	if !fromAutorenew {
+		return nil
+	}
+	return b.autorenewMismatchNotice(payment, mismatch)
+}
+
+// autorenewMismatchNotice — то же для платежа, о котором уже известно, что он
+// автосписания (шаг списания): лишний поход в базу там только добавил бы способ
+// потерять сообщение. nil, если касса не говорит «оплачено»: за pending и
+// canceled денег нет.
+func (b *Bot) autorenewMismatchNotice(payment *database.Payment, mismatch *paymentMismatchError) func() {
+	if mismatch.ProviderStatus != paymentprovider.StatusSucceeded {
 		return nil
 	}
 	telegramID, paymentID := payment.TelegramID, payment.ID
