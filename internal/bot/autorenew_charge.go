@@ -483,7 +483,7 @@ func (b *Bot) finishSuccessfulAutorenew(payment *database.Payment, charged *paym
 		// сообщается всегда. Человеку о несовпадении — своё сообщение,
 		// отправка вне мьютекса, как у успешной ветки.
 		if mismatch, isMismatch := asPaymentMismatch(err); isMismatch {
-			b.reportAutorenewMismatch(payment, mismatch)
+			b.reportAutorenewMismatch(payment, mismatch, "autorenew")
 			return b.autorenewMismatchNotice(payment, mismatch)
 		}
 		b.sendAdminAlert(fmt.Sprintf(

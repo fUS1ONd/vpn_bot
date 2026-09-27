@@ -186,7 +186,17 @@ func (b *Bot) processTrialUser(telegramID int64, ref remnawave.UserRef, expireAt
 func (b *Bot) processPaidUser(telegramID int64, ref remnawave.UserRef, expireAt, now time.Time) {
 	// С включённым автопродлением про скорое окончание не пишем: для него это
 	// ложная тревога, а окно за сутки занято попыткой списания.
-	silent := b.autorenewSuppressesExpiryNotice(telegramID, expireAt)
+	//
+	// Несовпавшее «оплачено» по автосписанию держит цикл: деньги списаны,
+	// человеку сказано «платить повторно не нужно», и до разбора владельцем мы
+	// не зовём продлить, не отключаем и не кикаем. Держится независимо от
+	// согласия: деньги ушли, даже если автопродление потом выключили.
+	hold, holdErr := b.db.AutorenewMismatchHold(telegramID, expireAt)
+	if holdErr != nil {
+		slog.Error("Scheduler: не удалось проверить удержание несовпавшего автосписания",
+			"error", holdErr, "telegram_id", telegramID)
+	}
+	silent := hold.Active || b.autorenewSuppressesExpiryNotice(telegramID, expireAt)
 
 	// За 3 дня до конца
 	if !silent && notificationWindow(now, expireAt, 48*time.Hour, 72*time.Hour) {
@@ -219,6 +229,22 @@ func (b *Bot) processPaidUser(telegramID int64, ref remnawave.UserRef, expireAt,
 			return // Оплатил — callback уже обработал
 		}
 
+		// Удержание закрывает и отключение, и кик ниже: деньги списаны, судьбу
+		// платежа решает владелец. Не смогли проверить — не отключаем вслепую,
+		// проверим следующим проходом. Сверка перед киком выше могла пометить
+		// платёж только что, поэтому удержание перечитывается.
+		hold, holdErr = b.db.AutorenewMismatchHold(telegramID, expireAt)
+		if holdErr != nil {
+			slog.Error("Scheduler: не удалось проверить удержание перед отключением, отложим",
+				"error", holdErr, "telegram_id", telegramID)
+			return
+		}
+		if hold.Active {
+			slog.Warn("Scheduler: несовпавшее автосписание не разобрано, не отключаем",
+				"telegram_id", telegramID, "expire_at", expireAt)
+			return
+		}
+
 		if !b.isMaintenanceMode() {
 			// Disable в Remnawave (если ещё не disabled)
 			if err := b.remnawave.DisableUser(ref); err != nil {
@@ -230,8 +256,14 @@ func (b *Bot) processPaidUser(telegramID int64, ref remnawave.UserRef, expireAt,
 		b.sendPayNotification(telegramID, notificationExpired, renewButtonLabel, msg, msg)
 	}
 
-	// Grace period кик: expireAt + 72 часа
-	graceDeadline := expireAt.Add(72 * time.Hour)
+	// Grace period кик: expireAt + 72 часа. Если отключение ждало разбора
+	// несовпавшего автосписания, три дня отсчитываются от разбора: иначе разбор
+	// после трёх суток означал бы кик в том же проходе, что и «подписка истекла».
+	graceStart := expireAt
+	if hold.ReleasedAt != nil && hold.ReleasedAt.After(graceStart) {
+		graceStart = *hold.ReleasedAt
+	}
+	graceDeadline := graceStart.Add(72 * time.Hour)
 	if !now.Before(graceDeadline) {
 		if b.isMaintenanceMode() {
 			slog.Info("Scheduler: maintenance mode, пропускаем grace kick", "telegram_id", telegramID)

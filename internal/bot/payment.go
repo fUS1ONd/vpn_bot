@@ -77,8 +77,7 @@ func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 		if mismatch, ok := asPaymentMismatch(err); ok {
 			// Повторная доставка ответа кассы не изменит: отвечаем успехом, а
 			// несовпадение доносим сами.
-			b.reportPaymentMismatch(payment, mismatch, "webhook")
-			notifyUser = b.prepareAutorenewMismatchNotice(payment, mismatch)
+			notifyUser = b.reportPaymentMismatchFor(payment, mismatch, "webhook")
 			return nil
 		}
 		return err
@@ -840,10 +839,9 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	// подписку выдаёт только ответ, сошедшийся с записью.
 	if err := b.verifyProviderPayment(pending, status); err != nil {
 		if mismatch, ok := asPaymentMismatch(err); ok {
-			b.reportPaymentMismatch(pending, mismatch, "manual-check")
 			// Кнопка могла найти висящую запись автосписания: человеку — то же
 			// сообщение о списании, что и с других входов, одно на платёж.
-			notifyUser = b.prepareAutorenewMismatchNotice(pending, mismatch)
+			notifyUser = b.reportPaymentMismatchFor(pending, mismatch, "manual-check")
 		}
 		return "", err
 	}

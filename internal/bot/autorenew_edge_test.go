@@ -49,6 +49,32 @@ type arEdgeStub struct {
 
 	// transportErr — касса недоступна: ответа нет вообще.
 	transportErr bool
+
+	// disables — сколько раз бот отключал или удалял пользователя в панели.
+	disables int
+}
+
+// recordPanel запоминает отключение (PATCH со статусом DISABLED) и удаление.
+func (s *arEdgeStub) recordPanel(r *http.Request) {
+	disable := r.Method == http.MethodDelete
+	if r.Method == http.MethodPatch && r.Body != nil {
+		raw, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(strings.NewReader(string(raw)))
+		disable = strings.Contains(string(raw), "DISABLED")
+	}
+	if !disable {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.disables++
+}
+
+// panelDisables — сколько раз пользователя отключили или удалили в панели.
+func (s *arEdgeStub) panelDisables() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.disables
 }
 
 func (s *arEdgeStub) record(call kassaCall) int {
@@ -127,6 +153,7 @@ func setupAutorenewEdgeBotAt(t *testing.T, stub *arEdgeStub) (*Bot, *database.DB
 
 	panel := newTestPanelClient()
 	panel.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		stub.recordPanel(r)
 		if patch := stub.patchStatus(); r.Method == http.MethodPatch && patch != 0 {
 			return &http.Response{StatusCode: patch, Header: make(http.Header),
 				Body: io.NopCloser(strings.NewReader(`{"message":"panel is down"}`))}, nil

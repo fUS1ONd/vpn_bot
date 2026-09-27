@@ -328,6 +328,12 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnAdminRefBack, bot.handleAdminReferralBack)
 	btnAdminArOff := adminRefMenu.Data("", cbAdminAutorenewOff)
 	b.Handle(&btnAdminArOff, bot.handleAdminAutorenewDisable)
+	btnAdminMmResolve := adminRefMenu.Data("", cbAdminMismatchResolve)
+	btnAdminMmResolveOK := adminRefMenu.Data("", cbAdminMismatchResolveOK)
+	btnAdminMmBack := adminRefMenu.Data("", cbAdminMismatchBack)
+	b.Handle(&btnAdminMmResolve, bot.handleAdminMismatchResolve)
+	b.Handle(&btnAdminMmResolveOK, bot.handleAdminMismatchResolveConfirm)
+	b.Handle(&btnAdminMmBack, bot.handleAdminMismatchBack)
 
 	return bot, nil
 }

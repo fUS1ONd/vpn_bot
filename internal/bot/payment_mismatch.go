@@ -108,15 +108,6 @@ func (b *Bot) reportPaymentMismatch(payment *database.Payment, mismatch *payment
 	b.reportPaymentMismatchWithHeadline(payment, mismatch, source, headline)
 }
 
-// reportAutorenewMismatch — то же для автосписания: заголовок говорит, что
-// деньги списаны без участия человека, подробности и дедупликация общие, так что
-// сверка и вебхук по этому платежу второго сообщения не пришлют.
-func (b *Bot) reportAutorenewMismatch(payment *database.Payment, mismatch *paymentMismatchError) {
-	headline := fmt.Sprintf("⚠️ Автосписание #%d (пользователь %d): ЮKassa говорит «оплачено», но ответ не сошёлся с записью платежа.",
-		payment.ID, payment.TelegramID)
-	b.reportPaymentMismatchWithHeadline(payment, mismatch, "autorenew", headline)
-}
-
 func (b *Bot) reportPaymentMismatchWithHeadline(payment *database.Payment, mismatch *paymentMismatchError, source, headline string) {
 	slog.Error("Ответ провайдера не сошёлся с записью платежа",
 		"payment_id", payment.ID, "telegram_id", payment.TelegramID, "provider", payment.Provider,
