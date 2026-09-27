@@ -30,8 +30,8 @@ func TestНепринятаяОплата_ОповещениеНеДоставл
 	b := newAlertOnceBot()
 	delivered := failFirstTelegramSend(t, b)
 
-	b.reportIgnoredPaymentConfirmation(alertOncePayment())
-	b.reportIgnoredPaymentConfirmation(alertOncePayment())
+	b.reportIgnoredPaymentConfirmation(alertOncePayment())()
+	b.reportIgnoredPaymentConfirmation(alertOncePayment())()
 
 	assert.Len(t, delivered.matching(ignoredAlertMarker), 1,
 		"первое оповещение отвергнуто Telegram — владелец так и не узнал о непринятой оплате")
@@ -41,8 +41,8 @@ func TestНепринятаяОплата_ОповещениеДоставлен
 	b := newAlertOnceBot()
 	tg := captureTelegram(t, b)
 
-	b.reportIgnoredPaymentConfirmation(alertOncePayment())
-	b.reportIgnoredPaymentConfirmation(alertOncePayment())
+	b.reportIgnoredPaymentConfirmation(alertOncePayment())()
+	b.reportIgnoredPaymentConfirmation(alertOncePayment())()
 
 	assert.Len(t, tg.matching(ignoredAlertMarker), 1, "одно сообщение на платёж")
 }
@@ -51,8 +51,8 @@ func TestВоскрешённыйПлатёж_ОповещениеНеДоста
 	b := newAlertOnceBot()
 	delivered := failFirstTelegramSend(t, b)
 
-	b.reportRevivedPayment(alertOncePayment())
-	b.reportRevivedPayment(alertOncePayment())
+	b.reportRevivedPayment(alertOncePayment())()
+	b.reportRevivedPayment(alertOncePayment())()
 
 	assert.Len(t, delivered.matching(revivedAlertMarker), 1,
 		"первое оповещение отвергнуто Telegram — владелец так и не узнал о воскрешённом платеже")
@@ -62,8 +62,8 @@ func TestВоскрешённыйПлатёж_ОповещениеДоставл
 	b := newAlertOnceBot()
 	tg := captureTelegram(t, b)
 
-	b.reportRevivedPayment(alertOncePayment())
-	b.reportRevivedPayment(alertOncePayment())
+	b.reportRevivedPayment(alertOncePayment())()
+	b.reportRevivedPayment(alertOncePayment())()
 
 	assert.Len(t, tg.matching(revivedAlertMarker), 1, "одно сообщение на платёж")
 }

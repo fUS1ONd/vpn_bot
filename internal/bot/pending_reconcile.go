@@ -136,14 +136,10 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 		return
 	}
 
-	// Сообщения владельцу и человеку решаются под мьютексом, а уходят после него:
-	// поход в Telegram не должен держать оплату человека. Отложенные вызовы
-	// объявлены до захвата мьютекса и потому выполняются уже после его
-	// освобождения — и на любом пути, как того требует deliverOnce.
-	notifyOwner := func() bool { return false }
-	defer func() { notifyOwner() }()
-	notifyUser := noNotice
-	defer func() { notifyUser() }()
+	// Сообщения владельцу и человеку решаются под мьютексом, а уходят после него
+	// (afterUnlock): поход в Telegram не должен держать оплату человека.
+	h := &paymentCallbackHandler{bot: b}
+	defer h.later.run()
 
 	mu := getPaymentMutex(payment.TelegramID)
 	mu.Lock()
@@ -166,7 +162,7 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 	if mismatch, ok := asPaymentMismatch(err); ok {
 		// Провайдер ответил, но не то, что записано у нас: это не молчание, и
 		// ждать тут нечего. Подписку не выдаём; судьбу денег решает владелец.
-		notifyUser = b.reportMismatchAndPrepareNotice(payment, mismatch, source)
+		b.reportMismatchAndPrepareNotice(&h.later, payment, mismatch, source)
 		if deadlinePassed {
 			slog.Error("Сверка платежа: ответ провайдера так и не сошёлся с записью, платёж закрыт",
 				"payment_id", payment.ID, "provider", payment.Provider, "provider_status", mismatch.ProviderStatus, "source", source)
@@ -181,7 +177,7 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 		slog.Error("Сверка платежа: сбой нашей базы при записи ответа провайдера, сверим позже",
 			"error", err, "payment_id", payment.ID, "provider", payment.Provider, "source", source)
 		if deadlinePassed || closedWindowEnding(payment, verified, now) {
-			notifyOwner = b.claimLocalVerificationStuckAlert(payment, verified)
+			h.later.add(b.claimLocalVerificationStuckAlert(payment, verified))
 		}
 		return
 	}
@@ -197,7 +193,6 @@ func (b *Bot) reconcilePendingPayment(paymentID int64, now time.Time, source str
 		return
 	}
 
-	h := &paymentCallbackHandler{bot: b}
 	switch verified.Status {
 	case paymentprovider.StatusSucceeded:
 		slog.Warn("Платёж подтверждён сверкой: уведомление провайдера не дошло",

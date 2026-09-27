@@ -103,13 +103,17 @@ func findPaymentMismatch(payment *database.Payment, verified *paymentprovider.Pa
 // статусе «оплачено», поэтому платёж, который стал «оплачено» после несовпавшего
 // pending, своё сообщение получит; не принятое Telegram сообщение пометку снимает,
 // и его повторит следующий вход.
-func (b *Bot) reportPaymentMismatch(payment *database.Payment, mismatch *paymentMismatchError, source string) {
+//
+// Лог и занятие пометки — сразу, а сетевой вызов возвращается отправкой (см.
+// deliverOnce): все входы держат getPaymentMutex, и сообщение владельцу уходит
+// после его снятия. Отправку обязательно вызвать на любом пути.
+func (b *Bot) reportPaymentMismatch(payment *database.Payment, mismatch *paymentMismatchError, source string) func() bool {
 	headline := fmt.Sprintf("⚠️ Платёж #%d (пользователь %d): провайдер %s говорит «оплачено», но ответ не сошёлся с записью платежа.",
 		payment.ID, payment.TelegramID, html.EscapeString(payment.Provider))
-	b.reportPaymentMismatchWithHeadline(payment, mismatch, source, headline)
+	return b.reportPaymentMismatchWithHeadline(payment, mismatch, source, headline)
 }
 
-func (b *Bot) reportPaymentMismatchWithHeadline(payment *database.Payment, mismatch *paymentMismatchError, source, headline string) {
+func (b *Bot) reportPaymentMismatchWithHeadline(payment *database.Payment, mismatch *paymentMismatchError, source, headline string) func() bool {
 	slog.Error("Ответ провайдера не сошёлся с записью платежа",
 		"payment_id", payment.ID, "telegram_id", payment.TelegramID, "provider", payment.Provider,
 		"local_status", payment.Status, "provider_status", mismatch.ProviderStatus,
@@ -120,14 +124,14 @@ func (b *Bot) reportPaymentMismatchWithHeadline(payment *database.Payment, misma
 		"source", source)
 
 	if mismatch.ProviderStatus != paymentprovider.StatusSucceeded {
-		return
+		return noNotice
 	}
 	recipient := ""
 	if mismatch.recipientChecked() {
 		recipient = fmt.Sprintf("\nПолучатель: наш <code>%s</code>, в ответе <code>%s</code>",
 			html.EscapeString(mismatch.ExpectedRecipient), html.EscapeString(mismatch.Recipient))
 	}
-	b.sendPaymentMismatchAlert(payment.ID, fmt.Sprintf(
+	return b.claimPaymentMismatchAlert(payment.ID, fmt.Sprintf(
 		"%s\n\n"+
 			"Сумма: наша %d ₽, в ответе %d\nВалюта: <code>%s</code>\n"+
 			"Идентификатор: наш <code>%s</code>, в ответе <code>%s</code>%s\nСтатус провайдера: <b>%s</b>\n\n"+
@@ -139,10 +143,11 @@ func (b *Bot) reportPaymentMismatchWithHeadline(payment *database.Payment, misma
 	))
 }
 
-// sendPaymentMismatchAlert отправляет владельцу сообщение о несовпадении — одно
-// на платёж, с какого бы входа несовпадение ни пришло. Не принятое Telegram
-// сообщение пометку снимает (deliverOnce): иначе она стояла бы без сообщения, а
-// человеку на ручной проверке сказали бы, что мы разбираемся.
-func (b *Bot) sendPaymentMismatchAlert(paymentID int64, msg string) {
-	b.adminAlertOnce(&b.paymentMismatchReported, paymentID, "несовпадение ответа провайдера", msg)()
+// claimPaymentMismatchAlert занимает сообщение владельцу о несовпадении — одно
+// на платёж, с какого бы входа несовпадение ни пришло, — и возвращает его
+// отправку. Не принятое Telegram сообщение пометку снимает (deliverOnce): иначе
+// она стояла бы без сообщения, а человеку на ручной проверке сказали бы, что мы
+// разбираемся.
+func (b *Bot) claimPaymentMismatchAlert(paymentID int64, msg string) func() bool {
+	return b.adminAlertOnce(&b.paymentMismatchReported, paymentID, "несовпадение ответа провайдера", msg)
 }
