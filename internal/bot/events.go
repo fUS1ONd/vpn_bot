@@ -18,6 +18,43 @@ type eventRecorder interface {
 	Record(event journal.Event)
 }
 
+// eventPurger — чистка журнала: удаляет События старше срока хранения
+// (journal.Retention) относительно now.
+type eventPurger interface {
+	Purge(now time.Time) (int64, error)
+}
+
+// purgeEventsJournal — шаг прохода планировщика: удаляет сырые События старше
+// срока хранения, без агрегатов (ADR-0005). Шаг изолирован от остальных: своя
+// паника, ошибка только в лог — аналитика не имеет права остановить
+// уведомления, отключения и чеки.
+func (b *Bot) purgeEventsJournal(now time.Time) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Шаг чистки журнала событий упал с паникой", "recover", r)
+		}
+	}()
+
+	if b.eventsPurger == nil {
+		return
+	}
+	// Бот останавливается — журнал вот-вот закроется, и чистка дала бы в лог
+	// ложную ошибку «database is closed». Устаревшее дочистит следующий старт.
+	select {
+	case <-b.shutdownCh:
+		return
+	default:
+	}
+	deleted, err := b.eventsPurger.Purge(now)
+	if err != nil {
+		slog.Error("Scheduler: не удалось почистить журнал событий", "error", err)
+		return
+	}
+	if deleted > 0 {
+		slog.Info("Scheduler: удалены События старше срока хранения", "deleted", deleted)
+	}
+}
+
 // recordEvent пишет Событие, если журнал подключён.
 func (b *Bot) recordEvent(event journal.Event) {
 	if b.events == nil {
@@ -164,6 +201,7 @@ func (b *Bot) handleUnroutedCallback(c tele.Context) error {
 func (b *Bot) AttachAnalytics(events *journal.Journal, reporter *funnels.Funnels) {
 	if events != nil {
 		b.events = events
+		b.eventsPurger = events
 	}
 	if reporter != nil {
 		b.funnels = reporter

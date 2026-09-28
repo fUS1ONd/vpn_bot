@@ -81,6 +81,11 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 	// по ошибке Remnawave, а чеки от неё не зависят.
 	defer b.issuePendingReceipts()
 
+	// 4.1. Чистим журнал Событий по сроку хранения. Тоже через defer: от ошибок
+	// Remnawave журнал не зависит. Объявлен после чеков, поэтому выполняется
+	// раньше них — быстрый DELETE не ждёт похода в ФНС.
+	defer b.purgeEventsJournal(now)
+
 	// 5. Получаем пользователей
 	remUsers, err := b.remnawave.GetAllUsers()
 	if err != nil {

@@ -36,6 +36,10 @@ const (
 // базы в пределах одной секунды неверно — моменты сравниваются в Go, после Scan.
 const TimeLayout = "2006-01-02 15:04:05.000"
 
+// Retention — срок хранения сырых Событий. Старше — удаляются чисткой без
+// агрегатов (ADR-0005); срок отражён в политике конфиденциальности.
+const Retention = 180 * 24 * time.Hour
+
 const (
 	defaultBufferSize    = 4096
 	defaultBatchSize     = 100
@@ -162,6 +166,23 @@ func (j *Journal) Record(event Event) {
 	default:
 		j.dropped.Add(1)
 	}
+}
+
+// Purge удаляет События старше Retention относительно now и возвращает число
+// удалённых. Событие ровно на границе срока остаётся.
+//
+// Идёт своим запросом мимо писателя пачек. Одновременно пишущих в SQLite двух
+// не бывает: пачка на время DELETE ждёт блокировку в пределах busy_timeout.
+// Чистка раз в полчаса удаляет только то, что успело состариться за полчаса,
+// поэтому держит блокировку мгновения; превысь она busy_timeout — пачка
+// потерялась бы с записью в лог, как при любом сбое записи.
+func (j *Journal) Purge(now time.Time) (int64, error) {
+	cutoff := now.Add(-Retention).UTC().Format(TimeLayout)
+	result, err := j.conn.Exec(`DELETE FROM events WHERE ts < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // Close сбрасывает буфер в базу, останавливает писателя и закрывает файл.

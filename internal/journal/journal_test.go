@@ -157,3 +157,26 @@ func TestJournal_RecordAfterCloseIsIgnored(t *testing.T) {
 func TestPathNextTo(t *testing.T) {
 	assert.Equal(t, filepath.Join("/app/data", "events.db"), PathNextTo("/app/data/bot.db"))
 }
+
+// Чистка удаляет События старше срока хранения и оставляет свежие: журнал не
+// копится вечно, как обещает политика конфиденциальности.
+func TestJournal_PurgeDeletesEventsOlderThanRetention(t *testing.T) {
+	j, path := openTestJournal(t, Options{BatchSize: 3, FlushInterval: time.Hour})
+	defer j.Close()
+
+	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	j.Record(Event{At: now.Add(-181 * day), TelegramID: 1, Action: "old", Source: SourceUser})
+	j.Record(Event{At: now.Add(-180 * day), TelegramID: 2, Action: "boundary", Source: SourceUser})
+	j.Record(Event{At: now.Add(-179 * day), TelegramID: 3, Action: "fresh", Source: SourceBot})
+	require.Eventually(t, func() bool { return len(readEvents(t, path)) == 3 }, 5*time.Second, 10*time.Millisecond)
+
+	deleted, err := j.Purge(now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+
+	events := readEvents(t, path)
+	require.Len(t, events, 2)
+	assert.Equal(t, "boundary", events[0].Action)
+	assert.Equal(t, "fresh", events[1].Action)
+}

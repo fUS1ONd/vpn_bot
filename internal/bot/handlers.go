@@ -85,6 +85,7 @@ type Bot struct {
 	chatMemberOf                chatMemberFunc                                       // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
 	panelAuthAlerted            sync.Map                                             // ключ алерта про токен панели -> struct{}, защита от повторов
 	events                      eventRecorder                                        // журнал Событий (nil — не подключён)
+	eventsPurger                eventPurger                                          // чистка журнала по сроку хранения (nil — не подключён)
 	funnels                     funnelReporter                                       // расчёт Воронок для админки (nil — не подключён)
 }
 
