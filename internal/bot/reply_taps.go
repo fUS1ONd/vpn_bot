@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"strconv"
 
+	"github.com/fus1ond/vpn_bot/internal/funnels"
 	tele "gopkg.in/telebot.v3"
 )
 
@@ -52,7 +53,22 @@ var replyButtonCaptions = map[string]struct{}{
 	BtnAdminReferrals:          {},
 	BtnAdminReferralOverview:   {},
 	BtnAdminReferralLeaders:    {},
+	BtnAdminFunnels:            {},
 }
+
+// replyButtonActions — id Действий reply-кнопок для журнала Событий. Id
+// стабилен и от подписи не зависит: подпись можно переписать, история
+// нажатий в журнале от этого не порвётся. Id, на которые опираются Шаги
+// воронок, берутся из пакета funnels, чтобы запись и расчёт не разошлись.
+var replyButtonActions = map[string]string{
+	BtnInvites:      funnels.ActionInvitesOpen,
+	BtnAdminFunnels: actionAdminFunnels,
+}
+
+// Id Действий, на которые не опирается ни одна Воронка.
+const (
+	actionAdminFunnels = "admin_funnels"
+)
 
 // isReplyButtonTap отвечает, является ли текст нажатием reply-кнопки, а не
 // содержимым переписки. Сравнение точное: «👤 Моя подписка не работает» — это

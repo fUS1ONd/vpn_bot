@@ -84,6 +84,8 @@ type Bot struct {
 	communityPendingAlerted     sync.Map                                             // telegram_id -> struct{}, защита от потока алертов о зависших заявках
 	chatMemberOf                chatMemberFunc                                       // Шов к getChatMember: подменяется в тестах, nil означает «состав Канала неизвестен»
 	panelAuthAlerted            sync.Map                                             // ключ алерта про токен панели -> struct{}, защита от повторов
+	events                      eventRecorder                                        // журнал Событий (nil — не подключён)
+	funnels                     funnelReporter                                       // расчёт Воронок для админки (nil — не подключён)
 }
 
 // chatMemberFunc — единственный поход бота за составом Канала.
@@ -146,6 +148,10 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 
 	// Уборка нажатий reply-кнопок: навигации не место в истории переписки
 	b.Use(bot.dropReplyTapMiddleware)
+
+	// Журнал Событий: что нажал пользователь, без содержимого сообщений.
+	// Журнал подключается позже, через AttachAnalytics; до этого middleware молчит.
+	b.Use(bot.eventsMiddleware)
 
 	// Middleware для логирования
 	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
@@ -335,6 +341,12 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	b.Handle(&btnAdminMmResolve, bot.handleAdminMismatchResolve)
 	b.Handle(&btnAdminMmResolveOK, bot.handleAdminMismatchResolveConfirm)
 	b.Handle(&btnAdminMmBack, bot.handleAdminMismatchBack)
+
+	funnelsMenu := &tele.ReplyMarkup{}
+	btnAdminFunnel := funnelsMenu.Data("", cbAdminFunnel)
+	btnAdminFunnelsBack := funnelsMenu.Data("", cbAdminFunnelsBack)
+	b.Handle(&btnAdminFunnel, bot.handleAdminFunnel)
+	b.Handle(&btnAdminFunnelsBack, bot.handleAdminFunnelsBack)
 
 	return bot, nil
 }
@@ -621,6 +633,8 @@ func (b *Bot) handleTextMessage(c tele.Context) error {
 			return b.handleBroadcastActiveRequest(c)
 		case BtnAdminReferrals:
 			return b.handleAdminReferralsMenu(c)
+		case BtnAdminFunnels:
+			return b.handleAdminFunnelsMenu(c)
 		case BtnAdminReferralOverview:
 			return b.showAdminReferralOverview(c, "30", false)
 		case BtnAdminReferralLeaders:
@@ -998,7 +1012,8 @@ func isMenuNavigationButton(text string) bool {
 		BtnBroadcastActive,
 		BtnAdminReferrals,
 		BtnAdminReferralOverview,
-		BtnAdminReferralLeaders:
+		BtnAdminReferralLeaders,
+		BtnAdminFunnels:
 		return true
 	default:
 		return false

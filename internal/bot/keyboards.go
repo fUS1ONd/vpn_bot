@@ -85,6 +85,9 @@ const (
 	cbAdminMismatchResolve   = "adm_mm_resolve" // экран подтверждения
 	cbAdminMismatchResolveOK = "adm_mm_ok"      // подтверждение
 	cbAdminMismatchBack      = "adm_mm_back"    // назад в карточку
+	// Экран отчётов по Воронкам.
+	cbAdminFunnel      = "adm_funnel"       // отчёт по Воронке (Data = id Воронки)
+	cbAdminFunnelsBack = "adm_funnels_back" // назад к списку Воронок
 )
 
 // Текстовые константы кнопок
@@ -145,6 +148,9 @@ const (
 	BtnAdminReferrals        = "🤝 Приглашения"
 	BtnAdminReferralOverview = "📊 Обзор"
 	BtnAdminReferralLeaders  = "🏆 Кто приглашает"
+
+	// Админ-кнопка отчётов по Воронкам
+	BtnAdminFunnels = "📊 Воронки"
 )
 
 // UserMenuKeyboardDynamic строит главное меню с динамической кнопкой оплаты.
@@ -237,6 +243,7 @@ func AdminKeyboard(maintenanceMode bool) *tele.ReplyMarkup {
 	menu.Reply(
 		menu.Row(menu.Text(BtnAdminManage), menu.Text(BtnAdminReferrals)),
 		menu.Row(menu.Text(BtnAdminBroadcast), menu.Text(BtnAdminStats)),
+		menu.Row(menu.Text(BtnAdminFunnels)),
 		menu.Row(menu.Text(maintenanceBtn)),
 		menu.Row(menu.Text(BtnAdminUserMode)),
 	)
