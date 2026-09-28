@@ -147,7 +147,12 @@ func userAction(c tele.Context) (string, bool) {
 
 // messageAction — id Действия входящего сообщения. Reply-кнопка узнаётся по
 // точному совпадению подписи и проверяется первой: подпись не бывает командой.
+// Пишутся только сообщения из личного чата с ботом: бот — админ
+// форум-супергруппы Канала и видит сообщения её участников, им в журнале не место.
 func messageAction(msg *tele.Message) (string, bool) {
+	if msg.Chat == nil || msg.Chat.Type != tele.ChatPrivate {
+		return "", false
+	}
 	if action, ok := replyButtonActions[msg.Text]; ok {
 		return action, true
 	}

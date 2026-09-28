@@ -46,7 +46,7 @@ func TestEventsMiddleware_RecordsInvitesTap(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		return nil
 	})
-	ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Text: BtnInvites}}
+	ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Chat: privateChat, Text: BtnInvites}}
 	require.NoError(t, handler(ctx))
 
 	events := recorder.recorded()
@@ -66,7 +66,7 @@ func TestEventsMiddleware_RecordsOnHandlerError(t *testing.T) {
 	boom := errors.New("boom")
 
 	handler := b.eventsMiddleware(func(tele.Context) error { return boom })
-	ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Text: BtnInvites}}
+	ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Chat: privateChat, Text: BtnInvites}}
 
 	assert.ErrorIs(t, handler(ctx), boom)
 	require.Len(t, recorder.recorded(), 1)
@@ -82,7 +82,7 @@ func TestEventsMiddleware_RecordsAfterHandler(t *testing.T) {
 		seenDuringHandler = len(recorder.recorded())
 		return nil
 	})
-	ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Text: BtnInvites}}
+	ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Chat: privateChat, Text: BtnInvites}}
 	require.NoError(t, handler(ctx))
 
 	assert.Zero(t, seenDuringHandler)
@@ -96,7 +96,7 @@ func TestEventsMiddleware_TypedTextIsNotInvitesTap(t *testing.T) {
 	b := &Bot{events: recorder}
 
 	handler := b.eventsMiddleware(func(tele.Context) error { return nil })
-	ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Text: BtnInvites + " не открываются"}}
+	ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Chat: privateChat, Text: BtnInvites + " не открываются"}}
 	require.NoError(t, handler(ctx))
 
 	for _, event := range recorder.recorded() {
@@ -112,7 +112,7 @@ func TestEventsMiddleware_WithoutJournal(t *testing.T) {
 		called = true
 		return nil
 	})
-	ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Text: BtnInvites}}
+	ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Chat: privateChat, Text: BtnInvites}}
 
 	assert.NotPanics(t, func() { require.NoError(t, handler(ctx)) })
 	assert.True(t, called)
@@ -213,8 +213,14 @@ func TestEventsMiddleware_LegacyInlineButton(t *testing.T) {
 // messageEvent — Событие по входящему сообщению.
 func messageEvent(t *testing.T, msg *tele.Message) journal.Event {
 	t.Helper()
+	if msg.Chat == nil {
+		msg.Chat = privateChat
+	}
 	return recordOne(t, &MockContext{sender: &tele.User{ID: 42}, message: msg})
 }
+
+// privateChat — личный чат с ботом: Действия-сообщения пишутся только из него.
+var privateChat = &tele.Chat{ID: 42, Type: tele.ChatPrivate}
 
 // /start без аргумента и /start с приглашением — разные Действия; код
 // приглашения в журнал не попадает.
@@ -380,7 +386,7 @@ func TestEventsMiddleware_PaymentEntries(t *testing.T) {
 		BtnPayYooKassa: funnels.ActionPayYooKassaReply,
 		BtnPayCrypto:   funnels.ActionPayCryptoReply,
 	} {
-		ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Text: caption}}
+		ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Chat: privateChat, Text: caption}}
 		assert.Equal(t, action, recordOne(t, ctx).Action, caption)
 	}
 	for unique, action := range map[string]string{
@@ -389,5 +395,28 @@ func TestEventsMiddleware_PaymentEntries(t *testing.T) {
 	} {
 		ctx := &MockContext{sender: &tele.User{ID: 42}, callback: &tele.Callback{Unique: unique}}
 		assert.Equal(t, action, recordOne(t, ctx).Action, unique)
+	}
+}
+
+// Бот — админ форум-супергруппы Канала и видит сообщения её участников:
+// Действия-сообщения пишутся только из личного чата с ботом.
+func TestEventsMiddleware_MessagesOnlyFromPrivateChat(t *testing.T) {
+	for _, chatType := range []tele.ChatType{tele.ChatGroup, tele.ChatSuperGroup, tele.ChatChannel} {
+		t.Run(string(chatType), func(t *testing.T) {
+			recorder := &fakeRecorder{}
+			b := &Bot{events: recorder}
+			for _, msg := range []*tele.Message{
+				{Text: "привет всем"},
+				{Text: "/help"},
+				{Text: BtnInvites},
+				{Voice: &tele.Voice{}},
+				{Photo: &tele.Photo{}},
+			} {
+				msg.Chat = &tele.Chat{ID: -100500, Type: chatType}
+				ctx := &MockContext{sender: &tele.User{ID: 42}, message: msg}
+				require.NoError(t, b.eventsMiddleware(func(tele.Context) error { return nil })(ctx))
+			}
+			assert.Empty(t, recorder.recorded())
+		})
 	}
 }
