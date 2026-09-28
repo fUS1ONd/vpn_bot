@@ -49,21 +49,30 @@ func (b *Bot) eventsMiddleware(next tele.HandlerFunc) tele.HandlerFunc {
 	}
 }
 
-// Id Действий, которые не являются нажатием кнопки.
+// Id Действий, которые не являются нажатием кнопки, и префиксы id вне
+// каталогов.
 const (
-	actionStart       = "start"        // /start без аргумента
-	actionStartInvite = "start_invite" // /start с кодом приглашения
-	actionStartShare  = "start_share"  // /start из пустого ответа «Поделиться»
-	commandPrefix     = "cmd:"         // прочие команды: cmd:<имя>
-	actionText        = "text"         // текст, не являющийся нажатием кнопки
-	actionVoice       = "voice"        // голосовое
-	actionVideoNote   = "video_note"   // кружок
-	actionMedia       = "media"        // фото, видео или документ
+	actionStart        = "start"        // /start без аргумента
+	actionStartInvite  = "start_invite" // /start с аргументом — кодом приглашения
+	actionStartShare   = "start_share"  // /start из пустого ответа «Поделиться»
+	actionOtherCommand = "cmd:other"    // команда вне белого списка — имя не пишется
+	actionText         = "text"         // текст, не являющийся нажатием кнопки
+	actionVoice        = "voice"        // голосовое
+	actionVideoNote    = "video_note"   // кружок
+	actionMedia        = "media"        // фото, видео или документ
+
+	commandActionPrefix = "cmd:" // команда из белого списка: cmd:<имя>
+	unknownInlinePrefix = "cb:"  // inline-кнопка вне каталога: cb:<unique>
 )
 
-// maxCommandNameLen — предел длины имени команды в id Действия. Команду
-// набирает человек, и хвост произвольной длины в журнале не нужен.
-const maxCommandNameLen = 32
+// knownCommands — команды, которые пишутся по имени. Кроме /start бот команд
+// не регистрирует; здесь общие команды, которые Telegram предлагает любому
+// боту (/help, /settings). Имя вне списка набрал человек, и это уже
+// содержимое сообщения (/hunter2), поэтому оно сводится к cmd:other.
+var knownCommands = map[string]struct{}{
+	"help":     {},
+	"settings": {},
+}
 
 // commandRx узнаёт команду так же, как telebot: «/<имя>[@<бот>]» в начале
 // текста, дальше пробел или конец строки. Имя — только латиница, цифры и «_».
@@ -115,10 +124,10 @@ func messageAction(msg *tele.Message) (string, bool) {
 func commandAction(name, payload string) string {
 	name = strings.ToLower(name)
 	if name != "start" {
-		if len(name) > maxCommandNameLen {
-			name = name[:maxCommandNameLen]
+		if _, ok := knownCommands[name]; ok {
+			return commandActionPrefix + name
 		}
-		return commandPrefix + name
+		return actionOtherCommand
 	}
 	switch payload {
 	case "":
@@ -206,8 +215,9 @@ var inlineButtonActions = map[string]struct{}{
 	cbAdminFunnelsBack:       {},
 }
 
-// unknownInlinePrefix — префикс id Действия для кнопки вне каталога.
-const unknownInlinePrefix = "cb:"
+// maxUnknownUniqueLen — предел длины Unique кнопки вне каталога в id Действия.
+// Unique из каталога не длиннее: предел обрезает только чужие строки.
+const maxUnknownUniqueLen = 32
 
 // rawCallbackRx разбирает сырые данные кнопки «\f<unique>|<payload>», которые
 // telebot оставляет нетронутыми, если обработчика под Unique нет.
@@ -230,6 +240,10 @@ func inlineButtonAction(cb *tele.Callback) string {
 	}
 	if _, ok := inlineButtonActions[unique]; ok {
 		return unique
+	}
+	// Данные кнопки может подделать клиент: хвост на его выбор режется.
+	if len(unique) > maxUnknownUniqueLen {
+		unique = unique[:maxUnknownUniqueLen]
 	}
 	slog.Warn("Inline-кнопка вне каталога Действий", "unique", unique)
 	return unknownInlinePrefix + unique

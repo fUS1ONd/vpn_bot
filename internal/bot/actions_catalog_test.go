@@ -104,5 +104,7 @@ func TestInlineButtonActions_CoverEveryButton(t *testing.T) {
 	for name, unique := range stringConsts(t, "keyboards.go", "cb") {
 		_, ok := inlineButtonActions[unique]
 		assert.True(t, ok, "inline-кнопки %s (%q) нет в inlineButtonActions", name, unique)
+		assert.LessOrEqual(t, len(unique), maxUnknownUniqueLen,
+			"Unique %s длиннее предела, которым режутся кнопки вне каталога", name)
 	}
 }

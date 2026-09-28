@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -170,6 +171,17 @@ func TestEventsMiddleware_UnroutedInlineButton(t *testing.T) {
 	assert.NotContains(t, logs.String(), "SECRETCODE")
 }
 
+// Данные кнопки может подделать клиент: Unique вне каталога обрезается, и
+// длинная строка на выбор нажавшего в журнал целиком не попадает.
+func TestEventsMiddleware_UnroutedInlineButtonIsCapped(t *testing.T) {
+	captureWarnings(t)
+	long := strings.Repeat("a", 60)
+	ctx := &MockContext{sender: &tele.User{ID: 42}, callback: &tele.Callback{Data: "\f" + long}}
+
+	event := recordOne(t, ctx)
+	assert.Equal(t, "cb:"+strings.Repeat("a", 32), event.Action)
+}
+
 // Обработчик есть, а в каталоге Действий кнопки нет — тоже cb:<unique> с
 // предупреждением: id вне каталога не должен совпасть с id из каталога.
 func TestEventsMiddleware_InlineButtonOutsideCatalog(t *testing.T) {
@@ -229,6 +241,30 @@ func TestEventsMiddleware_OtherCommandByName(t *testing.T) {
 	assert.Equal(t, "cmd:help", messageEvent(t, &tele.Message{Text: "/help"}).Action)
 	assert.Equal(t, "cmd:help", messageEvent(t, &tele.Message{Text: "/help@some_bot"}).Action)
 	assert.Equal(t, "cmd:help", messageEvent(t, &tele.Message{Text: "/Help мой пароль 12345"}).Action)
+	assert.Equal(t, "cmd:settings", messageEvent(t, &tele.Message{Text: "/settings"}).Action)
+}
+
+// Reply-кнопки пишутся по карте, а не подписью: несколько кнопок разных
+// экранов, включая «Да», которого нет среди убираемых из чата подписей.
+func TestEventsMiddleware_ReplyButtonsByCatalog(t *testing.T) {
+	cases := map[string]string{
+		BtnStatus:       "subscription_open",
+		BtnPay:          "pay_menu",
+		BtnInviteCreate: "invite_create",
+		BtnAdminFunnels: "admin_funnels",
+		BtnConfirmYes:   "confirm_yes",
+	}
+	for caption, want := range cases {
+		assert.Equal(t, want, messageEvent(t, &tele.Message{Text: caption}).Action, caption)
+	}
+}
+
+// Имя команды набирает человек: имя вне белого списка — уже содержимое
+// (/hunter2), и в журнал оно не попадает.
+func TestEventsMiddleware_UnknownCommandHidesName(t *testing.T) {
+	event := messageEvent(t, &tele.Message{Text: "/hunter2"})
+	assert.Equal(t, actionOtherCommand, event.Action)
+	assert.NotContains(t, event.Action, "hunter2")
 }
 
 // Присланный текст, голосовое, кружок и медиа — Действие-факт: что пришло,

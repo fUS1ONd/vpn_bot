@@ -81,9 +81,9 @@ var replyButtonActions = map[string]string{
 	BtnConfirmYes:   "confirm_yes",
 	BtnBugSkip:      "bug_skip",
 	BtnBugNoServer:  "bug_no_server",
-	BtnPayYooKassa:  "pay_yookassa_legacy",
-	BtnPayCrypto:    "pay_crypto_legacy",
-	BtnCheckPayment: "pay_check_legacy",
+	BtnPayYooKassa:  "pay_yookassa_reply",
+	BtnPayCrypto:    "pay_crypto_reply",
+	BtnCheckPayment: "pay_check_reply",
 
 	// Раздел приглашений
 	BtnInviteCreate: "invite_create",
