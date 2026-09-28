@@ -37,7 +37,8 @@ var funnelPeriodsDays = []int{7, 30, 90}
 
 // funnelTitles — подписи Воронок на экране.
 var funnelTitles = map[string]string{
-	funnels.FunnelInvite: "Приглашение",
+	funnels.FunnelInvite:  "Приглашение",
+	funnels.FunnelPayment: "Оплата",
 }
 
 // funnelStepLabels — подписи Шагов на экране.
@@ -47,6 +48,11 @@ var funnelStepLabels = map[string]string{
 	funnels.StepInviteSent:       "Отправили",
 	funnels.StepFriendRegistered: "Друг зарегистрировался",
 	funnels.StepFriendPaid:       "Друг оплатил",
+
+	funnels.StepPaymentEntered:      "Открыли оплату",
+	funnels.StepPaymentMethodChosen: "Выбрали способ",
+	funnels.StepPaymentCreated:      "Платёж создан",
+	funnels.StepPaymentConfirmed:    "Оплатили",
 }
 
 // funnelNoDataHints — подсказка владельцу, почему у Шага «нет данных», если

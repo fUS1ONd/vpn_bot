@@ -8,6 +8,7 @@ import (
 
 	"github.com/fus1ond/vpn_bot/internal/funnels"
 	"github.com/fus1ond/vpn_bot/internal/journal"
+	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	tele "gopkg.in/telebot.v3"
 )
 
@@ -80,6 +81,7 @@ func (b *Bot) eventsMiddleware(next tele.HandlerFunc) tele.HandlerFunc {
 				TelegramID: c.Sender().ID,
 				Action:     action,
 				Source:     journal.SourceUser,
+				Param:      actionParam(c, action),
 			})
 		}
 		return err
@@ -184,6 +186,26 @@ func commandAction(name, payload string) string {
 	default:
 		return actionStartInvite
 	}
+}
+
+// actionParam — короткий параметр События. Разрешён точечно и только
+// перечислением без персональных данных; сейчас это способ оплаты у выбора
+// способа и повтора создания платежа. Данные кнопки может подделать клиент,
+// поэтому в журнал идёт значение перечисления, а не они сами.
+func actionParam(c tele.Context, action string) string {
+	switch action {
+	case funnels.ActionPayMethod, funnels.ActionRetryPayment:
+		if cb := c.Callback(); cb != nil {
+			return payMethodParams[cb.Data]
+		}
+	}
+	return ""
+}
+
+// payMethodParams — провайдер из данных кнопки способа → параметр События.
+var payMethodParams = map[string]string{
+	paymentprovider.YooKassa: funnels.PayMethodYooKassa,
+	paymentprovider.Platega:  funnels.PayMethodCrypto,
 }
 
 // handleUnroutedCallback принимает нажатия inline-кнопок, под Unique которых

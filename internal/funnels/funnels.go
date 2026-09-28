@@ -29,11 +29,32 @@ const (
 	// и оно ушло в чат (chosen_inline_result). Telegram присылает выбор, только
 	// если у @BotFather включён /setinlinefeedback.
 	ActionShareSent = "share_sent"
+
+	// Входы в оплату — Действия, открывающие экран выбора способа оплаты.
+	ActionPayMenu              = "pay_menu"           // reply «Оплатить подписку» в главном меню
+	ActionRenewMenu            = "renew_menu"         // reply «Продлить подписку» в главном меню
+	ActionPayOpen              = "pay_open"           // inline-кнопка оплаты под уведомлением планировщика
+	ActionAutorenewPayManually = "ar_pay"             // «Продлить вручную» после неудачного автосписания
+	ActionPayYooKassaReply     = "pay_yookassa_reply" // способ со старой reply-клавиатуры: открывает экран заново
+	ActionPayCryptoReply       = "pay_crypto_reply"   // то же для крипты
+
+	// Выбор способа оплаты. Способ пишется параметром События — только
+	// перечислением PayMethod*, без персональных данных.
+	ActionPayMethod    = "pay_method" // способ выбран на экране оплаты
+	ActionRetryPayment = "retry_pay"  // повтор создания платежа тем же способом после сбоя
+)
+
+// Значения параметра выбора способа оплаты. Разбивка Воронки по способам пока
+// не показывается, но пишется сразу: история копится без новой записи.
+const (
+	PayMethodYooKassa = "yookassa" // карта, СБП, SberPay через ЮKassa
+	PayMethodCrypto   = "crypto"   // крипта через Platega
 )
 
 // Воронки.
 const (
-	FunnelInvite = "invite"
+	FunnelInvite  = "invite"
+	FunnelPayment = "payment"
 )
 
 // Шаги воронок.
@@ -45,6 +66,12 @@ const (
 	// зарегистрировался и впервые оплатил друг.
 	StepFriendRegistered = "friend_registered"
 	StepFriendPaid       = "friend_paid"
+
+	// Шаги оплаты. Воронка «Непродлившие» переиспользует их вслед за своим входом.
+	StepPaymentEntered      = "payment_entered"
+	StepPaymentMethodChosen = "payment_method_chosen"
+	StepPaymentCreated      = "payment_created"
+	StepPaymentConfirmed    = "payment_confirmed"
 )
 
 // mainSchema — имя, под которым основная база подключена к соединению журнала.
@@ -115,6 +142,16 @@ func definitions() []funnel {
 				{id: StepInviteSent, source: journalActionOrNoData(ActionShareSent)},
 				{id: StepFriendRegistered, source: referralFriendsRegistered},
 				{id: StepFriendPaid, source: referralFriendsPaid},
+			},
+		},
+		{
+			id:     FunnelPayment,
+			window: 24 * time.Hour,
+			steps: []step{
+				{id: StepPaymentEntered, source: paymentEntered},
+				{id: StepPaymentMethodChosen, source: journalAction(ActionPayMethod, ActionRetryPayment)},
+				{id: StepPaymentCreated, source: paymentCreated},
+				{id: StepPaymentConfirmed, source: paymentConfirmed},
 			},
 		},
 	}

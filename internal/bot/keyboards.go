@@ -8,6 +8,7 @@ import (
 	tele "gopkg.in/telebot.v3"
 
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/funnels"
 	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
@@ -30,30 +31,30 @@ const (
 
 // Unique-идентификаторы inline-кнопок автопродления
 const (
-	cbAutorenewOpen        = "ar_open"    // экран автопродления из карточки
-	cbAutorenewOffer       = "ar_offer"   // экран условий из сообщения об оплате
-	cbAutorenewEnable      = "ar_on"      // включить автопродление
-	cbAutorenewDisable     = "ar_off"     // выключить автопродление (один тап)
-	cbAutorenewDismiss     = "ar_dismiss" // «Не сейчас» в предложении включить
-	cbAutorenewPayManually = "ar_pay"     // подсказка продлить вручную после провала
-	cbPaymentMethod        = "pm_open"    // экран сохранённого способа оплаты
-	cbPaymentMethodUnlink  = "pm_unlink"  // запрос отвязки способа
+	cbAutorenewOpen        = "ar_open"                          // экран автопродления из карточки
+	cbAutorenewOffer       = "ar_offer"                         // экран условий из сообщения об оплате
+	cbAutorenewEnable      = "ar_on"                            // включить автопродление
+	cbAutorenewDisable     = "ar_off"                           // выключить автопродление (один тап)
+	cbAutorenewDismiss     = "ar_dismiss"                       // «Не сейчас» в предложении включить
+	cbAutorenewPayManually = funnels.ActionAutorenewPayManually // подсказка продлить вручную после провала
+	cbPaymentMethod        = "pm_open"                          // экран сохранённого способа оплаты
+	cbPaymentMethodUnlink  = "pm_unlink"                        // запрос отвязки способа
 	cbPaymentMethodConfirm = "pm_unlink_ok"
 )
 
 // Unique-идентификаторы inline-кнопок платёжного экрана
 const (
-	cbPayMethod = "pay_method" // выбор способа оплаты (Data = провайдер)
-	cbPayCheck  = "pay_check"  // «Я оплатил» — ручная проверка оплаты
-	cbPayCancel = "pay_cancel" // отмена (Data = id платежа или пусто на шаге выбора способа)
-	cbPayOpen   = "pay_open"   // открыть экран оплаты из уведомления планировщика
+	cbPayMethod = funnels.ActionPayMethod // выбор способа оплаты (Data = провайдер)
+	cbPayCheck  = "pay_check"             // «Я оплатил» — ручная проверка оплаты
+	cbPayCancel = "pay_cancel"            // отмена (Data = id платежа или пусто на шаге выбора способа)
+	cbPayOpen   = funnels.ActionPayOpen   // открыть экран оплаты из уведомления планировщика
 )
 
 // Unique-идентификаторы inline-кнопок «Повторить» в сообщениях об ошибке
 const (
-	cbRetryPayment      = "retry_pay"       // повторить создание платежа тем же способом
-	cbRetryPaymentCheck = "retry_pay_check" // повторить проверку оплаты
-	cbRetryInvite       = "retry_invite"    // повторить создание приглашения
+	cbRetryPayment      = funnels.ActionRetryPayment // повторить создание платежа тем же способом
+	cbRetryPaymentCheck = "retry_pay_check"          // повторить проверку оплаты
+	cbRetryInvite       = "retry_invite"             // повторить создание приглашения
 )
 
 // Unique-идентификаторы inline-кнопок багрепорта

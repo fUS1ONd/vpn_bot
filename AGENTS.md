@@ -534,6 +534,18 @@ docker-compose.test.yml` команда подхватит боевой `docker-
     (не включён `/setinlinefeedback`). Отчёт несёт `WindowOpen` — окно части когорты не
     истекло. Сырые События хранятся `journal.Retention` (180 дней) и удаляются шагом
     планировщика без агрегатов (пункт 6); Событие ровно на границе срока остаётся.
+    Воронка «Оплата» (человек, окно 24 часа): вход — любое из `paymentEntryActions`
+    (`internal/funnels/sources.go`), выбор способа — `pay_method` или `retry_pay` с
+    параметром `yookassa`/`crypto` (`actionParam` в `internal/bot/events.go`: только
+    перечисление, данные кнопки в журнал не идут); «создан» — запись `payments` с id у
+    кассы **или** живой pending того же способа, который бот вернул на выбор
+    (`pendingReused`: иначе вернувшийся платить по старой ссылке выпадал бы из Воронки),
+    «подтверждён» — `paidManually`; автосписания и тесты исключены на обоих Шагах.
+    Источники `paymentEntered`, `paymentCreated`, `paymentConfirmed` переиспользует Воронка
+    непродливших. Моменты из `payments` лежат целыми секундами (`CURRENT_TIMESTAMP`) и
+    сдвигаются на конец секунды (`wholeSecondsCeil`), иначе платёж «опережал» бы выбор
+    способа. Id Действий оплаты объявлены в `internal/funnels`, `cb*`-константы и карта
+    reply-кнопок ссылаются на них, а тест каталога разрешает `funnels.X` по исходнику.
     Экран — `docs/behavior/funnels.md`, хранение —
     `docs/adr/0005-events-journal-separate-db.md`, термины — `CONTEXT.md` («Аналитика»).
 

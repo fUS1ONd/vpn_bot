@@ -9,6 +9,7 @@ import (
 
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/journal"
+	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 )
 
 // journalAction — Шаг из журнала: случаи Действия (любого из перечисленных) в интервале.
@@ -23,6 +24,17 @@ func journalAction(actions ...string) source {
 		return queryOccurrences(ctx, conn, query, args...)
 	}
 }
+
+// paymentEntryActions — все входы в оплату: человек открыл экран выбора
+// способа, откуда бы ни пришёл.
+var paymentEntryActions = []string{
+	ActionPayMenu, ActionRenewMenu, ActionPayOpen, ActionAutorenewPayManually,
+	ActionPayYooKassaReply, ActionPayCryptoReply,
+}
+
+// paymentEntered — источник Шага «вошёл в оплату» любым входом. Как и два
+// источника платежей ниже, его переиспользует Воронка непродливших.
+var paymentEntered = journalAction(paymentEntryActions...)
 
 // errNoEvents — Действия нет в журнале вовсе. Для Действия, которое Telegram
 // присылает только при отдельной настройке бота, это не ноль, а «не знаем».
@@ -82,7 +94,96 @@ var referralFriendsRegistered = tableOccurrences("i.used_at",
 func paidManually(alias string) string {
 	return alias + `.status IN ('confirmed', 'confirmed_not_activated') AND ` + alias + `.is_test = 0
 	AND ` + alias + `.confirmed_at IS NOT NULL
-	AND NOT EXISTS (SELECT 1 FROM ` + mainSchema + `.autorenew_attempts a WHERE a.payment_id = ` + alias + `.id)`
+	AND ` + notAutorenew(alias)
+}
+
+// notAutorenew — условие «платёж alias создан не шагом автосписаний».
+func notAutorenew(alias string) string {
+	return `NOT EXISTS (SELECT 1 FROM ` + mainSchema + `.autorenew_attempts a WHERE a.payment_id = ` + alias + `.id)`
+}
+
+// issuedManually — условие «платёж alias — ручной платёж, выданный кассой»:
+// сорвавшееся создание оставляет запись без id у кассы, и это не платёж;
+// тестовые платежи и автосписания не считаются.
+func issuedManually(alias string) string {
+	return alias + `.is_test = 0 AND (` + alias + `.provider_payment_id IS NOT NULL OR ` + alias + `.platega_transaction_id IS NOT NULL)
+	AND ` + notAutorenew(alias)
+}
+
+// paymentCreated — источник Шага «платёж создан»: новый платёж (момент —
+// created_at записи) или живой pending, который бот вернул на выбор способа.
+var paymentCreated = unionSources(paymentsIssued, pendingReused)
+
+// paymentsIssued — касса выдала ручной платёж; момент — created_at записи.
+var paymentsIssued = wholeSecondsCeil(tableOccurrences("p.created_at",
+	`SELECT p.telegram_id, p.created_at FROM `+mainSchema+`.payments p WHERE `+issuedManually("p"),
+))
+
+// pendingReused — выбор способа, на который бот вернул уже выданный платёж
+// того же способа, а не создал новый (createPaymentForProvider переиспользует
+// живой pending моложе суток). Момент — выбор способа: ссылку человек получил
+// тогда. Без этого вернувшийся платить по старой ссылке выпадал бы из Воронки
+// — его платёж создан раньше входа. Статус записи на момент выбора не
+// хранится, поэтому живость восстанавливается по сроку ссылки и по тому, что
+// платёж не был подтверждён раньше выбора.
+func pendingReused(ctx context.Context, conn *sql.Conn, from, to time.Time) ([]occurrence, error) {
+	return queryOccurrences(ctx, conn,
+		`SELECT e.telegram_id, e.ts FROM events e
+		 WHERE e.ts >= ? AND e.ts < ? AND e.action IN (?, ?)
+		   AND EXISTS (
+		     SELECT 1 FROM `+mainSchema+`.payments p
+		     WHERE p.telegram_id = e.telegram_id
+		       AND p.provider = CASE e.param WHEN ? THEN ? WHEN ? THEN ? END
+		       AND `+issuedManually("p")+`
+		       AND datetime(p.created_at) <= datetime(e.ts)
+		       AND datetime(p.created_at) > datetime(e.ts, '-1 day')
+		       AND (p.expires_at IS NULL OR datetime(p.expires_at) > datetime(e.ts))
+		       AND (p.confirmed_at IS NULL OR datetime(p.confirmed_at) >= datetime(e.ts)))`,
+		from.UTC().Format(journal.TimeLayout), to.UTC().Format(journal.TimeLayout),
+		ActionPayMethod, ActionRetryPayment,
+		PayMethodYooKassa, paymentprovider.YooKassa, PayMethodCrypto, paymentprovider.Platega,
+	)
+}
+
+// unionSources — случаи Шага из нескольких источников вместе.
+func unionSources(sources ...source) source {
+	return func(ctx context.Context, conn *sql.Conn, from, to time.Time) ([]occurrence, error) {
+		var all []occurrence
+		for _, src := range sources {
+			occurrences, err := src(ctx, conn, from, to)
+			if err != nil {
+				return nil, err
+			}
+			all = append(all, occurrences...)
+		}
+		return all, nil
+	}
+}
+
+// paymentConfirmed — источник Шага «платёж подтверждён»: ручная оплата принята.
+// Момент — confirmed_at.
+var paymentConfirmed = wholeSecondsCeil(tableOccurrences("p.confirmed_at",
+	`SELECT p.telegram_id, p.confirmed_at FROM `+mainSchema+`.payments p WHERE `+paidManually("p"),
+))
+
+// wholeSecondsCeil сдвигает момент, записанный целыми секундами, на конец его
+// секунды. Бот пишет created_at и confirmed_at платежа через CURRENT_TIMESTAMP
+// и datetime('now'), которые срезают доли, а время Действия — с долями: платёж,
+// созданный через 0.2 с после выбора способа в той же секунде, иначе оказался
+// бы «раньше» выбора и выпал из когорты. Настоящий момент не позже конца
+// секунды, поэтому порядок Шагов сохраняется, а ошибка окна — меньше секунды.
+// Воронке приглашения поправка не нужна: там «друг оплатил» идёт за «друг
+// зарегистрировался», и оба момента лежат целыми секундами.
+func wholeSecondsCeil(src source) source {
+	return func(ctx context.Context, conn *sql.Conn, from, to time.Time) ([]occurrence, error) {
+		occurrences, err := src(ctx, conn, from, to)
+		for i := range occurrences {
+			if occurrences[i].At.Nanosecond() == 0 {
+				occurrences[i].At = occurrences[i].At.Add(time.Second - time.Nanosecond)
+			}
+		}
+		return occurrences, err
+	}
 }
 
 // referralFriendsPaid — друг, впервые пришедший по referral-приглашению автора

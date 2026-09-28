@@ -11,6 +11,7 @@ import (
 
 	"github.com/fus1ond/vpn_bot/internal/funnels"
 	"github.com/fus1ond/vpn_bot/internal/journal"
+	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tele "gopkg.in/telebot.v3"
@@ -335,4 +336,58 @@ func TestEventsMiddleware_RecordsChosenShareResult(t *testing.T) {
 	assert.Equal(t, journal.SourceUser, events[0].Source)
 	assert.Empty(t, events[0].Param)
 	assert.NotContains(t, events[0].Action, "ABC")
+}
+
+// Выбор способа оплаты пишется с параметром-перечислением способа: из данных
+// кнопки узнаётся только известный провайдер, а в журнал идёт значение из
+// перечисления, не сами данные.
+func TestEventsMiddleware_PayMethodParam(t *testing.T) {
+	cases := []struct {
+		name   string
+		unique string
+		data   string
+		action string
+		param  string
+	}{
+		{"ЮKassa на экране оплаты", cbPayMethod, paymentprovider.YooKassa, funnels.ActionPayMethod, funnels.PayMethodYooKassa},
+		{"крипта на экране оплаты", cbPayMethod, paymentprovider.Platega, funnels.ActionPayMethod, funnels.PayMethodCrypto},
+		{"повтор тем же способом", cbRetryPayment, paymentprovider.Platega, funnels.ActionRetryPayment, funnels.PayMethodCrypto},
+		{"подделанные данные", cbPayMethod, "SECRET", funnels.ActionPayMethod, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &MockContext{sender: &tele.User{ID: 42}, callback: &tele.Callback{Unique: tc.unique, Data: tc.data}}
+
+			event := recordOne(t, ctx)
+			assert.Equal(t, tc.action, event.Action)
+			assert.Equal(t, tc.param, event.Param)
+		})
+	}
+}
+
+// У остальных Действий параметра нет, даже если данные кнопки похожи на способ.
+func TestEventsMiddleware_NoParamOutsidePayMethod(t *testing.T) {
+	ctx := &MockContext{sender: &tele.User{ID: 42}, callback: &tele.Callback{Unique: cbPayCancel, Data: paymentprovider.YooKassa}}
+
+	assert.Empty(t, recordOne(t, ctx).Param)
+}
+
+// Входы в оплату пишутся теми id, на которые опирается Шаг «вошёл в оплату».
+func TestEventsMiddleware_PaymentEntries(t *testing.T) {
+	for caption, action := range map[string]string{
+		BtnPay:         funnels.ActionPayMenu,
+		BtnRenew:       funnels.ActionRenewMenu,
+		BtnPayYooKassa: funnels.ActionPayYooKassaReply,
+		BtnPayCrypto:   funnels.ActionPayCryptoReply,
+	} {
+		ctx := &MockContext{sender: &tele.User{ID: 42}, message: &tele.Message{ID: 10, Text: caption}}
+		assert.Equal(t, action, recordOne(t, ctx).Action, caption)
+	}
+	for unique, action := range map[string]string{
+		cbPayOpen:              funnels.ActionPayOpen,
+		cbAutorenewPayManually: funnels.ActionAutorenewPayManually,
+	} {
+		ctx := &MockContext{sender: &tele.User{ID: 42}, callback: &tele.Callback{Unique: unique}}
+		assert.Equal(t, action, recordOne(t, ctx).Action, unique)
+	}
 }
