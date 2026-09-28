@@ -42,6 +42,16 @@ const (
 	// перечислением PayMethod*, без персональных данных.
 	ActionPayMethod    = "pay_method" // способ выбран на экране оплаты
 	ActionRetryPayment = "retry_pay"  // повтор создания платежа тем же способом после сбоя
+
+	// Системные события: бот сам отправил человеку сообщение планировщика.
+	// Пишутся только когда Telegram сообщение принял; истории этих сообщений
+	// нет в таблицах бота — маркер notifications_sent стирается при оплате.
+	ActionReminder3d = "remind_3d" // напоминание за 3 дня до конца оплаченной подписки
+	ActionReminder1d = "remind_1d" // напоминание за сутки до конца оплаченной подписки
+	// ActionExpiredNotice — сообщение «подписка истекла, VPN деактивирован».
+	// Id — по сообщению, а не по отключению: в режиме обслуживания или при
+	// сбое панели сообщение уходит, а доступ не отключается.
+	ActionExpiredNotice = "expired_notice"
 )
 
 // Значения параметра выбора способа оплаты. Разбивка Воронки по способам пока
@@ -56,6 +66,7 @@ const (
 	FunnelInvite     = "invite"
 	FunnelPayment    = "payment"
 	FunnelOnboarding = "onboarding"
+	FunnelNonRenewal = "non_renewal"
 )
 
 // Шаги воронок.
@@ -78,6 +89,10 @@ const (
 	// данным панели. Завершает Воронку тот же Шаг «платёж подтверждён».
 	StepRegistered      = "registered"
 	StepDeviceConnected = "device_connected"
+
+	// StepReminded — вход Воронки непродливших: бот напомнил о конце оплаченной
+	// подписки за 3 дня или за сутки. Дальше — Шаги оплаты.
+	StepReminded = "reminded"
 )
 
 // FirstConnections — порт панели для воронок: момент первого подключения
@@ -180,6 +195,16 @@ func definitions(panel FirstConnections) []funnel {
 			steps: []step{
 				{id: StepRegistered, source: usersRegistered},
 				{id: StepDeviceConnected, source: firstConnected(panel), optional: true},
+				{id: StepPaymentConfirmed, source: paymentConfirmed},
+			},
+		},
+		{
+			id:     FunnelNonRenewal,
+			window: 14 * 24 * time.Hour,
+			steps: []step{
+				{id: StepReminded, source: renewalReminded},
+				{id: StepPaymentEntered, source: paymentEntered},
+				{id: StepPaymentCreated, source: paymentCreated},
 				{id: StepPaymentConfirmed, source: paymentConfirmed},
 			},
 		},

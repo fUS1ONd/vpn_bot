@@ -36,6 +36,10 @@ var paymentEntryActions = []string{
 // источника платежей ниже, его переиспользует Воронка непродливших.
 var paymentEntered = journalAction(paymentEntryActions...)
 
+// renewalReminded — вход Воронки непродливших: Системное событие напоминания
+// о конце оплаченной подписки.
+var renewalReminded = journalAction(ActionReminder3d, ActionReminder1d)
+
 // errNoEvents — Действия нет в журнале вовсе. Для Действия, которое Telegram
 // присылает только при отдельной настройке бота, это не ноль, а «не знаем».
 var errNoEvents = errors.New("action never recorded")

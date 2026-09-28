@@ -40,6 +40,7 @@ var funnelTitles = map[string]string{
 	funnels.FunnelInvite:     "Приглашение",
 	funnels.FunnelPayment:    "Оплата",
 	funnels.FunnelOnboarding: "Онбординг",
+	funnels.FunnelNonRenewal: "Непродлившие",
 }
 
 // funnelStepLabels — подписи Шагов на экране.
@@ -57,6 +58,8 @@ var funnelStepLabels = map[string]string{
 
 	funnels.StepRegistered:      "Зарегистрировались",
 	funnels.StepDeviceConnected: "Подключили устройство",
+
+	funnels.StepReminded: "Получили напоминание",
 }
 
 // funnelNoDataHints — подсказка владельцу, почему у Шага «нет данных», если
