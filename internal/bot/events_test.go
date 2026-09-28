@@ -1,7 +1,9 @@
 package bot
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -112,4 +114,154 @@ func TestEventsMiddleware_WithoutJournal(t *testing.T) {
 
 	assert.NotPanics(t, func() { require.NoError(t, handler(ctx)) })
 	assert.True(t, called)
+}
+
+// recordOne прогоняет апдейт через middleware и возвращает единственное
+// записанное Событие.
+func recordOne(t *testing.T, ctx *MockContext) journal.Event {
+	t.Helper()
+	recorder := &fakeRecorder{}
+	b := &Bot{events: recorder}
+	require.NoError(t, b.eventsMiddleware(func(tele.Context) error { return nil })(ctx))
+	events := recorder.recorded()
+	require.Len(t, events, 1)
+	return events[0]
+}
+
+// Нажатие inline-кнопки — Действие по её Unique; payload (код приглашения,
+// номер устройства) не попадает никуда.
+func TestEventsMiddleware_InlineButtonByUnique(t *testing.T) {
+	ctx := &MockContext{
+		sender:   &tele.User{ID: 42},
+		message:  &tele.Message{ID: 10, Text: "текст сообщения с кнопкой"},
+		callback: &tele.Callback{Unique: cbReferralResend, Data: "SECRETCODE"},
+	}
+
+	event := recordOne(t, ctx)
+	assert.Equal(t, cbReferralResend, event.Action)
+	assert.Empty(t, event.Param)
+	assert.NotContains(t, event.Action, "SECRETCODE")
+}
+
+// captureWarnings перехватывает логи на время теста.
+func captureWarnings(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// Кнопка, у которой нет обработчика (старое сообщение, переименованный
+// Unique), приходит сырой строкой «\f<unique>|<payload>»: пишется как
+// cb:<unique> с предупреждением, payload по-прежнему не пишется.
+func TestEventsMiddleware_UnroutedInlineButton(t *testing.T) {
+	logs := captureWarnings(t)
+	ctx := &MockContext{
+		sender:   &tele.User{ID: 42},
+		callback: &tele.Callback{Data: "\fold_button|SECRETCODE"},
+	}
+
+	event := recordOne(t, ctx)
+	assert.Equal(t, "cb:old_button", event.Action)
+	assert.Empty(t, event.Param)
+	assert.Contains(t, logs.String(), "old_button")
+	assert.NotContains(t, logs.String(), "SECRETCODE")
+}
+
+// Обработчик есть, а в каталоге Действий кнопки нет — тоже cb:<unique> с
+// предупреждением: id вне каталога не должен совпасть с id из каталога.
+func TestEventsMiddleware_InlineButtonOutsideCatalog(t *testing.T) {
+	logs := captureWarnings(t)
+	ctx := &MockContext{
+		sender:   &tele.User{ID: 42},
+		callback: &tele.Callback{Unique: "brand_new", Data: "SECRETCODE"},
+	}
+
+	event := recordOne(t, ctx)
+	assert.Equal(t, "cb:brand_new", event.Action)
+	assert.Contains(t, logs.String(), "brand_new")
+}
+
+// Callback без Unique вовсе (кнопка старого формата без \f) — тот же
+// cb:-префикс, данные кнопки в id не попадают.
+func TestEventsMiddleware_LegacyInlineButton(t *testing.T) {
+	captureWarnings(t)
+	ctx := &MockContext{
+		sender:   &tele.User{ID: 42},
+		callback: &tele.Callback{Data: "SECRETCODE"},
+	}
+
+	event := recordOne(t, ctx)
+	assert.Equal(t, "cb:", event.Action)
+}
+
+// messageEvent — Событие по входящему сообщению.
+func messageEvent(t *testing.T, msg *tele.Message) journal.Event {
+	t.Helper()
+	return recordOne(t, &MockContext{sender: &tele.User{ID: 42}, message: msg})
+}
+
+// /start без аргумента и /start с приглашением — разные Действия; код
+// приглашения в журнал не попадает.
+func TestEventsMiddleware_Start(t *testing.T) {
+	plain := messageEvent(t, &tele.Message{Text: "/start"})
+	withInvite := messageEvent(t, &tele.Message{Text: "/start ABC123", Payload: "ABC123"})
+
+	assert.Equal(t, actionStart, plain.Action)
+	assert.Equal(t, actionStartInvite, withInvite.Action)
+	assert.NotEqual(t, plain.Action, withInvite.Action)
+	assert.Empty(t, withInvite.Param)
+	assert.NotContains(t, withInvite.Action, "ABC123")
+}
+
+// /start из пустого ответа «Поделиться» несёт не код приглашения, а
+// служебный параметр — это своё Действие, а не «пришёл по приглашению».
+func TestEventsMiddleware_StartFromShare(t *testing.T) {
+	event := messageEvent(t, &tele.Message{Text: "/start " + StartParamInvites, Payload: StartParamInvites})
+	assert.Equal(t, actionStartShare, event.Action)
+}
+
+// Прочие команды пишутся по имени, без аргументов; упоминание бота
+// (/help@bot) имя не меняет.
+func TestEventsMiddleware_OtherCommandByName(t *testing.T) {
+	assert.Equal(t, "cmd:help", messageEvent(t, &tele.Message{Text: "/help"}).Action)
+	assert.Equal(t, "cmd:help", messageEvent(t, &tele.Message{Text: "/help@some_bot"}).Action)
+	assert.Equal(t, "cmd:help", messageEvent(t, &tele.Message{Text: "/Help мой пароль 12345"}).Action)
+}
+
+// Присланный текст, голосовое, кружок и медиа — Действие-факт: что пришло,
+// а не что в нём. Ни текст, ни подпись к медиа в Событие не попадают.
+func TestEventsMiddleware_MessageFacts(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  *tele.Message
+		want string
+	}{
+		{"текст", &tele.Message{Text: "мой адрес ул. Ленина 1"}, actionText},
+		{"текст, похожий на кнопку", &tele.Message{Text: BtnInvites + " не открываются"}, actionText},
+		{"голосовое", &tele.Message{Voice: &tele.Voice{}}, actionVoice},
+		{"кружок", &tele.Message{VideoNote: &tele.VideoNote{}}, actionVideoNote},
+		{"фото", &tele.Message{Photo: &tele.Photo{}, Caption: "подпись"}, actionMedia},
+		{"видео", &tele.Message{Video: &tele.Video{}, Caption: "подпись"}, actionMedia},
+		{"документ", &tele.Message{Document: &tele.Document{}}, actionMedia},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			event := messageEvent(t, tc.msg)
+			assert.Equal(t, tc.want, event.Action)
+			assert.Empty(t, event.Param)
+		})
+	}
+}
+
+// Кнопка без обработчика получает ответ: без него «часики» на ней крутятся
+// до таймаута Telegram.
+func TestHandleUnroutedCallback_Responds(t *testing.T) {
+	b := &Bot{}
+	ctx := &MockContext{sender: &tele.User{ID: 42}, callback: &tele.Callback{Data: "\fold_button|x"}}
+
+	require.NoError(t, b.handleUnroutedCallback(ctx))
+	assert.True(t, ctx.responded)
 }

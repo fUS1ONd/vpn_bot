@@ -1,6 +1,9 @@
 package bot
 
 import (
+	"log/slog"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/funnels"
@@ -46,17 +49,93 @@ func (b *Bot) eventsMiddleware(next tele.HandlerFunc) tele.HandlerFunc {
 	}
 }
 
-// userAction определяет id Действия по апдейту. Содержимое сообщения в id не
-// попадает никогда: reply-кнопка узнаётся по точному совпадению подписи.
+// Id Действий, которые не являются нажатием кнопки.
+const (
+	actionStart       = "start"        // /start без аргумента
+	actionStartInvite = "start_invite" // /start с кодом приглашения
+	actionStartShare  = "start_share"  // /start из пустого ответа «Поделиться»
+	commandPrefix     = "cmd:"         // прочие команды: cmd:<имя>
+	actionText        = "text"         // текст, не являющийся нажатием кнопки
+	actionVoice       = "voice"        // голосовое
+	actionVideoNote   = "video_note"   // кружок
+	actionMedia       = "media"        // фото, видео или документ
+)
+
+// maxCommandNameLen — предел длины имени команды в id Действия. Команду
+// набирает человек, и хвост произвольной длины в журнале не нужен.
+const maxCommandNameLen = 32
+
+// commandRx узнаёт команду так же, как telebot: «/<имя>[@<бот>]» в начале
+// текста, дальше пробел или конец строки. Имя — только латиница, цифры и «_».
+var commandRx = regexp.MustCompile(`^/(\w+)(?:@\w+)?(?:\s|$)`)
+
+// userAction определяет id Действия по апдейту. Содержимое сообщения, payload
+// кнопок и аргументы команд в id не попадают никогда.
+//
+// Точка расширения каталога: новый вид апдейта, дошедший до middleware
+// (inline-запрос, выбор inline-результата), получает здесь свою ветку.
 func userAction(c tele.Context) (string, bool) {
 	if c.Sender() == nil {
 		return "", false
 	}
-	if msg := c.Message(); msg != nil && c.Callback() == nil {
-		action, ok := replyButtonActions[msg.Text]
-		return action, ok
+	if cb := c.Callback(); cb != nil {
+		return inlineButtonAction(cb), true
+	}
+	if msg := c.Message(); msg != nil {
+		return messageAction(msg)
 	}
 	return "", false
+}
+
+// messageAction — id Действия входящего сообщения. Reply-кнопка узнаётся по
+// точному совпадению подписи и проверяется первой: подпись не бывает командой.
+func messageAction(msg *tele.Message) (string, bool) {
+	if action, ok := replyButtonActions[msg.Text]; ok {
+		return action, true
+	}
+	if match := commandRx.FindStringSubmatch(msg.Text); match != nil {
+		payload := strings.TrimSpace(msg.Text[len(match[0]):])
+		return commandAction(match[1], payload), true
+	}
+	switch {
+	case msg.Text != "":
+		return actionText, true
+	case msg.Voice != nil:
+		return actionVoice, true
+	case msg.VideoNote != nil:
+		return actionVideoNote, true
+	case msg.Photo != nil, msg.Video != nil, msg.Document != nil:
+		return actionMedia, true
+	}
+	return "", false
+}
+
+// commandAction — id Действия команды. У /start аргумент различает, откуда
+// пришёл человек, но сам аргумент (код приглашения) не пишется.
+func commandAction(name, payload string) string {
+	name = strings.ToLower(name)
+	if name != "start" {
+		if len(name) > maxCommandNameLen {
+			name = name[:maxCommandNameLen]
+		}
+		return commandPrefix + name
+	}
+	switch payload {
+	case "":
+		return actionStart
+	case StartParamInvites:
+		return actionStartShare
+	default:
+		return actionStartInvite
+	}
+}
+
+// handleUnroutedCallback принимает нажатия inline-кнопок, под Unique которых
+// нет обработчика (кнопки из старых сообщений). Без него такой апдейт не
+// проходит через middleware и выпадает из журнала, а «часики» на кнопке
+// крутятся до таймаута Telegram.
+func (b *Bot) handleUnroutedCallback(c tele.Context) error {
+	return c.Respond()
 }
 
 // AttachAnalytics подключает журнал Событий и модуль воронок. Вызывается до
@@ -70,4 +149,88 @@ func (b *Bot) AttachAnalytics(events *journal.Journal, reporter *funnels.Funnels
 	if reporter != nil {
 		b.funnels = reporter
 	}
+}
+
+// inlineButtonActions — каталог Действий inline-кнопок: id Действия равен
+// Unique кнопки. Каталог нужен, чтобы отличить известную кнопку от случайной:
+// кнопка вне каталога пишется с префиксом cb: и не совпадёт ни с одним id, на
+// который опираются Шаги воронок. Тест сверяет каталог со всеми cb*-константами.
+var inlineButtonActions = map[string]struct{}{
+	cbDevicesManage:          {},
+	cbDeviceDelete:           {},
+	cbDevicesResetAll:        {},
+	cbDevicesResetAllConfirm: {},
+	cbSubRevoke:              {},
+	cbSubRevokeConfirm:       {},
+	cbSubRevokeCancel:        {},
+	cbSubCard:                {},
+	cbAutorenewOpen:          {},
+	cbAutorenewOffer:         {},
+	cbAutorenewEnable:        {},
+	cbAutorenewDisable:       {},
+	cbAutorenewDismiss:       {},
+	cbAutorenewPayManually:   {},
+	cbPaymentMethod:          {},
+	cbPaymentMethodUnlink:    {},
+	cbPaymentMethodConfirm:   {},
+	cbPayMethod:              {},
+	cbPayCheck:               {},
+	cbPayCancel:              {},
+	cbPayOpen:                {},
+	cbRetryPayment:           {},
+	cbRetryPaymentCheck:      {},
+	cbRetryInvite:            {},
+	cbBugServer:              {},
+	cbBugServerDone:          {},
+	cbBugCategory:            {},
+	cbBugCancel:              {},
+	cbAdminExtendMonth:       {},
+	cbAdminExtendConfirm:     {},
+	cbAdminExtendCancel:      {},
+	cbReferralResend:         {},
+	cbReferralRevoke:         {},
+	cbReferralRevokeOK:       {},
+	cbReferralPage:           {},
+	cbReferralBack:           {},
+	cbAdminReferralOverview:  {},
+	cbAdminReferralLeaders:   {},
+	cbAdminUserReferrals:     {},
+	cbAdminReferralRevoke:    {},
+	cbAdminReferralRevokeOK:  {},
+	cbAdminReferralBack:      {},
+	cbAdminAutorenewOff:      {},
+	cbAdminMismatchResolve:   {},
+	cbAdminMismatchResolveOK: {},
+	cbAdminMismatchBack:      {},
+	cbAdminFunnel:            {},
+	cbAdminFunnelsBack:       {},
+}
+
+// unknownInlinePrefix — префикс id Действия для кнопки вне каталога.
+const unknownInlinePrefix = "cb:"
+
+// rawCallbackRx разбирает сырые данные кнопки «\f<unique>|<payload>», которые
+// telebot оставляет нетронутыми, если обработчика под Unique нет.
+var rawCallbackRx = regexp.MustCompile(`^\f([-\w]+)`)
+
+// inlineButtonAction — id Действия нажатия inline-кнопки: её Unique. Payload
+// (Data) не пишется никогда — в нём коды приглашений, номера устройств и id
+// платежей.
+//
+// Кнопка вне каталога пишется как cb:<unique> с предупреждением: это либо
+// новая кнопка, забытая в каталоге, либо кнопка из старого сообщения, чей
+// Unique бот больше не обслуживает.
+func inlineButtonAction(cb *tele.Callback) string {
+	unique := cb.Unique
+	if unique == "" {
+		// Нет обработчика: telebot не разобрал данные, Unique лежит в Data.
+		if match := rawCallbackRx.FindStringSubmatch(cb.Data); match != nil {
+			unique = match[1]
+		}
+	}
+	if _, ok := inlineButtonActions[unique]; ok {
+		return unique
+	}
+	slog.Warn("Inline-кнопка вне каталога Действий", "unique", unique)
+	return unknownInlinePrefix + unique
 }

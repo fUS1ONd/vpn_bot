@@ -348,6 +348,9 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	btnAdminFunnel := funnelsMenu.Data("", cbAdminFunnel)
 	btnAdminFunnelsBack := funnelsMenu.Data("", cbAdminFunnelsBack)
 	b.Handle(&btnAdminFunnel, bot.handleAdminFunnel)
+	// Нажатия кнопок без обработчика: ответ снимает «часики», а middleware
+	// пишет такое нажатие в журнал как cb:<unique>.
+	b.Handle(tele.OnCallback, bot.handleUnroutedCallback)
 	b.Handle(&btnAdminFunnelsBack, bot.handleAdminFunnelsBack)
 
 	return bot, nil
