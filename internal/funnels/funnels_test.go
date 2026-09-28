@@ -100,7 +100,7 @@ func (f fixture) exec(t *testing.T, query string, args ...any) sql.Result {
 // sqliteNow — формат CURRENT_TIMESTAMP и datetime('now'): так бот пишет
 // used_at приглашения и confirmed_at платежа.
 func sqliteNow(at time.Time) string {
-	return at.UTC().Format("2006-01-02 15:04:05")
+	return at.UTC().Format(database.SQLiteSecondsLayout)
 }
 
 var inviteSeq int

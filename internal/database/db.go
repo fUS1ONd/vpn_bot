@@ -84,6 +84,10 @@ func New(dbPath string) (*DB, error) {
 	return &DB{conn: conn}, nil
 }
 
+// SQLiteSecondsLayout — формат момента, в котором SQLite пишет и сравнивает
+// datetime(): секунды без дробной части и зоны, время UTC.
+const SQLiteSecondsLayout = "2006-01-02 15:04:05"
+
 // DSN добавляет к пути параметры соединения для mattn/go-sqlite3. Журнал
 // Событий (пакет journal) открывает свой файл с теми же параметрами:
 //   - _busy_timeout: писатель ждёт снятия блокировки до 5 секунд, а не получает

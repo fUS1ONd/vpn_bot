@@ -551,7 +551,7 @@ func TestPendingPaymentIDsCreatedBefore(t *testing.T) {
 	create := func(status string, age time.Duration) int64 {
 		id, err := db.CreatePayment(&Payment{TelegramID: 1, Amount: 400, PaymentMethod: "yookassa", Status: status, Provider: "yookassa"})
 		require.NoError(t, err)
-		_, err = db.Conn().Exec(`UPDATE payments SET created_at = ? WHERE id = ?`, time.Now().UTC().Add(-age).Format("2006-01-02 15:04:05"), id)
+		_, err = db.Conn().Exec(`UPDATE payments SET created_at = ? WHERE id = ?`, time.Now().UTC().Add(-age).Format(SQLiteSecondsLayout), id)
 		require.NoError(t, err)
 		return id
 	}

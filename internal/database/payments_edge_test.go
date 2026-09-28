@@ -21,7 +21,7 @@ func TestОтсечкаВключаетПлатёжСозданныйРовно�
 	created := time.Now().UTC().Add(-15 * time.Minute).Truncate(time.Second)
 	id, err := db.CreatePayment(&Payment{TelegramID: 1, Amount: 400, PaymentMethod: "yookassa", Status: "pending", Provider: "yookassa"})
 	require.NoError(t, err)
-	_, err = db.Conn().Exec(`UPDATE payments SET created_at = ? WHERE id = ?`, created.Format("2006-01-02 15:04:05"), id)
+	_, err = db.Conn().Exec(`UPDATE payments SET created_at = ? WHERE id = ?`, created.Format(SQLiteSecondsLayout), id)
 	require.NoError(t, err)
 
 	ids, err := db.PendingPaymentIDsCreatedBefore(created)
@@ -44,7 +44,7 @@ func TestДробныеДолиСекундыВОтсечкеНеПрячутЗ�
 	created := time.Now().UTC().Add(-20 * time.Minute).Truncate(time.Second)
 	id, err := db.CreatePayment(&Payment{TelegramID: 1, Amount: 400, PaymentMethod: "yookassa", Status: "pending", Provider: "yookassa"})
 	require.NoError(t, err)
-	_, err = db.Conn().Exec(`UPDATE payments SET created_at = ? WHERE id = ?`, created.Format("2006-01-02 15:04:05"), id)
+	_, err = db.Conn().Exec(`UPDATE payments SET created_at = ? WHERE id = ?`, created.Format(SQLiteSecondsLayout), id)
 	require.NoError(t, err)
 
 	ids, err := db.PendingPaymentIDsCreatedBefore(created.Add(999 * time.Millisecond))
