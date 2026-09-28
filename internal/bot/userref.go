@@ -22,6 +22,13 @@ var errUserNotRegistered = errors.New("пользователь не зарег�
 // пользователя по telegram_id и сохраняет найденный id. На 2.8.x UUID
 // самодостаточен, и восстановление id остаётся работой backfill.
 func (b *Bot) userRef(telegramID int64) (remnawave.UserRef, error) {
+	return b.userRefAlerting(telegramID, b.sendAdminAlert)
+}
+
+// userRefAlerting — userRef для критической секции getPaymentMutex: алерты
+// владельцу о сбое связки уходят в alert (обычно afterUnlock.alertTo), а не в
+// Telegram под мьютексом.
+func (b *Bot) userRefAlerting(telegramID int64, alert func(msg string)) (remnawave.UserRef, error) {
 	user, err := b.db.GetUserByTelegramID(telegramID)
 	if err != nil {
 		return remnawave.UserRef{}, fmt.Errorf("load user telegram_id=%d: %w", telegramID, err)
@@ -30,12 +37,16 @@ func (b *Bot) userRef(telegramID int64) (remnawave.UserRef, error) {
 		return remnawave.UserRef{}, errUserNotRegistered
 	}
 
-	return b.userRefForDBUser(*user)
+	return b.userRefForDBUserAlerting(*user, alert)
 }
 
 // userRefForDBUser собирает ссылку по уже прочитанной записи БД — для мест, где
 // пользователь только что загружен (scheduler проходит по всей таблице).
 func (b *Bot) userRefForDBUser(user database.User) (remnawave.UserRef, error) {
+	return b.userRefForDBUserAlerting(user, b.sendAdminAlert)
+}
+
+func (b *Bot) userRefForDBUserAlerting(user database.User, alert func(msg string)) (remnawave.UserRef, error) {
 	ref := storedUserRef(user)
 
 	version, err := b.remnawave.DetectAPIVersion()
@@ -49,7 +60,7 @@ func (b *Bot) userRefForDBUser(user database.User) (remnawave.UserRef, error) {
 		return ref, nil
 	}
 
-	recovered, err := b.recoverRemnawaveID(user.TelegramID)
+	recovered, err := b.recoverRemnawaveID(user.TelegramID, alert)
 	if err != nil {
 		return remnawave.UserRef{}, err
 	}
@@ -72,14 +83,14 @@ func storedUserRef(user database.User) remnawave.UserRef {
 
 // recoverRemnawaveID находит числовой id пользователя по Telegram ID и сохраняет
 // связку. Все наши записи создавались с telegramId (и регистрация, и migrator),
-// поэтому путь рабочий для всей базы.
-func (b *Bot) recoverRemnawaveID(telegramID int64) (int64, error) {
+// поэтому путь рабочий для всей базы. Алерты владельцу уходят в alert.
+func (b *Bot) recoverRemnawaveID(telegramID int64, alert func(msg string)) (int64, error) {
 	remUser, err := b.remnawave.GetUserByTelegramID(telegramID)
 	if err != nil {
 		if errors.Is(err, remnawave.ErrMultipleUsersForTelegramID) {
 			slog.Error("Panel knows several users with the same telegram id, refusing to link",
 				"error", err, "telegram_id", telegramID)
-			b.sendAdminAlert(fmt.Sprintf(
+			alert(fmt.Sprintf(
 				"⚠️ В панели несколько пользователей с telegram_id %d — связка не записана, нужен ручной разбор.",
 				telegramID,
 			))
@@ -99,7 +110,7 @@ func (b *Bot) recoverRemnawaveID(telegramID int64) (int64, error) {
 		// то есть рассинхрон с панелью.
 		slog.Error("Failed to persist recovered remnawave_id", "error", err,
 			"telegram_id", telegramID, "remnawave_id", remUser.ID)
-		b.sendAdminAlert(fmt.Sprintf(
+		alert(fmt.Sprintf(
 			"⚠️ Не удалось сохранить remnawave_id=%d для telegram_id=%d: %v",
 			remUser.ID, telegramID, err,
 		))
@@ -166,8 +177,9 @@ func (b *Bot) remnawaveUser(telegramID int64) (*remnawave.User, error) {
 }
 
 // deleteRemnawaveUser удаляет пользователя из панели по нашему telegram_id.
-func (b *Bot) deleteRemnawaveUser(telegramID int64) error {
-	ref, err := b.userRef(telegramID)
+// Алерты владельцу о сбое связки уходят в alert.
+func (b *Bot) deleteRemnawaveUser(telegramID int64, alert func(msg string)) error {
+	ref, err := b.userRefAlerting(telegramID, alert)
 	if err != nil {
 		return err
 	}
@@ -182,6 +194,12 @@ const panelAuthAlertKey = "panel_auth"
 // нельзя: бот выглядел бы работающим, а панель для него закрыта. Повторы гасятся,
 // пока проблема не исчезнет, иначе каждый проход scheduler спамил бы владельца.
 func (b *Bot) reportPanelAuthError(err error, context string) {
+	b.reportPanelAuthErrorTo(err, context, b.sendAdminAlert)
+}
+
+// reportPanelAuthErrorTo — reportPanelAuthError с алертом в alert: для
+// критической секции getPaymentMutex.
+func (b *Bot) reportPanelAuthErrorTo(err error, context string, alert func(msg string)) {
 	if !remnawave.IsAuthError(err) {
 		// Проблема ушла — следующий отказ снова достоин сообщения.
 		b.panelAuthAlerted.Delete(panelAuthAlertKey)
@@ -194,7 +212,7 @@ func (b *Bot) reportPanelAuthError(err error, context string) {
 		return
 	}
 
-	b.sendAdminAlert(fmt.Sprintf(
+	alert(fmt.Sprintf(
 		"🔑 Панель Remnawave не приняла API-токен (%s): %v\n\nПроверьте REMNAWAVE_API_TOKEN и его scope (users, hwid, nodes, hosts, чтение system).",
 		context, err,
 	))
@@ -203,11 +221,17 @@ func (b *Bot) reportPanelAuthError(err error, context string) {
 // resolveUserRef — версия userRef для inline-обработчиков: они отвечают алертом
 // «Сначала активируйте подписку» и различать причины не могут.
 func (b *Bot) resolveUserRef(telegramID int64) (remnawave.UserRef, bool) {
-	ref, err := b.userRef(telegramID)
+	return b.resolveUserRefAlerting(telegramID, b.sendAdminAlert)
+}
+
+// resolveUserRefAlerting — resolveUserRef для критической секции
+// getPaymentMutex: алерты владельцу уходят в alert.
+func (b *Bot) resolveUserRefAlerting(telegramID int64, alert func(msg string)) (remnawave.UserRef, bool) {
+	ref, err := b.userRefAlerting(telegramID, alert)
 	if err != nil {
 		if !errors.Is(err, errUserNotRegistered) {
 			slog.Error("Failed to resolve user ref", "error", err, "telegram_id", telegramID)
-			b.reportPanelAuthError(err, "получение ссылки на пользователя")
+			b.reportPanelAuthErrorTo(err, "получение ссылки на пользователя", alert)
 		}
 		return remnawave.UserRef{}, false
 	}

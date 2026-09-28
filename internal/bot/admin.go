@@ -677,7 +677,7 @@ func (b *Bot) processBanUser(c tele.Context, text string) error {
 	go b.kickFromCommunity(telegramID)
 
 	// Удаляем из Remnawave (отключаем доступ к серверам)
-	err = b.deleteRemnawaveUser(telegramID)
+	err = b.deleteRemnawaveUser(telegramID, b.sendAdminAlert)
 	if err != nil {
 		slog.Error("Failed to delete user from Remnawave", "error", err)
 		// Продолжаем удаление из БД даже если не удалось удалить из Remnawave

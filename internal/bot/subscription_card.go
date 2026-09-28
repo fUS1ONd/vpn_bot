@@ -203,6 +203,9 @@ func (b *Bot) handleSubRevokeConfirm(c tele.Context) error {
 // пользователя с новой ссылкой и старыми HWID-привязками: он переподключился бы
 // и упёрся в лимит устройств, что чинится только вручную.
 func (b *Bot) applyRevoke(telegramID int64) (*remnawave.User, error) {
+	// Алерты владельцу о сбое связки уходят после снятия мьютекса (afterUnlock).
+	var later afterUnlock
+	defer later.run()
 	// Сериализуем с платёжными операциями по этому юзеру: активация подписки
 	// тоже читает и пишет состояние в Remnawave.
 	mu := getPaymentMutex(telegramID)
@@ -215,7 +218,7 @@ func (b *Bot) applyRevoke(telegramID int64) (*remnawave.User, error) {
 		}
 	}
 
-	ref, ok := b.resolveUserRef(telegramID)
+	ref, ok := b.resolveUserRefAlerting(telegramID, later.alertTo(b))
 	if !ok {
 		return nil, errRevokeUserNotFound
 	}

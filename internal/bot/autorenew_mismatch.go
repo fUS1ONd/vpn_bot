@@ -21,33 +21,34 @@ import (
 
 // reportMismatchAndPrepareNotice доносит несовпадение владельцу — для автосписания с
 // его заголовком — и готовит сообщение человеку, если это автосписание и касса
-// говорит «оплачено». Отправка человеку отдаётся замыканием deliverOnce: входы
-// держат getPaymentMutex, а сообщения пользователю уходят вне мьютекса. Замыкание
-// не бывает nil и обязано быть вызвано на любом пути: пометка «уже сообщили»
-// может быть занята им уже здесь.
-func (b *Bot) reportMismatchAndPrepareNotice(payment *database.Payment, mismatch *paymentMismatchError, source string) func() bool {
+// говорит «оплачено». Обе отправки ставятся в later: входы держат getPaymentMutex,
+// а сообщения владельцу и человеку уходят вне мьютекса — сначала владельцу.
+// Пометки «уже сообщили» занимаются уже здесь, поэтому later обязана быть
+// выполнена на любом пути.
+func (b *Bot) reportMismatchAndPrepareNotice(later *afterUnlock, payment *database.Payment, mismatch *paymentMismatchError, source string) {
 	fromAutorenew, err := b.db.IsAutorenewPayment(payment.ID)
 	if err != nil {
 		slog.Error("Не удалось проверить, автосписание ли несовпавший платёж; сообщаем как об обычном",
 			"error", err, "payment_id", payment.ID)
 	}
 	if !fromAutorenew {
-		b.reportPaymentMismatch(payment, mismatch, source)
-		return noNotice
+		later.add(b.reportPaymentMismatch(payment, mismatch, source))
+		return
 	}
-	b.reportAutorenewMismatch(payment, mismatch, source)
-	return b.holdAndNotifyAutorenewMismatch(payment, mismatch)
+	later.add(b.reportAutorenewMismatch(payment, mismatch, source))
+	later.add(b.holdAndNotifyAutorenewMismatch(payment, mismatch))
 }
 
 // reportAutorenewMismatch — алерт владельцу по автосписанию: заголовок говорит,
 // что деньги списаны без участия человека и что его отключение приостановлено
 // до разбора. Подробности и дедупликация общие с reportPaymentMismatch, так что
-// с какого бы входа несовпадение ни пришло, сообщение по платежу одно.
-func (b *Bot) reportAutorenewMismatch(payment *database.Payment, mismatch *paymentMismatchError, source string) {
+// с какого бы входа несовпадение ни пришло, сообщение по платежу одно. Как и
+// reportPaymentMismatch, возвращает отправку для вызова вне мьютекса.
+func (b *Bot) reportAutorenewMismatch(payment *database.Payment, mismatch *paymentMismatchError, source string) func() bool {
 	headline := fmt.Sprintf("⚠️ Автосписание #%d (пользователь %d): ЮKassa говорит «оплачено», но ответ не сошёлся с записью платежа.\n"+
 		"Отключение приостановлено до разбора: когда разберёте, нажмите «✅ Автосписание разобрано» в карточке пользователя (🔍 Инфо о пользователе).",
 		payment.ID, payment.TelegramID)
-	b.reportPaymentMismatchWithHeadline(payment, mismatch, source, headline)
+	return b.reportPaymentMismatchWithHeadline(payment, mismatch, source, headline)
 }
 
 // holdAndNotifyAutorenewMismatch ставит удержание цикла и готовит сообщение

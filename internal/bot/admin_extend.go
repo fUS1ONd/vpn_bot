@@ -142,6 +142,9 @@ func adminExtendErrorAlert(err error) string {
 // относительно платёжного flow (чтение/запись Remnawave-состояния); отправка уведомлений
 // в вызывающей handleAdminExtendConfirm выполняется уже после разблокировки.
 func (b *Bot) applyAdminExtend(targetID int64) (time.Time, error) {
+	// Алерты владельцу о сбое связки уходят после снятия мьютекса (afterUnlock).
+	var later afterUnlock
+	defer later.run()
 	// Сериализуем с платёжными операциями по этому юзеру (callback от Platega и т.п.).
 	mu := getPaymentMutex(targetID)
 	mu.Lock()
@@ -158,7 +161,7 @@ func (b *Bot) applyAdminExtend(targetID int64) (time.Time, error) {
 		return time.Time{}, errAdminExtendUserNotFound
 	}
 
-	ref, err := b.userRef(targetID)
+	ref, err := b.userRefAlerting(targetID, later.alertTo(b))
 	if err != nil {
 		slog.Error("Failed to resolve user ref before extend", "error", err, "telegram_id", targetID)
 		return time.Time{}, errAdminExtendLoadFailed

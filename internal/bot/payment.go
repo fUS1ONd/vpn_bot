@@ -34,14 +34,25 @@ func getPaymentMutex(telegramID int64) *sync.Mutex {
 	return mu.(*sync.Mutex)
 }
 
-// paymentCallbackHandler реализует callback.PaymentHandler
+// paymentCallbackHandler проводит платёж по статусу провайдера внутри
+// критической секции getPaymentMutex. Заводится на каждый захват мьютекса:
+// later — сообщения владельцу, решённые под мьютексом, и выполняет их тот, кто
+// мьютекс взял, после его снятия.
 type paymentCallbackHandler struct {
+	bot   *Bot
+	later afterUnlock
+}
+
+// plategaCallbackHandler реализует callback.PaymentHandler. Экземпляр один на
+// весь сервер и состояния не держит: обработчик с очередью сообщений заводится
+// на каждый callback.
+type plategaCallbackHandler struct {
 	bot *Bot
 }
 
 // PaymentCallbackHandler возвращает обработчик callback от Platega
 func (b *Bot) PaymentCallbackHandler() callback.PaymentHandler {
-	return &paymentCallbackHandler{bot: b}
+	return &plategaCallbackHandler{bot: b}
 }
 
 // HandleYooKassaWebhook реализует callback.YooKassaHandler. Тело вебхука не
@@ -58,11 +69,9 @@ func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 		b.reportUnmatchedYooKassaEvent(event, providerPaymentID)
 		return nil
 	}
-	// Сообщение человеку уходит после снятия мьютекса: defer объявлен раньше
-	// Unlock и поэтому выполняется позже — и на любом пути, как того требует
-	// deliverOnce.
-	notifyUser := noNotice
-	defer func() { notifyUser() }()
+	// Сообщения владельцу и человеку уходят после снятия мьютекса (afterUnlock).
+	h := &paymentCallbackHandler{bot: b}
+	defer h.later.run()
 	mu := getPaymentMutex(payment.TelegramID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -74,12 +83,11 @@ func (b *Bot) HandleYooKassaWebhook(event, providerPaymentID string) error {
 		if mismatch, ok := asPaymentMismatch(err); ok {
 			// Повторная доставка ответа кассы не изменит: отвечаем успехом, а
 			// несовпадение доносим сами.
-			notifyUser = b.reportMismatchAndPrepareNotice(payment, mismatch, "webhook")
+			b.reportMismatchAndPrepareNotice(&h.later, payment, mismatch, "webhook")
 			return nil
 		}
 		return err
 	}
-	h := &paymentCallbackHandler{bot: b}
 	switch verified.Status {
 	case paymentprovider.StatusSucceeded:
 		return h.handleConfirmedFromProviderState(payment)
@@ -116,30 +124,32 @@ func (b *Bot) reportUnmatchedYooKassaEvent(event, objectID string) {
 // reportIgnoredPaymentConfirmation доносит до владельца оплату, которую бот
 // принять не смог: локальный статус платежа не допускает подтверждения.
 // Провайдеру мы отвечаем успехом (повтор доставки ничего не изменит), поэтому
-// без этого сообщения деньги остались бы принятыми втихую.
-func (b *Bot) reportIgnoredPaymentConfirmation(payment *database.Payment) {
-	b.adminAlertOnce(&b.ignoredConfirmationReported, payment.ID, "непринятая оплата", fmt.Sprintf(
+// без этого сообщения деньги остались бы принятыми втихую. Занимает пометку и
+// возвращает отправку (см. deliverOnce): вызывающий держит мьютекс платежа.
+func (b *Bot) reportIgnoredPaymentConfirmation(payment *database.Payment) func() bool {
+	return b.adminAlertOnce(&b.ignoredConfirmationReported, payment.ID, "непринятая оплата", fmt.Sprintf(
 		"⚠️ Платёж #%d (%d ₽, пользователь %d) подтверждён провайдером, но локальный статус <b>%s</b> не допускает подтверждения.\n\n"+
 			"Подписка не выдана и чек не пробит — разберите операцию вручную.",
 		payment.ID, payment.Amount, payment.TelegramID, html.EscapeString(payment.Status),
-	))()
+	))
 }
 
 // reportRevivedPayment сообщает владельцу о принятой оплате по локально закрытому
 // платежу. Клиент своё получает автоматически, но событие аномальное: закрытый
 // платёж, по которому прошли деньги, — повод посмотреть, почему он закрылся.
-func (b *Bot) reportRevivedPayment(payment *database.Payment) {
-	b.adminAlertOnce(&b.revivedPaymentReported, payment.ID, "воскрешённый платёж", fmt.Sprintf(
+// Занимает пометку и возвращает отправку, как reportIgnoredPaymentConfirmation.
+func (b *Bot) reportRevivedPayment(payment *database.Payment) func() bool {
+	return b.adminAlertOnce(&b.revivedPaymentReported, payment.ID, "воскрешённый платёж", fmt.Sprintf(
 		"ℹ️ Платёж #%d (%d ₽, пользователь %d) был локально закрыт со статусом <b>%s</b>, но провайдер подтвердил оплату.\n\n"+
 			"Платёж принят по ответу провайдера: подписка продлевается, чек пробивается.",
 		payment.ID, payment.Amount, payment.TelegramID, html.EscapeString(payment.Status),
-	))()
+	))
 }
 
 // HandlePaymentCallback обрабатывает callback от Platega
-func (h *paymentCallbackHandler) HandlePaymentCallback(payload platega.CallbackPayload) error {
+func (e *plategaCallbackHandler) HandlePaymentCallback(payload platega.CallbackPayload) error {
 	// Находим платёж по platega_transaction_id
-	payment, err := h.bot.db.GetPaymentByPlategaTxID(payload.ID)
+	payment, err := e.bot.db.GetPaymentByPlategaTxID(payload.ID)
 	if err != nil {
 		return fmt.Errorf("get payment by tx: %w", err)
 	}
@@ -147,6 +157,10 @@ func (h *paymentCallbackHandler) HandlePaymentCallback(payload platega.CallbackP
 		slog.Warn("Callback для неизвестной транзакции", "transaction_id", payload.ID)
 		return nil // Не возвращаем ошибку, чтобы Platega не retry-ила
 	}
+
+	// Сообщения владельцу уходят после снятия мьютекса (afterUnlock).
+	h := &paymentCallbackHandler{bot: e.bot}
+	defer h.later.run()
 
 	// Блокируем обработку по telegram_id
 	mu := getPaymentMutex(payment.TelegramID)
@@ -218,13 +232,13 @@ func (h *paymentCallbackHandler) handleConfirmedWithNotification(payment *databa
 		// про это не узнает никто, кроме клиента.
 		if !providerVerified || !revivablePaymentStatuses[payment.Status] {
 			slog.Warn("Подтверждение неактуального платежа проигнорировано", "payment_id", payment.ID, "status", payment.Status)
-			h.bot.reportIgnoredPaymentConfirmation(payment)
+			h.later.add(h.bot.reportIgnoredPaymentConfirmation(payment))
 			return nil
 		}
 
 		slog.Warn("Платёж оплачен, но локально был закрыт — подтверждаем по ответу провайдера",
 			"payment_id", payment.ID, "status", payment.Status, "telegram_id", payment.TelegramID)
-		h.bot.reportRevivedPayment(payment)
+		h.later.add(h.bot.reportRevivedPayment(payment))
 	}
 
 	alreadyMarkedForRetry := payment.Status == "confirmed_not_activated"
@@ -243,7 +257,7 @@ func (h *paymentCallbackHandler) handleConfirmedWithNotification(payment *databa
 			if updateErr := h.bot.db.UpdatePaymentStatus(payment.ID, paymentStatusConfirmedActivationFailed); updateErr != nil {
 				return fmt.Errorf("update status to %s: %w", paymentStatusConfirmedActivationFailed, updateErr)
 			}
-			h.bot.sendAdminAlert(fmt.Sprintf(
+			h.later.alert(h.bot, fmt.Sprintf(
 				"⚠️ Платёж #%d подтверждён, но активация подписки невозможна для %d: %v",
 				payment.ID, payment.TelegramID, err,
 			))
@@ -259,7 +273,7 @@ func (h *paymentCallbackHandler) handleConfirmedWithNotification(payment *databa
 
 		// Уведомляем админа
 		if !alreadyMarkedForRetry {
-			h.bot.sendAdminAlert(fmt.Sprintf(
+			h.later.alert(h.bot, fmt.Sprintf(
 				"⚠️ Платёж #%d подтверждён, но не удалось активировать подписку для %d. Платёж помечен как confirmed_not_activated и будет повторно обработан scheduler.",
 				payment.ID, payment.TelegramID,
 			))
@@ -420,6 +434,9 @@ func (b *Bot) retryConfirmedPaymentActivation(paymentID int64, source string) bo
 		return true
 	}
 
+	// Сообщение владельцу уходит после снятия мьютекса (afterUnlock).
+	handler := &paymentCallbackHandler{bot: b}
+	defer handler.later.run()
 	mu := getPaymentMutex(payment.TelegramID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -434,7 +451,6 @@ func (b *Bot) retryConfirmedPaymentActivation(paymentID int64, source string) bo
 		return true
 	}
 
-	handler := &paymentCallbackHandler{bot: b}
 	if err := handler.activateSubscription(payment); err != nil {
 		if isTerminalActivationError(err) {
 			slog.Error("Retry активации упёрся в terminal-ошибку, останавливаем повторные попытки",
@@ -448,7 +464,7 @@ func (b *Bot) retryConfirmedPaymentActivation(paymentID int64, source string) bo
 					"error", updateErr, "payment_id", paymentID, "source", source)
 				return false
 			}
-			b.sendAdminAlert(fmt.Sprintf(
+			handler.later.alert(b, fmt.Sprintf(
 				"⚠️ Retry активации остановлен: платёж #%d подтверждён, но подписку невозможно активировать для %d: %v",
 				payment.ID, payment.TelegramID, err,
 			))
@@ -493,7 +509,7 @@ func (h *paymentCallbackHandler) activateSubscription(payment *database.Payment)
 		return fmt.Errorf("user not found: telegram_id=%d", payment.TelegramID)
 	}
 
-	ref, err := h.bot.userRef(payment.TelegramID)
+	ref, err := h.bot.userRefAlerting(payment.TelegramID, h.later.alertTo(h.bot))
 	if err != nil {
 		return fmt.Errorf("resolve user ref: %w", err)
 	}
@@ -588,7 +604,7 @@ func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) err
 		return nil
 	}
 	if payment.IsTest {
-		h.bot.sendAdminAlert(fmt.Sprintf(
+		h.later.alert(h.bot, fmt.Sprintf(
 			"⚠️ Chargeback тестового платежа #%d на %d руб. Учётная запись и подписка не изменены.",
 			payment.ID, payment.Amount,
 		))
@@ -608,7 +624,7 @@ func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) err
 	// Удаляем из Remnawave (полное удаление, не просто disable)
 	user, err := h.bot.db.GetUserByTelegramID(payment.TelegramID)
 	if err == nil && user != nil {
-		if delErr := h.bot.deleteRemnawaveUser(payment.TelegramID); delErr != nil {
+		if delErr := h.bot.deleteRemnawaveUser(payment.TelegramID, h.later.alertTo(h.bot)); delErr != nil {
 			slog.Error("Chargeback: не удалось удалить из Remnawave", "error", delErr, "telegram_id", payment.TelegramID)
 		}
 	}
@@ -624,7 +640,7 @@ func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) err
 	}
 
 	// Уведомляем админа
-	h.bot.sendAdminAlert(fmt.Sprintf(
+	h.later.alert(h.bot, fmt.Sprintf(
 		"⚠️ Chargeback от %d, сумма: %d руб. Пользователь удалён из Remnawave и забанен.",
 		payment.TelegramID, payment.Amount,
 	))
@@ -795,11 +811,9 @@ func (b *Bot) paymentPrice(telegramID int64, user *database.User) (int, bool) {
 // с параллельным callback и сверкой. Несовпадение ответа с записью возвращается
 // ошибкой, различимой через errors.Is(err, errPaymentMismatch).
 func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
-	// Сообщение человеку уходит после снятия мьютекса: defer объявлен раньше
-	// Unlock и поэтому выполняется позже — и на любом пути, как того требует
-	// deliverOnce.
-	notifyUser := noNotice
-	defer func() { notifyUser() }()
+	// Сообщения владельцу и человеку уходят после снятия мьютекса (afterUnlock).
+	handler := &paymentCallbackHandler{bot: b}
+	defer handler.later.run()
 	// Берём мьютекс ДО чтения из БД — та же блокировка, что и в callback
 	mu := getPaymentMutex(telegramID)
 	mu.Lock()
@@ -829,14 +843,13 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 		if mismatch, ok := asPaymentMismatch(err); ok {
 			// Кнопка могла найти висящую запись автосписания: человеку — то же
 			// сообщение о списании, что и с других входов, одно на платёж.
-			notifyUser = b.reportMismatchAndPrepareNotice(pending, mismatch, "manual-check")
+			b.reportMismatchAndPrepareNotice(&handler.later, pending, mismatch, "manual-check")
 		}
 		return "", err
 	}
 
 	if status.Status == paymentprovider.StatusSucceeded {
 		// Платёж подтверждён — синхронизируем его без отдельного push-уведомления.
-		handler := &paymentCallbackHandler{bot: b}
 		if err := handler.handleConfirmedSilently(pending); err != nil {
 			return "", err
 		}
@@ -853,7 +866,6 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	}
 
 	if status.Status == paymentprovider.StatusCanceled {
-		handler := &paymentCallbackHandler{bot: b}
 		if err := handler.handleCanceled(pending); err != nil {
 			return "", err
 		}
@@ -864,7 +876,6 @@ func (b *Bot) checkPaymentStatus(telegramID int64) (string, error) {
 	}
 
 	if status.Status == paymentprovider.StatusChargebacked {
-		handler := &paymentCallbackHandler{bot: b}
 		if err := handler.handleChargeback(pending); err != nil {
 			return "", err
 		}
