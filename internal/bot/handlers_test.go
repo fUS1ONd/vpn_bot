@@ -38,6 +38,12 @@ type MockContext struct {
 	deleteErr   error
 	query       *tele.Query
 	queryAnswer *tele.QueryResponse
+
+	inlineResult *tele.InlineResult
+}
+
+func (c *MockContext) InlineResult() *tele.InlineResult {
+	return c.inlineResult
 }
 
 func (c *MockContext) Sender() *tele.User {

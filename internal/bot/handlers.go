@@ -321,6 +321,7 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	// Inline-режим используется только кнопкой «Поделиться»: бот отдаёт
 	// спрашивающему его же активные приглашения.
 	b.Handle(tele.OnQuery, bot.handleReferralShareQuery)
+	b.Handle(tele.OnInlineResult, bot.handleShareChosen)
 
 	adminRefMenu := &tele.ReplyMarkup{}
 	btnAdminRefOverview := adminRefMenu.Data("", cbAdminReferralOverview)

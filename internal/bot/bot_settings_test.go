@@ -19,3 +19,12 @@ func TestBuildBotSettingsSubscribesToCallbackQuery(t *testing.T) {
 	require.Contains(t, poller.AllowedUpdates, "message",
 		"LongPoller должен по-прежнему получать обычные сообщения")
 }
+
+// Шаг «отправил» воронки приглашения — выбор inline-результата: без подписки на
+// chosen_inline_result Telegram его не пришлёт.
+func TestBuildBotSettingsSubscribesToChosenInlineResult(t *testing.T) {
+	poller, ok := buildBotSettings("test-token").Poller.(*tele.LongPoller)
+	require.True(t, ok)
+	require.Contains(t, poller.AllowedUpdates, "chosen_inline_result")
+	require.Contains(t, poller.AllowedUpdates, "inline_query")
+}

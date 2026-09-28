@@ -60,6 +60,7 @@ const (
 	actionVoice        = "voice"        // голосовое
 	actionVideoNote    = "video_note"   // кружок
 	actionMedia        = "media"        // фото, видео или документ
+	actionShareQuery   = "share_query"  // inline-запрос «Поделиться»: открыт выбор чата
 
 	commandActionPrefix = "cmd:" // команда из белого списка: cmd:<имя>
 	unknownInlinePrefix = "cb:"  // inline-кнопка вне каталога: cb:<unique>
@@ -81,8 +82,8 @@ var commandRx = regexp.MustCompile(`^/(\w+)(?:@\w+)?(?:\s|$)`)
 // userAction определяет id Действия по апдейту. Содержимое сообщения, payload
 // кнопок и аргументы команд в id не попадают никогда.
 //
-// Точка расширения каталога: новый вид апдейта, дошедший до middleware
-// (inline-запрос, выбор inline-результата), получает здесь свою ветку.
+// Точка расширения каталога: новый вид апдейта, дошедший до middleware,
+// получает здесь свою ветку.
 func userAction(c tele.Context) (string, bool) {
 	if c.Sender() == nil {
 		return "", false
@@ -93,7 +94,26 @@ func userAction(c tele.Context) (string, bool) {
 	if msg := c.Message(); msg != nil {
 		return messageAction(msg)
 	}
+	// Inline-режим у бота один — «Поделиться», поэтому запрос и выбор
+	// результата пишутся без разбора: текст запроса и id результата — код
+	// приглашения, в журнал они не идут.
+	if c.Query() != nil {
+		return actionShareQuery, true
+	}
+	if c.InlineResult() != nil {
+		return funnels.ActionShareSent, true
+	}
 	return "", false
+}
+
+// handleShareChosen принимает выбор inline-результата «Поделиться»: приглашение
+// ушло в чат. Делать с ним нечего, но без обработчика telebot не пропустит
+// апдейт через middleware, и Шаг «отправил» остался бы без Событий.
+//
+// Telegram присылает выбор, только если у @BotFather включён
+// /setinlinefeedback; без него Шаг «отправил» показывает «нет данных».
+func (b *Bot) handleShareChosen(tele.Context) error {
+	return nil
 }
 
 // messageAction — id Действия входящего сообщения. Reply-кнопка узнаётся по

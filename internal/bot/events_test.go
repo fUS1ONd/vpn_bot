@@ -301,3 +301,38 @@ func TestHandleUnroutedCallback_Responds(t *testing.T) {
 	require.NoError(t, b.handleUnroutedCallback(ctx))
 	assert.True(t, ctx.responded)
 }
+
+// Inline-запрос «Поделиться» — отдельное Действие: человек открыл выбор чата.
+// Набранный в запросе текст (это может быть код приглашения) не пишется.
+func TestEventsMiddleware_RecordsShareQuery(t *testing.T) {
+	recorder := &fakeRecorder{}
+	b := &Bot{events: recorder}
+	sender := &tele.User{ID: 42}
+	ctx := &MockContext{sender: sender, query: &tele.Query{Sender: sender, Text: "ABC123"}}
+
+	require.NoError(t, b.eventsMiddleware(func(tele.Context) error { return nil })(ctx))
+
+	events := recorder.recorded()
+	require.Len(t, events, 1)
+	assert.Equal(t, actionShareQuery, events[0].Action)
+	assert.Equal(t, int64(42), events[0].TelegramID)
+	assert.Empty(t, events[0].Param)
+}
+
+// Выбор результата «Поделиться» — Шаг «отправил»: приглашение ушло в чат. id
+// результата (код приглашения) не пишется.
+func TestEventsMiddleware_RecordsChosenShareResult(t *testing.T) {
+	recorder := &fakeRecorder{}
+	b := &Bot{events: recorder}
+	sender := &tele.User{ID: 42}
+	ctx := &MockContext{sender: sender, inlineResult: &tele.InlineResult{Sender: sender, ResultID: "ABC123", Query: "ABC"}}
+
+	require.NoError(t, b.eventsMiddleware(b.handleShareChosen)(ctx))
+
+	events := recorder.recorded()
+	require.Len(t, events, 1)
+	assert.Equal(t, funnels.ActionShareSent, events[0].Action)
+	assert.Equal(t, journal.SourceUser, events[0].Source)
+	assert.Empty(t, events[0].Param)
+	assert.NotContains(t, events[0].Action, "ABC")
+}

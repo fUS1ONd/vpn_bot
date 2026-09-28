@@ -119,6 +119,12 @@ func (rl *userRateLimiter) cleanupLoop() {
 // нажатием стоит запрос в Remnawave, и панель одна на всех.
 func (b *Bot) rateLimitMiddleware(next tele.HandlerFunc) tele.HandlerFunc {
 	return func(c tele.Context) error {
+		// Выбор inline-результата — уведомление о том, что приглашение уже ушло
+		// в чат: обработки у него нет, а приходит он сразу за inline-запросами,
+		// выбравшими лимит. Отсечь его — потерять Шаг «отправил» воронки.
+		if c.InlineResult() != nil {
+			return next(c)
+		}
 		sender := c.Sender()
 		if sender == nil || b.userLimiter.allow(sender.ID) {
 			return next(c)

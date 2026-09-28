@@ -25,6 +25,10 @@ import (
 // константами, поэтому id не может разойтись между записью и расчётом.
 const (
 	ActionInvitesOpen = "invites_open" // открыт раздел приглашений
+	// ActionShareSent — человек выбрал приглашение в inline-ответе «Поделиться»,
+	// и оно ушло в чат (chosen_inline_result). Telegram присылает выбор, только
+	// если у @BotFather включён /setinlinefeedback.
+	ActionShareSent = "share_sent"
 )
 
 // Воронки.
@@ -35,6 +39,12 @@ const (
 // Шаги воронок.
 const (
 	StepInvitesOpened = "invites_opened"
+	StepInviteCreated = "invite_created"
+	StepInviteSent    = "invite_sent"
+	// StepFriendRegistered и StepFriendPaid — Шаги автора: по его приглашению
+	// зарегистрировался и впервые оплатил друг.
+	StepFriendRegistered = "friend_registered"
+	StepFriendPaid       = "friend_paid"
 )
 
 // mainSchema — имя, под которым основная база подключена к соединению журнала.
@@ -55,6 +65,9 @@ type Report struct {
 	From     time.Time
 	To       time.Time
 	Steps    []StepReport
+	// WindowOpen — окно хотя бы одного вошедшего ещё не истекло: он может
+	// пройти следующие Шаги позже, и конверсия пока недосчитана.
+	WindowOpen bool
 }
 
 // StepReport — один Шаг отчёта. Конверсии — доли от 0 до 1; у первого Шага
@@ -98,6 +111,10 @@ func definitions() []funnel {
 			window: 14 * 24 * time.Hour,
 			steps: []step{
 				{id: StepInvitesOpened, source: journalAction(ActionInvitesOpen)},
+				{id: StepInviteCreated, source: referralInvitesCreated},
+				{id: StepInviteSent, source: journalActionOrNoData(ActionShareSent)},
+				{id: StepFriendRegistered, source: referralFriendsRegistered},
+				{id: StepFriendPaid, source: referralFriendsPaid},
 			},
 		},
 	}
@@ -109,6 +126,7 @@ type Funnels struct {
 	mainPath string
 	excluded map[int64]struct{}
 	funnels  []funnel
+	now      func() time.Time // часы для признака «окно ещё не закрыто»
 }
 
 // New открывает журнал на чтение расчётов. excluded — Telegram ID, которые не
@@ -123,7 +141,7 @@ func New(eventsPath, mainDBPath string, excluded []int64) (*Funnels, error) {
 	for _, id := range excluded {
 		set[id] = struct{}{}
 	}
-	return &Funnels{events: conn, mainPath: mainDBPath, excluded: set, funnels: definitions()}, nil
+	return &Funnels{events: conn, mainPath: mainDBPath, excluded: set, funnels: definitions(), now: time.Now}, nil
 }
 
 // Close закрывает соединения модуля.
@@ -224,7 +242,11 @@ func (f *Funnels) compute(ctx context.Context, conn *sql.Conn, fn funnel, from, 
 		}
 		occurrences, err := s.source(ctx, conn, from, sourceTo)
 		if err != nil {
-			slog.Warn("Funnel step source failed", "funnel", fn.id, "step", s.id, "error", err)
+			if errors.Is(err, errNoEvents) {
+				slog.Info("Funnel step has no events yet", "funnel", fn.id, "step", s.id)
+			} else {
+				slog.Warn("Funnel step source failed", "funnel", fn.id, "step", s.id, "error", err)
+			}
 			noData = true
 			result.NoData = true
 			report.Steps = append(report.Steps, result)
@@ -234,6 +256,7 @@ func (f *Funnels) compute(ctx context.Context, conn *sql.Conn, fn funnel, from, 
 		if index == 0 {
 			entered = f.firstOccurrences(occurrences)
 			reached = entered
+			report.WindowOpen = windowOpen(entered, fn.window, f.now())
 		} else {
 			reached = f.nextOccurrences(occurrences, entered, reached, fn.window)
 		}
@@ -243,6 +266,16 @@ func (f *Funnels) compute(ctx context.Context, conn *sql.Conn, fn funnel, from, 
 
 	fillConversions(report.Steps)
 	return report
+}
+
+// windowOpen — не истекло ли окно хоть у одного вошедшего к моменту now.
+func windowOpen(entered map[int64]time.Time, window time.Duration, now time.Time) bool {
+	for _, at := range entered {
+		if at.Add(window).After(now) {
+			return true
+		}
+	}
+	return false
 }
 
 // firstOccurrences — самый ранний случай на человека, без исключённых.

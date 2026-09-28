@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fus1ond/vpn_bot/internal/funnels"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -92,6 +93,7 @@ func TestActionIDs_Unique(t *testing.T) {
 	for _, id := range []string{
 		actionStart, actionStartInvite, actionStartShare,
 		actionText, actionVoice, actionVideoNote, actionMedia,
+		actionShareQuery, funnels.ActionShareSent,
 	} {
 		claim(id, "Действие-факт "+id)
 	}

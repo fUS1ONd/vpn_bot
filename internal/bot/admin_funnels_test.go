@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,8 +121,67 @@ func TestAdminFunnel_ShowsReportInPlace(t *testing.T) {
 	assert.Nil(t, ctx.sentMsg, "новое сообщение не отправляется")
 
 	buttons := funnelScreenButtons(t, ctx.editedOpts)
-	require.Len(t, buttons, 1)
-	assert.Equal(t, cbAdminFunnelsBack, buttons[0].Unique)
+	require.Len(t, buttons, 4)
+	assert.Equal(t, cbAdminFunnelsBack, buttons[3].Unique)
+}
+
+// Под отчётом — кнопки периода 7/30/90: выбранный помечен, каждая пересчитывает
+// ту же Воронку за свой период в том же сообщении.
+func TestAdminFunnel_PeriodButtons(t *testing.T) {
+	reporter := &fakeFunnels{report: funnels.Report{FunnelID: funnels.FunnelInvite}}
+	b := funnelsTestBot(reporter)
+	ctx := &MockContext{sender: &tele.User{ID: funnelsAdminID}, callback: &tele.Callback{}, args: []string{funnels.FunnelInvite, "30"}}
+
+	require.NoError(t, b.handleAdminFunnel(ctx))
+
+	assert.Equal(t, 30*24*time.Hour, reporter.askedTo.Sub(reporter.askedFrom))
+	text, ok := ctx.editedMsg.(string)
+	require.True(t, ok)
+	assert.Contains(t, text, "Последние 30 дней")
+
+	buttons := funnelScreenButtons(t, ctx.editedOpts)
+	require.Len(t, buttons, 4)
+	for i, days := range []string{"7", "30", "90"} {
+		assert.Equal(t, cbAdminFunnel, buttons[i].Unique)
+		assert.Equal(t, funnels.FunnelInvite+"|"+days, buttons[i].Data)
+		assert.Contains(t, buttons[i].Text, days+" дн")
+	}
+	assert.Contains(t, buttons[1].Text, "•", "выбранный период помечен")
+	assert.NotContains(t, buttons[0].Text, "•")
+}
+
+// Период вне списка 7/30/90 (подделанная кнопка) — отчёт за 7 дней, а не за
+// произвольный срок.
+func TestAdminFunnel_UnknownPeriodFallsBackToDefault(t *testing.T) {
+	reporter := &fakeFunnels{report: funnels.Report{FunnelID: funnels.FunnelInvite}}
+	b := funnelsTestBot(reporter)
+	ctx := &MockContext{sender: &tele.User{ID: funnelsAdminID}, callback: &tele.Callback{}, args: []string{funnels.FunnelInvite, "100000"}}
+
+	require.NoError(t, b.handleAdminFunnel(ctx))
+
+	assert.Equal(t, 7*24*time.Hour, reporter.askedTo.Sub(reporter.askedFrom))
+}
+
+// Окно части когорты не истекло — пометка, чтобы недосчитанную конверсию не
+// приняли за провал.
+func TestRenderFunnelReport_WindowOpen(t *testing.T) {
+	report := funnels.Report{FunnelID: funnels.FunnelInvite, Steps: []funnels.StepReport{{ID: "first", People: 3, FromPrevious: 1, FromFirst: 1}}}
+	assert.NotContains(t, strings.ToLower(renderFunnelReport(report, 7)), "окно ещё не закрыто")
+
+	report.WindowOpen = true
+	assert.Contains(t, strings.ToLower(renderFunnelReport(report, 7)), "окно ещё не закрыто")
+}
+
+// «Нет данных» у Шага «отправил» подсказывает владельцу причину: выбор
+// inline-результата не приходит без /setinlinefeedback.
+func TestRenderFunnelReport_SentNoDataHint(t *testing.T) {
+	report := funnels.Report{FunnelID: funnels.FunnelInvite, Steps: []funnels.StepReport{
+		{ID: funnels.StepInvitesOpened, People: 3, FromPrevious: 1, FromFirst: 1},
+		{ID: funnels.StepInviteSent, NoData: true},
+	}}
+	text := renderFunnelReport(report, 7)
+	assert.Contains(t, text, "Отправили — нет данных")
+	assert.Contains(t, text, "/setinlinefeedback")
 }
 
 // Следующие Шаги показывают конверсии к предыдущему и к первому; «нет данных»

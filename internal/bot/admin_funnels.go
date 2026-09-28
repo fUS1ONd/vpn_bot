@@ -6,6 +6,8 @@ import (
 	"html"
 	"log/slog"
 	"math"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,12 +23,17 @@ type funnelReporter interface {
 }
 
 const (
-	// funnelDefaultPeriodDays — период отчёта: еженедельный взгляд в одно нажатие.
+	// funnelDefaultPeriodDays — период отчёта по умолчанию: еженедельный взгляд
+	// в одно нажатие.
 	funnelDefaultPeriodDays = 7
 	// funnelReportTimeout — расчёт на маленькой базе мгновенный; потолок нужен,
 	// чтобы зависшее чтение не держало обработчик вечно.
 	funnelReportTimeout = 30 * time.Second
 )
+
+// funnelPeriodsDays — периоды, между которыми переключается отчёт. Период из
+// кнопки принимается только из этого списка: данные кнопки может подделать клиент.
+var funnelPeriodsDays = []int{7, 30, 90}
 
 // funnelTitles — подписи Воронок на экране.
 var funnelTitles = map[string]string{
@@ -35,7 +42,18 @@ var funnelTitles = map[string]string{
 
 // funnelStepLabels — подписи Шагов на экране.
 var funnelStepLabels = map[string]string{
-	funnels.StepInvitesOpened: "Открыли раздел",
+	funnels.StepInvitesOpened:    "Открыли раздел",
+	funnels.StepInviteCreated:    "Создали",
+	funnels.StepInviteSent:       "Отправили",
+	funnels.StepFriendRegistered: "Друг зарегистрировался",
+	funnels.StepFriendPaid:       "Друг оплатил",
+}
+
+// funnelNoDataHints — подсказка владельцу, почему у Шага «нет данных», если
+// причина известна заранее.
+var funnelNoDataHints = map[string]string{
+	funnels.StepInviteSent: "«Отправили» считается по выбору результата «Поделиться»: " +
+		"включите у @BotFather /setinlinefeedback (100%).",
 }
 
 func funnelTitle(id string) string {
@@ -65,11 +83,37 @@ func adminFunnelsListKeyboard(list []funnels.Funnel) *tele.ReplyMarkup {
 	return menu
 }
 
-// adminFunnelReportKeyboard — кнопки под отчётом.
-func adminFunnelReportKeyboard() *tele.ReplyMarkup {
+// adminFunnelReportKeyboard — кнопки под отчётом: периоды (выбранный помечен)
+// и «назад» к списку. Период едет вторым аргументом той же кнопки Воронки.
+func adminFunnelReportKeyboard(funnelID string, periodDays int) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
-	menu.Inline(menu.Row(menu.Data("🔙 К списку воронок", cbAdminFunnelsBack)))
+	periods := make([]tele.Btn, 0, len(funnelPeriodsDays))
+	for _, days := range funnelPeriodsDays {
+		label := fmt.Sprintf("%d дн", days)
+		if days == periodDays {
+			label = "• " + label
+		}
+		periods = append(periods, menu.Data(label, cbAdminFunnel, funnelID, strconv.Itoa(days)))
+	}
+	menu.Inline(
+		menu.Row(periods...),
+		menu.Row(menu.Data("🔙 К списку воронок", cbAdminFunnelsBack)),
+	)
 	return menu
+}
+
+// funnelPeriodArg — период отчёта из второго аргумента кнопки; нет его или он
+// вне списка — период по умолчанию.
+func funnelPeriodArg(c tele.Context) int {
+	args := c.Args()
+	if len(args) < 2 {
+		return funnelDefaultPeriodDays
+	}
+	days, err := strconv.Atoi(strings.TrimSpace(args[1]))
+	if err != nil || !slices.Contains(funnelPeriodsDays, days) {
+		return funnelDefaultPeriodDays
+	}
+	return days
 }
 
 // handleAdminFunnelsMenu — reply-кнопка «📊 Воронки»: список Воронок.
@@ -86,7 +130,7 @@ func (b *Bot) handleAdminFunnelsMenu(c tele.Context) error {
 	})
 }
 
-// handleAdminFunnel — выбор Воронки: отчёт редактирует сообщение списка.
+// handleAdminFunnel — выбор Воронки или периода: отчёт редактирует то же сообщение.
 func (b *Bot) handleAdminFunnel(c tele.Context) error {
 	if !b.isAdmin(c) || b.funnels == nil {
 		return c.Respond()
@@ -96,19 +140,21 @@ func (b *Bot) handleAdminFunnel(c tele.Context) error {
 		return c.RespondAlert("Некорректный запрос")
 	}
 
+	periodDays := funnelPeriodArg(c)
+
 	ctx, cancel := context.WithTimeout(context.Background(), funnelReportTimeout)
 	defer cancel()
 	to := time.Now().UTC()
-	from := to.Add(-funnelDefaultPeriodDays * 24 * time.Hour)
+	from := to.Add(-time.Duration(periodDays) * 24 * time.Hour)
 	report, err := b.funnels.Report(ctx, funnelID, from, to)
 	if err != nil {
 		slog.Error("Failed to compute funnel report", "funnel", funnelID, "error", err)
 		return c.RespondAlert("Не удалось посчитать воронку, подробности в логах")
 	}
 
-	if err := c.Edit(renderFunnelReport(report, funnelDefaultPeriodDays), &tele.SendOptions{
+	if err := c.Edit(renderFunnelReport(report, periodDays), &tele.SendOptions{
 		ParseMode:   tele.ModeHTML,
-		ReplyMarkup: adminFunnelReportKeyboard(),
+		ReplyMarkup: adminFunnelReportKeyboard(funnelID, periodDays),
 	}); err != nil {
 		slog.Warn("Failed to show funnel report", "funnel", funnelID, "error", err)
 	}
@@ -130,23 +176,35 @@ func (b *Bot) handleAdminFunnelsBack(c tele.Context) error {
 }
 
 // renderFunnelReport — отчёт для телефона, без таблиц: строка на Шаг вида
-// «Создали — 5 (42% · 42%)», где проценты — к предыдущему и к первому Шагу.
+// «Создали — 5 (42% · 42%)», где проценты — к предыдущему и к первому Шагу,
+// под ними — пометки «окно ещё не закрыто» и подсказки к «нет данных».
 func renderFunnelReport(report funnels.Report, periodDays int) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "<b>📊 Воронка «%s»</b>\n", html.EscapeString(funnelTitle(report.FunnelID)))
 	fmt.Fprintf(&sb, "Последние %d дней, без владельца\n\n", periodDays)
 
+	var hints []string
 	for index, step := range report.Steps {
 		fmt.Fprintf(&sb, "%s — ", html.EscapeString(funnelStepLabel(step.ID)))
 		switch {
 		case step.NoData:
 			sb.WriteString("нет данных")
+			if hint, ok := funnelNoDataHints[step.ID]; ok {
+				hints = append(hints, hint)
+			}
 		case index == 0:
 			fmt.Fprintf(&sb, "%d", step.People)
 		default:
 			fmt.Fprintf(&sb, "%d (%d%% · %d%%)", step.People, percent(step.FromPrevious), percent(step.FromFirst))
 		}
 		sb.WriteString("\n")
+	}
+
+	if report.WindowOpen {
+		sb.WriteString("\n⏳ Окно ещё не закрыто: часть вошедших ещё может пройти шаги, конверсия недосчитана.\n")
+	}
+	for _, hint := range hints {
+		fmt.Fprintf(&sb, "\nℹ️ %s\n", html.EscapeString(hint))
 	}
 	return sb.String()
 }
