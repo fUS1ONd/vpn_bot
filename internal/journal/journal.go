@@ -31,7 +31,9 @@ const (
 
 // TimeLayout — формат времени События в базе. Фиксированная ширина и UTC:
 // строки сравниваются лексикографически в том же порядке, что и моменты времени,
-// а формат совпадает с CURRENT_TIMESTAMP таблиц основной базы.
+// а формат совпадает с CURRENT_TIMESTAMP таблиц основной базы с точностью до
+// миллисекунд. Из-за миллисекунд строковое сравнение ts со столбцами основной
+// базы в пределах одной секунды неверно — моменты сравниваются в Go, после Scan.
 const TimeLayout = "2006-01-02 15:04:05.000"
 
 const (
@@ -67,7 +69,12 @@ type Journal struct {
 	stop     chan struct{}
 	done     chan struct{}
 	stopOnce sync.Once
-	dropped  atomic.Int64 // отброшено при переполнении с последнего отчёта в лог
+	// stopMu делает «не остановлен ли журнал → положить в буфер» одной операцией
+	// относительно Close: иначе Событие, положенное между проверкой и остановкой
+	// писателя, осталось бы в буфере, который уже никто не прочитает.
+	stopMu  sync.RWMutex
+	stopped bool
+	dropped atomic.Int64 // отброшено при переполнении с последнего отчёта в лог
 }
 
 // PathNextTo выводит путь журнала из пути основной базы: тот же каталог, а
@@ -143,10 +150,12 @@ func (j *Journal) Record(event Event) {
 	if event.At.IsZero() {
 		event.At = time.Now()
 	}
-	select {
-	case <-j.stop:
+	j.stopMu.RLock()
+	defer j.stopMu.RUnlock()
+	if j.stopped {
+		// Нажатие, обработка которого закончилась после остановки: писателя уже
+		// нет, событие теряется — как и при падении процесса (ADR-0005).
 		return
-	default:
 	}
 	select {
 	case j.events <- event:
@@ -159,6 +168,9 @@ func (j *Journal) Record(event Event) {
 // Повторный вызов безопасен.
 func (j *Journal) Close() {
 	j.stopOnce.Do(func() {
+		j.stopMu.Lock()
+		j.stopped = true
+		j.stopMu.Unlock()
 		close(j.stop)
 		<-j.done
 		if err := j.conn.Close(); err != nil {

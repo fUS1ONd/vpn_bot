@@ -10,9 +10,11 @@ package funnels
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/database"
@@ -179,7 +181,7 @@ func (f *Funnels) find(id string) (funnel, bool) {
 // attachMain подключает основную базу только на чтение: воронки не имеют
 // права ничего в ней менять.
 func (f *Funnels) attachMain(ctx context.Context, conn *sql.Conn) func() {
-	uri := "file:" + f.mainPath + "?mode=ro"
+	uri := "file:" + sqliteURIPath(f.mainPath) + "?mode=ro"
 	if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS "+mainSchema, uri); err != nil {
 		slog.Warn("Failed to attach main database to funnels", "error", err)
 		return func() {}
@@ -188,7 +190,11 @@ func (f *Funnels) attachMain(ctx context.Context, conn *sql.Conn) func() {
 		// Соединение возвращается в пул: отключаем базу, чтобы следующий
 		// расчёт подключил её заново, а не упал на «already in use».
 		if _, err := conn.ExecContext(context.Background(), "DETACH DATABASE "+mainSchema); err != nil {
-			slog.Warn("Failed to detach main database from funnels", "error", err)
+			slog.Warn("Failed to detach main database from funnels, dropping connection", "error", err)
+			// Соединение с неотключённой базой в пул не возвращаем: ATTACH на нём
+			// падал бы всегда, и Шаги из таблиц бота навсегда стали бы «нет
+			// данных». ErrBadConn из Raw велит пулу закрыть соединение.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		}
 	}
 }
@@ -288,4 +294,10 @@ func fillConversions(steps []StepReport) {
 			current.FromFirst = float64(current.People) / float64(first.People)
 		}
 	}
+}
+
+// sqliteURIPath экранирует в пути символы, которые SQLite в URI-имени файла
+// понял бы как начало параметров, фрагмента или escape-последовательности.
+func sqliteURIPath(path string) string {
+	return strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path)
 }

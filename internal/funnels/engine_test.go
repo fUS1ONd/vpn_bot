@@ -4,9 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/journal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -118,4 +121,27 @@ func TestReport_UnknownFunnel(t *testing.T) {
 	f := newFixture(t)
 	_, err := f.open(t).Report(context.Background(), "nope", time.Now(), time.Now())
 	assert.ErrorIs(t, err, ErrUnknownFunnel)
+}
+
+// Путь основной базы со служебными для URI символами подключает именно её.
+func TestAttachMain_PathWithURISymbols(t *testing.T) {
+	// «?» и «%» основная база не переносит сама (драйвер режет DSN по «?»),
+	// поэтому проверяем то, что до ATTACH вообще доходит.
+	dir := filepath.Join(t.TempDir(), "data #1")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	f := fixture{eventsPath: filepath.Join(dir, journal.FileName), mainPath: filepath.Join(dir, "bot.db")}
+	db, err := database.New(f.mainPath)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	f.record(t)
+	funnels := f.open(t)
+
+	conn, err := funnels.events.Conn(context.Background())
+	require.NoError(t, err)
+	defer conn.Close()
+	defer funnels.attachMain(context.Background(), conn)()
+
+	var users int
+	require.NoError(t, conn.QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM "+mainSchema+".users").Scan(&users))
 }

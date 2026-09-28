@@ -151,6 +151,8 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 
 	// Журнал Событий: что нажал пользователь, без содержимого сообщений.
 	// Журнал подключается позже, через AttachAnalytics; до этого middleware молчит.
+	// Стоит после rate limit намеренно: отсечённое нажатие не обработано, и
+	// спам кнопкой не должен раздувать Шаги воронок.
 	b.Use(bot.eventsMiddleware)
 
 	// Middleware для логирования

@@ -3,6 +3,7 @@ package funnels
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/journal"
@@ -12,21 +13,13 @@ import (
 func journalAction(actions ...string) source {
 	return func(ctx context.Context, conn *sql.Conn, from, to time.Time) ([]occurrence, error) {
 		query := `SELECT telegram_id, ts FROM events WHERE ts >= ? AND ts < ? AND action IN (?` +
-			repeatPlaceholders(len(actions)-1) + `)`
-		args := []any{from.Format(journal.TimeLayout), to.Format(journal.TimeLayout)}
+			strings.Repeat(", ?", len(actions)-1) + `)`
+		args := []any{from.UTC().Format(journal.TimeLayout), to.UTC().Format(journal.TimeLayout)}
 		for _, action := range actions {
 			args = append(args, action)
 		}
 		return queryOccurrences(ctx, conn, query, args...)
 	}
-}
-
-func repeatPlaceholders(n int) string {
-	out := ""
-	for i := 0; i < n; i++ {
-		out += ", ?"
-	}
-	return out
 }
 
 // queryOccurrences читает пары (telegram_id, момент) из произвольного запроса.
