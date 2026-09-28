@@ -34,19 +34,25 @@ func getPaymentMutex(telegramID int64) *sync.Mutex {
 	return mu.(*sync.Mutex)
 }
 
-// paymentCallbackHandler реализует callback.PaymentHandler
+// paymentCallbackHandler проводит платёж по статусу провайдера внутри
+// критической секции getPaymentMutex. Заводится на каждый захват мьютекса:
+// later — сообщения владельцу, решённые под мьютексом, и выполняет их тот, кто
+// мьютекс взял, после его снятия.
 type paymentCallbackHandler struct {
-	bot *Bot
-	// later — сообщения владельцу, решённые под getPaymentMutex; выполняет их
-	// тот, кто взял мьютекс, после его снятия. Поэтому на каждый захват мьютекса
-	// заводится свой обработчик, а общий из PaymentCallbackHandler состояния не
-	// держит.
+	bot   *Bot
 	later afterUnlock
+}
+
+// plategaCallbackHandler реализует callback.PaymentHandler. Экземпляр один на
+// весь сервер и состояния не держит: обработчик с очередью сообщений заводится
+// на каждый callback.
+type plategaCallbackHandler struct {
+	bot *Bot
 }
 
 // PaymentCallbackHandler возвращает обработчик callback от Platega
 func (b *Bot) PaymentCallbackHandler() callback.PaymentHandler {
-	return &paymentCallbackHandler{bot: b}
+	return &plategaCallbackHandler{bot: b}
 }
 
 // HandleYooKassaWebhook реализует callback.YooKassaHandler. Тело вебхука не
@@ -141,9 +147,9 @@ func (b *Bot) reportRevivedPayment(payment *database.Payment) func() bool {
 }
 
 // HandlePaymentCallback обрабатывает callback от Platega
-func (h *paymentCallbackHandler) HandlePaymentCallback(payload platega.CallbackPayload) error {
+func (e *plategaCallbackHandler) HandlePaymentCallback(payload platega.CallbackPayload) error {
 	// Находим платёж по platega_transaction_id
-	payment, err := h.bot.db.GetPaymentByPlategaTxID(payload.ID)
+	payment, err := e.bot.db.GetPaymentByPlategaTxID(payload.ID)
 	if err != nil {
 		return fmt.Errorf("get payment by tx: %w", err)
 	}
@@ -152,10 +158,9 @@ func (h *paymentCallbackHandler) HandlePaymentCallback(payload platega.CallbackP
 		return nil // Не возвращаем ошибку, чтобы Platega не retry-ила
 	}
 
-	// Обработчик сервера общий для всех callback, а сообщения владельцу копятся
-	// на время захвата мьютекса — заводим свой и отправляем после Unlock.
-	call := &paymentCallbackHandler{bot: h.bot}
-	defer call.later.run()
+	// Сообщения владельцу уходят после снятия мьютекса (afterUnlock).
+	h := &paymentCallbackHandler{bot: e.bot}
+	defer h.later.run()
 
 	// Блокируем обработку по telegram_id
 	mu := getPaymentMutex(payment.TelegramID)
@@ -164,11 +169,11 @@ func (h *paymentCallbackHandler) HandlePaymentCallback(payload platega.CallbackP
 
 	switch payload.Status {
 	case platega.StatusConfirmed, platega.StatusManualConfirmed:
-		return call.handleConfirmed(payment)
+		return h.handleConfirmed(payment)
 	case platega.StatusCanceled:
-		return call.handleCanceled(payment)
+		return h.handleCanceled(payment)
 	case platega.StatusChargebacked:
-		return call.handleChargeback(payment)
+		return h.handleChargeback(payment)
 	default:
 		slog.Warn("Callback с неожиданным статусом", "status", payload.Status, "transaction_id", payload.ID)
 		return nil
@@ -504,7 +509,7 @@ func (h *paymentCallbackHandler) activateSubscription(payment *database.Payment)
 		return fmt.Errorf("user not found: telegram_id=%d", payment.TelegramID)
 	}
 
-	ref, err := h.bot.userRef(payment.TelegramID)
+	ref, err := h.bot.userRefAlerting(payment.TelegramID, h.later.alertTo(h.bot))
 	if err != nil {
 		return fmt.Errorf("resolve user ref: %w", err)
 	}
@@ -619,7 +624,7 @@ func (h *paymentCallbackHandler) handleChargeback(payment *database.Payment) err
 	// Удаляем из Remnawave (полное удаление, не просто disable)
 	user, err := h.bot.db.GetUserByTelegramID(payment.TelegramID)
 	if err == nil && user != nil {
-		if delErr := h.bot.deleteRemnawaveUser(payment.TelegramID); delErr != nil {
+		if delErr := h.bot.deleteRemnawaveUser(payment.TelegramID, h.later.alertTo(h.bot)); delErr != nil {
 			slog.Error("Chargeback: не удалось удалить из Remnawave", "error", delErr, "telegram_id", payment.TelegramID)
 		}
 	}

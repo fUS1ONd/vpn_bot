@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/fus1ond/vpn_bot/internal/platega"
+	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -150,4 +152,43 @@ func TestАвтосписание_АлертВладельцуНеДержитМ
 	b, _, _ := setupAutorenewEdgeBot(t, stub)
 
 	assertAlertLeavesMutexFree(t, b, arEdgeUserID, func() { b.runAutorenewCharges(time.Now().UTC()) })
+}
+
+// Шов userRef сообщает владельцу о сбое связки (здесь — неоднозначное
+// совпадение в панели 3.x) и под мьютексом платежей делает это тоже после Unlock.
+func TestАлертОСбоеСвязкиНеДержитМьютексПлатежей(t *testing.T) {
+	const telegramID = int64(5031)
+	ambiguous := func(r *http.Request) (*http.Response, error) {
+		return panelJSON(fmt.Sprintf(`{"response":{"users":[{"id":7,"telegramId":%d},{"id":8,"telegramId":%d}],"hasMore":true}}`,
+			telegramID, telegramID)), nil
+	}
+	cases := map[string]func(t *testing.T, b *Bot) func(){
+		"перевыпуск ссылки": func(t *testing.T, b *Bot) func() {
+			return func() { _, _ = b.applyRevoke(telegramID) }
+		},
+		"продление админом": func(t *testing.T, b *Bot) func() {
+			return func() { _, _ = b.applyAdminExtend(telegramID) }
+		},
+		"retry активации": func(t *testing.T, b *Bot) func() {
+			ext := "platega-ambiguous"
+			id, err := b.db.CreatePayment(&database.Payment{
+				TelegramID: telegramID, Amount: 400, PaymentMethod: paymentprovider.Platega, Status: "pending",
+				Provider: paymentprovider.Platega, ProviderPaymentID: &ext, PlategaTransactionID: &ext,
+			})
+			require.NoError(t, err)
+			require.NoError(t, b.db.ConfirmPayment(id))
+			require.NoError(t, b.db.UpdatePaymentStatus(id, "confirmed_not_activated"))
+			return func() { b.retryConfirmedPaymentActivation(id, "scheduler") }
+		},
+	}
+	for name, prepare := range cases {
+		t.Run(name, func(t *testing.T) {
+			b, db := newUserRefBot(t, t.TempDir()+"/ambiguous.db", remnawave.APIVersionV3, ambiguous)
+			b.paymentRetryDelays = []time.Duration{time.Hour}
+			_, err := db.CreateUser(telegramID, "dup", "Dup", strPtrTest("uuid-5031"), nil, intPtrTest(400), nil)
+			require.NoError(t, err)
+			run := prepare(t, b)
+			assertAlertLeavesMutexFree(t, b, telegramID, run)
+		})
+	}
 }

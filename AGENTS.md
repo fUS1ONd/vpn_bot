@@ -238,7 +238,9 @@ docker-compose.test.yml` команда подхватит боевой `docker-
    **Алерты владельцу, как и сообщения пользователю, отправляются вне `getPaymentMutex`:**
    под мьютексом принимается только решение «сообщать или нет» (и занимается пометка),
    а сетевой вызов копит очередь `afterUnlock` (`internal/bot/alert_once.go`), которую
-   взявший мьютекс выполняет после `Unlock` — по порядку и без горутин.
+   взявший мьютекс выполняет после `Unlock` — по порядку и без горутин. Шов `userRef` под
+   мьютексом зовётся через `userRefAlerting` / `resolveUserRefAlerting` с `later.alertTo(b)`:
+   его алерты о сбое связки с панелью иначе ушли бы в Telegram прямо из критической секции.
    **Повторы запросов к кассе** (`internal/yookassa/client.go`): `maxAttempts` = 3,
    `defaultAttemptTimeout` = 15 с на попытку через `context`, `defaultRetryBackoff` = 1 с
    с линейным ростом. Повторяются транспортные ошибки (с «TLS handshake timeout» до

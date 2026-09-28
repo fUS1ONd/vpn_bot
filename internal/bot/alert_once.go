@@ -82,13 +82,30 @@ func (a *afterUnlock) alert(b *Bot, msg string) {
 	})
 }
 
-// run выполняет накопленные отправки и опустошает очередь.
+// alertTo — alert в виде функции: для шва userRef, который сообщает владельцу о
+// сбое связки и ничего не знает о мьютексе платежей.
+func (a *afterUnlock) alertTo(b *Bot) func(msg string) {
+	return func(msg string) { a.alert(b, msg) }
+}
+
+// run выполняет накопленные отправки и опустошает очередь. Паника одной
+// отправки не отменяет остальные: за ними могут стоять занятые пометки
+// deliverOnce, которые иначе остались бы без сообщения.
 func (a *afterUnlock) run() {
 	sends := a.sends
 	a.sends = nil
 	for _, send := range sends {
-		send()
+		runSend(send)
 	}
+}
+
+func runSend(send func() bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Отложенная отправка упала с паникой", "recover", r)
+		}
+	}()
+	send()
 }
 
 // adopt переносит в очередь отправки другой очереди — для обработчика,

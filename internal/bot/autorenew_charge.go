@@ -139,7 +139,7 @@ func (b *Bot) chargeAutorenewal(renewal *database.Autorenewal, now time.Time) au
 		return autorenewChargeResult{}
 	}
 
-	ref, ok := b.resolveUserRef(telegramID)
+	ref, ok := b.resolveUserRefAlerting(telegramID, later.alertTo(b))
 	if !ok {
 		return autorenewChargeResult{}
 	}
@@ -505,9 +505,8 @@ func (b *Bot) finishSuccessfulAutorenew(later *afterUnlock, payment *database.Pa
 	previous, hasPrevious := b.previousAutorenewCharge(telegramID)
 
 	handler := &paymentCallbackHandler{bot: b}
-	err := handler.handleConfirmedSilently(payment)
-	later.adopt(&handler.later)
-	if err != nil {
+	defer later.adopt(&handler.later)
+	if err := handler.handleConfirmedSilently(payment); err != nil {
 		slog.Error("Автосписание: не удалось подтвердить платёж", "error", err, "payment_id", payment.ID)
 		return nil
 	}
