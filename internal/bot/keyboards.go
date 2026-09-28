@@ -42,7 +42,11 @@ const (
 	cbPaymentMethodConfirm = "pm_unlink_ok"
 )
 
-// Unique-идентификаторы inline-кнопок платёжного экрана
+// Unique-идентификаторы inline-кнопок платёжного экрана. Id из funnels — те,
+// на которые опираются Шаги Воронок: там они и объявлены, чтобы запись и
+// расчёт не разошлись. Остальные (pay_check, pay_cancel здесь и
+// retry_pay_check ниже) Шагами не используются и остаются литералами, хотя
+// в журнал пишутся так же.
 const (
 	cbPayMethod = funnels.ActionPayMethod // выбор способа оплаты (Data = провайдер)
 	cbPayCheck  = "pay_check"             // «Я оплатил» — ручная проверка оплаты
