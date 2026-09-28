@@ -17,7 +17,7 @@ type fakePanel struct {
 	err       error
 }
 
-func (p fakePanel) FirstConnections(context.Context) (map[int64]time.Time, error) {
+func (p fakePanel) FirstConnectedAt(context.Context) (map[int64]time.Time, error) {
 	return p.connected, p.err
 }
 

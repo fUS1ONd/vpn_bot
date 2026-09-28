@@ -215,7 +215,7 @@ func TestRenderFunnelReport_StepAfterNoData(t *testing.T) {
 
 	assert.Contains(t, text, "Подключили устройство — нет данных")
 	assert.Contains(t, text, "Оплатили — 3 (— · 30%)")
-	assert.Contains(t, text, "Панель не ответила")
+	assert.Contains(t, text, "Панель недоступна")
 }
 
 // Ошибка расчёта не оставляет владельца с вечной крутилкой.

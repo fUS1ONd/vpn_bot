@@ -64,7 +64,7 @@ var funnelStepLabels = map[string]string{
 var funnelNoDataHints = map[string]string{
 	funnels.StepInviteSent: "«Отправили» считается по выбору результата «Поделиться»: " +
 		"включите у @BotFather /setinlinefeedback (100%).",
-	funnels.StepDeviceConnected: "Панель не ответила: «Подключили устройство» не посчитан, " +
+	funnels.StepDeviceConnected: "Панель недоступна или не ответила: «Подключили устройство» не посчитан, " +
 		"следующий Шаг считается от регистрации.",
 }
 

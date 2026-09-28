@@ -84,7 +84,7 @@ const (
 // устройства по Telegram ID. Кто ни разу не подключался, в ответе отсутствует.
 // Ошибка — панель недоступна, и Шаг устройства получает «нет данных».
 type FirstConnections interface {
-	FirstConnections(ctx context.Context) (map[int64]time.Time, error)
+	FirstConnectedAt(ctx context.Context) (map[int64]time.Time, error)
 }
 
 // mainSchema — имя, под которым основная база подключена к соединению журнала.

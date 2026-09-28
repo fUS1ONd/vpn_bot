@@ -225,7 +225,7 @@ func firstConnected(panel FirstConnections) source {
 		if panel == nil {
 			return nil, errNoPanel
 		}
-		connected, err := panel.FirstConnections(ctx)
+		connected, err := panel.FirstConnectedAt(ctx)
 		if err != nil {
 			return nil, err
 		}
