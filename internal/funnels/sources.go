@@ -4,12 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/database"
 	"github.com/fus1ond/vpn_bot/internal/journal"
-	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 )
 
 // journalAction — Шаг из журнала: случаи Действия (любого из перечисленных) в интервале.
@@ -131,22 +131,46 @@ var paymentsIssued = wholeSecondsCeil(tableOccurrences("p.created_at",
 // хранится, поэтому живость восстанавливается по сроку ссылки и по тому, что
 // платёж не был подтверждён раньше выбора.
 func pendingReused(ctx context.Context, conn *sql.Conn, from, to time.Time) ([]occurrence, error) {
+	args := []any{
+		from.UTC().Format(journal.TimeLayout), to.UTC().Format(journal.TimeLayout),
+		ActionPayMethod, ActionRetryPayment,
+	}
 	return queryOccurrences(ctx, conn,
 		`SELECT e.telegram_id, e.ts FROM events e
 		 WHERE e.ts >= ? AND e.ts < ? AND e.action IN (?, ?)
 		   AND EXISTS (
 		     SELECT 1 FROM `+mainSchema+`.payments p
 		     WHERE p.telegram_id = e.telegram_id
-		       AND p.provider = CASE e.param WHEN ? THEN ? WHEN ? THEN ? END
+		       AND p.provider = `+providerByParam+`
 		       AND `+issuedManually("p")+`
 		       AND datetime(p.created_at) <= datetime(e.ts)
 		       AND datetime(p.created_at) > datetime(e.ts, '-1 day')
 		       AND (p.expires_at IS NULL OR datetime(p.expires_at) > datetime(e.ts))
 		       AND (p.confirmed_at IS NULL OR datetime(p.confirmed_at) >= datetime(e.ts)))`,
-		from.UTC().Format(journal.TimeLayout), to.UTC().Format(journal.TimeLayout),
-		ActionPayMethod, ActionRetryPayment,
-		PayMethodYooKassa, paymentprovider.YooKassa, PayMethodCrypto, paymentprovider.Platega,
+		append(args, providerByParamArgs...)...,
 	)
+}
+
+// providerByParam — выражение SQL «параметр События e.param → провайдер
+// платежа» по PayMethodParams; значения подставляются из providerByParamArgs.
+var providerByParam, providerByParamArgs = providerByParamCase()
+
+func providerByParamCase() (string, []any) {
+	providers := make([]string, 0, len(PayMethodParams))
+	for provider := range PayMethodParams {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+
+	var sb strings.Builder
+	args := make([]any, 0, 2*len(providers))
+	sb.WriteString("CASE e.param")
+	for _, provider := range providers {
+		sb.WriteString(" WHEN ? THEN ?")
+		args = append(args, PayMethodParams[provider], provider)
+	}
+	sb.WriteString(" END")
+	return sb.String(), args
 }
 
 // unionSources — случаи Шага из нескольких источников вместе.

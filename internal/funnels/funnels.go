@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -59,6 +60,14 @@ const (
 	PayMethodYooKassa = "yookassa" // карта, СБП, SberPay через ЮKassa
 	PayMethodCrypto   = "crypto"   // крипта через Platega
 )
+
+// PayMethodParams — провайдер платежа → параметр выбора способа оплаты.
+// Единственное место этой связи: по ней бот пишет параметр События, а Шаг
+// «платёж создан» по параметру находит платёж того же провайдера.
+var PayMethodParams = map[string]string{
+	paymentprovider.YooKassa: PayMethodYooKassa,
+	paymentprovider.Platega:  PayMethodCrypto,
+}
 
 // Воронки.
 const (

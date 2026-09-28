@@ -8,7 +8,6 @@ import (
 
 	"github.com/fus1ond/vpn_bot/internal/funnels"
 	"github.com/fus1ond/vpn_bot/internal/journal"
-	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	tele "gopkg.in/telebot.v3"
 )
 
@@ -201,16 +200,10 @@ func actionParam(c tele.Context, action string) string {
 	switch action {
 	case funnels.ActionPayMethod, funnels.ActionRetryPayment:
 		if cb := c.Callback(); cb != nil {
-			return payMethodParams[cb.Data]
+			return funnels.PayMethodParams[cb.Data]
 		}
 	}
 	return ""
-}
-
-// payMethodParams — провайдер из данных кнопки способа → параметр События.
-var payMethodParams = map[string]string{
-	paymentprovider.YooKassa: funnels.PayMethodYooKassa,
-	paymentprovider.Platega:  funnels.PayMethodCrypto,
 }
 
 // handleUnroutedCallback принимает нажатия inline-кнопок, под Unique которых
