@@ -139,6 +139,26 @@ func TestRateLimitMiddleware_InlineQueryAlwaysAnswered(t *testing.T) {
 	}
 }
 
+// TestRateLimitMiddleware_ChosenInlineResultNotLimited: выбор результата
+// «Поделиться» приходит сразу за серией inline-запросов, которые и выбрали
+// лимит. Обработки у него нет, а отсечение потеряло бы Шаг «отправил», поэтому
+// лимит его не касается и жетон не тратит.
+func TestRateLimitMiddleware_ChosenInlineResultNotLimited(t *testing.T) {
+	b := &Bot{userLimiter: newTestLimiter(t, 3, 5), userStates: newStateMap()}
+	drainBucket(t, b.userLimiter, 42, 5)
+
+	called := false
+	handler := b.rateLimitMiddleware(func(tele.Context) error {
+		called = true
+		return nil
+	})
+	sender := &tele.User{ID: 42}
+	ctx := &MockContext{sender: sender, inlineResult: &tele.InlineResult{Sender: sender, ResultID: "r"}}
+	require.NoError(t, handler(ctx))
+
+	assert.True(t, called)
+}
+
 // TestRateLimitMiddleware_PassesThroughWhenAllowed: в пределах лимита апдейт
 // доходит до хендлера, и лимитер ничего не отвечает от себя.
 func TestRateLimitMiddleware_PassesThroughWhenAllowed(t *testing.T) {

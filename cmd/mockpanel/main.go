@@ -66,6 +66,9 @@ type user struct {
 type traffic struct {
 	UsedTrafficBytes         int64 `json:"usedTrafficBytes"`
 	LifetimeUsedTrafficBytes int64 `json:"lifetimeUsedTrafficBytes"`
+	// FirstConnectedAt — первое подключение устройства; как у настоящей панели
+	// (2.8.x и 3.x), поле есть всегда и равно null, пока подключения не было.
+	FirstConnectedAt *time.Time `json:"firstConnectedAt"`
 }
 
 // device повторяет remnawave.HwidDevice — то, что бот читает из HWID API.
@@ -572,6 +575,10 @@ func (s *store) control(r *http.Request) (*user, error) {
 		Status        *string  `json:"status"`
 		UsedTrafficGB *float64 `json:"usedTrafficGB"`
 		Devices       *int     `json:"devices"`
+		// FirstConnectedHoursAgo — первое подключение столько часов назад, для
+		// Шага устройства Воронки онбординга; отрицательное — сброс в «не
+		// подключался» (подключение в будущем смысла не имеет).
+		FirstConnectedHoursAgo *float64 `json:"firstConnectedHoursAgo"`
 	}
 	if err := decodePost(r, &req); err != nil {
 		return nil, err
@@ -599,6 +606,16 @@ func (s *store) control(r *http.Request) (*user, error) {
 	}
 	if req.Devices != nil {
 		u.devices = makeDevices(*req.Devices)
+	}
+	if req.FirstConnectedHoursAgo != nil {
+		if u.UserTraffic == nil {
+			u.UserTraffic = &traffic{}
+		}
+		u.UserTraffic.FirstConnectedAt = nil
+		if hours := *req.FirstConnectedHoursAgo; hours >= 0 {
+			at := time.Now().UTC().Add(-time.Duration(hours * float64(time.Hour)))
+			u.UserTraffic.FirstConnectedAt = &at
+		}
 	}
 	return u, nil
 }

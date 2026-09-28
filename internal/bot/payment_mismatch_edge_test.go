@@ -347,7 +347,7 @@ func TestСверка_PlategaБезИдентификатораПровайде�
 	})
 	require.NoError(t, err)
 	_, err = env.db.Conn().Exec(`UPDATE payments SET created_at = ? WHERE id = ?`,
-		time.Now().UTC().Add(-25*time.Hour).Format("2006-01-02 15:04:05"), id)
+		time.Now().UTC().Add(-25*time.Hour).Format(database.SQLiteSecondsLayout), id)
 	require.NoError(t, err)
 
 	env.bot.reconcilePendingPayment(id, time.Now().UTC(), "test")

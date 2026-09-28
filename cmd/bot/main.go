@@ -13,6 +13,8 @@ import (
 	"github.com/fus1ond/vpn_bot/internal/callback"
 	"github.com/fus1ond/vpn_bot/internal/config"
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/funnels"
+	"github.com/fus1ond/vpn_bot/internal/journal"
 	"github.com/fus1ond/vpn_bot/internal/monitoring"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
@@ -140,6 +142,25 @@ func main() {
 	if err != nil {
 		slog.Error("Failed to create Telegram bot", "error", err)
 		os.Exit(1)
+	}
+
+	// Журнал Событий и воронки — аналитика: без них бот обязан работать как
+	// раньше, поэтому сбой открытия — только лог.
+	eventsPath := journal.PathNextTo(cfg.DBPath)
+	if eventsJournal, err := journal.Open(eventsPath, journal.Options{}); err != nil {
+		slog.Error("Failed to open events journal, analytics disabled", "path", eventsPath, "error", err)
+	} else {
+		// Буфер сбрасывается в базу при штатной остановке: defer отработает
+		// после telegramBot.Run и ожидания ctx ниже.
+		defer eventsJournal.Close()
+		funnelsModule, err := funnels.New(eventsPath, cfg.DBPath, []int64{cfg.AdminID},
+			bot.NewPanelFirstConnections(remnawaveClient))
+		if err != nil {
+			slog.Error("Failed to open funnels module", "error", err)
+		} else {
+			defer funnelsModule.Close()
+		}
+		telegramBot.AttachAnalytics(eventsJournal, funnelsModule)
 	}
 
 	// Настройка graceful shutdown

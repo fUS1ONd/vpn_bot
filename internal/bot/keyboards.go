@@ -8,6 +8,7 @@ import (
 	tele "gopkg.in/telebot.v3"
 
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/funnels"
 	"github.com/fus1ond/vpn_bot/internal/paymentprovider"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 )
@@ -30,30 +31,34 @@ const (
 
 // Unique-идентификаторы inline-кнопок автопродления
 const (
-	cbAutorenewOpen        = "ar_open"    // экран автопродления из карточки
-	cbAutorenewOffer       = "ar_offer"   // экран условий из сообщения об оплате
-	cbAutorenewEnable      = "ar_on"      // включить автопродление
-	cbAutorenewDisable     = "ar_off"     // выключить автопродление (один тап)
-	cbAutorenewDismiss     = "ar_dismiss" // «Не сейчас» в предложении включить
-	cbAutorenewPayManually = "ar_pay"     // подсказка продлить вручную после провала
-	cbPaymentMethod        = "pm_open"    // экран сохранённого способа оплаты
-	cbPaymentMethodUnlink  = "pm_unlink"  // запрос отвязки способа
+	cbAutorenewOpen        = "ar_open"                          // экран автопродления из карточки
+	cbAutorenewOffer       = "ar_offer"                         // экран условий из сообщения об оплате
+	cbAutorenewEnable      = "ar_on"                            // включить автопродление
+	cbAutorenewDisable     = "ar_off"                           // выключить автопродление (один тап)
+	cbAutorenewDismiss     = "ar_dismiss"                       // «Не сейчас» в предложении включить
+	cbAutorenewPayManually = funnels.ActionAutorenewPayManually // подсказка продлить вручную после провала
+	cbPaymentMethod        = "pm_open"                          // экран сохранённого способа оплаты
+	cbPaymentMethodUnlink  = "pm_unlink"                        // запрос отвязки способа
 	cbPaymentMethodConfirm = "pm_unlink_ok"
 )
 
-// Unique-идентификаторы inline-кнопок платёжного экрана
+// Unique-идентификаторы inline-кнопок платёжного экрана. Id из funnels — те,
+// на которые опираются Шаги Воронок: там они и объявлены, чтобы запись и
+// расчёт не разошлись. Остальные (pay_check, pay_cancel здесь и
+// retry_pay_check ниже) Шагами не используются и остаются литералами, хотя
+// в журнал пишутся так же.
 const (
-	cbPayMethod = "pay_method" // выбор способа оплаты (Data = провайдер)
-	cbPayCheck  = "pay_check"  // «Я оплатил» — ручная проверка оплаты
-	cbPayCancel = "pay_cancel" // отмена (Data = id платежа или пусто на шаге выбора способа)
-	cbPayOpen   = "pay_open"   // открыть экран оплаты из уведомления планировщика
+	cbPayMethod = funnels.ActionPayMethod // выбор способа оплаты (Data = провайдер)
+	cbPayCheck  = "pay_check"             // «Я оплатил» — ручная проверка оплаты
+	cbPayCancel = "pay_cancel"            // отмена (Data = id платежа или пусто на шаге выбора способа)
+	cbPayOpen   = funnels.ActionPayOpen   // открыть экран оплаты из уведомления планировщика
 )
 
 // Unique-идентификаторы inline-кнопок «Повторить» в сообщениях об ошибке
 const (
-	cbRetryPayment      = "retry_pay"       // повторить создание платежа тем же способом
-	cbRetryPaymentCheck = "retry_pay_check" // повторить проверку оплаты
-	cbRetryInvite       = "retry_invite"    // повторить создание приглашения
+	cbRetryPayment      = funnels.ActionRetryPayment // повторить создание платежа тем же способом
+	cbRetryPaymentCheck = "retry_pay_check"          // повторить проверку оплаты
+	cbRetryInvite       = "retry_invite"             // повторить создание приглашения
 )
 
 // Unique-идентификаторы inline-кнопок багрепорта
@@ -85,6 +90,9 @@ const (
 	cbAdminMismatchResolve   = "adm_mm_resolve" // экран подтверждения
 	cbAdminMismatchResolveOK = "adm_mm_ok"      // подтверждение
 	cbAdminMismatchBack      = "adm_mm_back"    // назад в карточку
+	// Экран отчётов по Воронкам.
+	cbAdminFunnel      = "adm_funnel"       // отчёт по Воронке (Data = id Воронки)
+	cbAdminFunnelsBack = "adm_funnels_back" // назад к списку Воронок
 )
 
 // Текстовые константы кнопок
@@ -145,6 +153,9 @@ const (
 	BtnAdminReferrals        = "🤝 Приглашения"
 	BtnAdminReferralOverview = "📊 Обзор"
 	BtnAdminReferralLeaders  = "🏆 Кто приглашает"
+
+	// Админ-кнопка отчётов по Воронкам
+	BtnAdminFunnels = "📊 Воронки"
 )
 
 // UserMenuKeyboardDynamic строит главное меню с динамической кнопкой оплаты.
@@ -237,6 +248,7 @@ func AdminKeyboard(maintenanceMode bool) *tele.ReplyMarkup {
 	menu.Reply(
 		menu.Row(menu.Text(BtnAdminManage), menu.Text(BtnAdminReferrals)),
 		menu.Row(menu.Text(BtnAdminBroadcast), menu.Text(BtnAdminStats)),
+		menu.Row(menu.Text(BtnAdminFunnels)),
 		menu.Row(menu.Text(maintenanceBtn)),
 		menu.Row(menu.Text(BtnAdminUserMode)),
 	)

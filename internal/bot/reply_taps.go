@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"strconv"
 
+	"github.com/fus1ond/vpn_bot/internal/funnels"
 	tele "gopkg.in/telebot.v3"
 )
 
@@ -52,6 +53,64 @@ var replyButtonCaptions = map[string]struct{}{
 	BtnAdminReferrals:          {},
 	BtnAdminReferralOverview:   {},
 	BtnAdminReferralLeaders:    {},
+	BtnAdminFunnels:            {},
+}
+
+// replyButtonActions — id Действий reply-кнопок для журнала Событий. Id
+// стабилен и от подписи не зависит: подпись можно переписать, история
+// нажатий в журнале от этого не порвётся. Id, на которые опираются Шаги
+// воронок, берутся из пакета funnels, чтобы запись и расчёт не разошлись.
+//
+// Карта шире replyButtonCaptions: «Да» здесь есть. Для уборки из чата
+// ошибиться дорого — стёрли бы реплику человека, — а для журнала набранное
+// руками «Да» и нажатие кнопки означают одно и то же: согласие.
+//
+// Тест сверяет карту со всеми Btn*-константами: новая reply-кнопка без id
+// роняет тест, а не выпадает из журнала молча.
+var replyButtonActions = map[string]string{
+	// Пользователь: главное меню и общие кнопки флоу
+	BtnStatus:       "subscription_open",
+	BtnInfo:         "info_open",
+	BtnServers:      "servers_open",
+	BtnBugReport:    "bug_report_open",
+	BtnPay:          funnels.ActionPayMenu,
+	BtnRenew:        funnels.ActionRenewMenu,
+	BtnInvites:      funnels.ActionInvitesOpen,
+	BtnBack:         "back",
+	BtnCancel:       "cancel",
+	BtnConfirmYes:   "confirm_yes",
+	BtnBugSkip:      "bug_skip",
+	BtnBugNoServer:  "bug_no_server",
+	BtnPayYooKassa:  funnels.ActionPayYooKassaReply,
+	BtnPayCrypto:    funnels.ActionPayCryptoReply,
+	BtnCheckPayment: "pay_check_reply",
+
+	// Раздел приглашений
+	BtnInviteCreate: "invite_create",
+	BtnInviteList:   "invite_list",
+	BtnInviteBack:   "invites_back",
+
+	// Админка
+	BtnAdminManage:             "admin_manage",
+	BtnAdminBroadcast:          "admin_broadcast",
+	BtnBroadcastActive:         "admin_broadcast_active",
+	BtnAdminStats:              "admin_stats",
+	BtnAdminMaintenance:        "admin_maintenance_on",
+	BtnAdminMaintenanceOff:     "admin_maintenance_off",
+	BtnAdminUserMode:           "admin_user_mode",
+	BtnAdminBack:               "admin_back",
+	BtnAdminCreateInvite:       "admin_invite_create",
+	BtnAdminBanUser:            "admin_ban",
+	BtnAdminUserInfo:           "admin_user_info",
+	BtnAdminSwitchSubscription: "admin_switch_subscription",
+	BtnAdminSwitchInfinite:     "admin_switch_infinite",
+	BtnAdminChangePrice:        "admin_change_price",
+	BtnAdminMigrationPaidYes:   "admin_migration_paid_yes",
+	BtnAdminMigrationPaidNo:    "admin_migration_paid_no",
+	BtnAdminReferrals:          "admin_referrals",
+	BtnAdminReferralOverview:   "admin_referral_overview",
+	BtnAdminReferralLeaders:    "admin_referral_leaders",
+	BtnAdminFunnels:            "admin_funnels",
 }
 
 // isReplyButtonTap отвечает, является ли текст нажатием reply-кнопки, а не

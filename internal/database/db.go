@@ -70,7 +70,7 @@ func New(dbPath string) (*DB, error) {
 	// Открываем подключение к БД. PRAGMA передаём через DSN: database/sql держит
 	// пул, и драйвер применяет параметры DSN к каждому новому соединению, а
 	// conn.Exec("PRAGMA ...") попал бы только на одно из них.
-	conn, err := sql.Open("sqlite3", dsn(dbPath))
+	conn, err := sql.Open("sqlite3", DSN(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -84,7 +84,12 @@ func New(dbPath string) (*DB, error) {
 	return &DB{conn: conn}, nil
 }
 
-// dsn добавляет к пути параметры соединения для mattn/go-sqlite3:
+// SQLiteSecondsLayout — формат момента, в котором SQLite пишет и сравнивает
+// datetime(): секунды без дробной части и зоны, время UTC.
+const SQLiteSecondsLayout = "2006-01-02 15:04:05"
+
+// DSN добавляет к пути параметры соединения для mattn/go-sqlite3. Журнал
+// Событий (пакет journal) открывает свой файл с теми же параметрами:
 //   - _busy_timeout: писатель ждёт снятия блокировки до 5 секунд, а не получает
 //     "database is locked" сразу (callback-сервер + scheduler + Telegram handler);
 //   - _foreign_keys: внешние ключи включены на каждом соединении пула;
@@ -95,7 +100,7 @@ func New(dbPath string) (*DB, error) {
 //
 // Путь передаём без префикса file:, чтобы не экранировать его как URI: драйвер
 // сам отрезает параметры после '?'.
-func dsn(dbPath string) string {
+func DSN(dbPath string) string {
 	return dbPath + "?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL&_txlock=immediate"
 }
 

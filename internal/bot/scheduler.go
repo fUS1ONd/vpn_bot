@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/fus1ond/vpn_bot/internal/database"
+	"github.com/fus1ond/vpn_bot/internal/funnels"
+	"github.com/fus1ond/vpn_bot/internal/journal"
 	"github.com/fus1ond/vpn_bot/internal/remnawave"
 	tele "gopkg.in/telebot.v3"
 )
@@ -80,6 +82,12 @@ func (b *Bot) runSubscriptionSchedulerPass() {
 	// defer, а не просто вызов в конце, потому что шаги ниже умеют выходить раньше
 	// по ошибке Remnawave, а чеки от неё не зависят.
 	defer b.issuePendingReceipts()
+
+	// Чистку журнала Событий по сроку хранения объявляем здесь же, но выполняется
+	// она в конце прохода, как и чеки: тоже через defer, от ошибок Remnawave
+	// журнал не зависит. Объявлена после чеков, поэтому выполняется раньше
+	// них — быстрый DELETE не ждёт похода в ФНС.
+	defer b.purgeEventsJournal(now)
 
 	// 5. Получаем пользователей
 	remUsers, err := b.remnawave.GetAllUsers()
@@ -420,9 +428,36 @@ func (b *Bot) sendNotificationWith(telegramID int64, notificationType string, bu
 		return
 	}
 
+	b.recordNotificationEvent(telegramID, notificationType)
+
 	if err := b.db.MarkNotificationSent(telegramID, notificationType); err != nil {
 		slog.Error("Scheduler: ошибка сохранения маркера уведомления", "error", err, "type", notificationType, "telegram_id", telegramID)
 	}
+}
+
+// notificationEventActions — уведомления планировщика, о которых пишется
+// Системное событие. Автокик (trial_expired, grace_kick) не пишется: он уже
+// лежит в таблице приглашений.
+var notificationEventActions = map[string]string{
+	notificationExpire3d: funnels.ActionReminder3d,
+	notificationExpire1d: funnels.ActionReminder1d,
+	notificationExpired:  funnels.ActionExpiredNotice,
+}
+
+// recordNotificationEvent пишет Системное событие об уведомлении, которое
+// Telegram только что принял. Запись неблокирующая: проход планировщика она
+// не тормозит.
+func (b *Bot) recordNotificationEvent(telegramID int64, notificationType string) {
+	action, ok := notificationEventActions[notificationType]
+	if !ok {
+		return
+	}
+	b.recordEvent(journal.Event{
+		At:         time.Now(),
+		TelegramID: telegramID,
+		Action:     action,
+		Source:     journal.SourceBot,
+	})
 }
 
 // isAutoKickNotFoundError проверяет, является ли ошибка признаком того,

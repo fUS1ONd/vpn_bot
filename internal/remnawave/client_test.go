@@ -146,6 +146,33 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
+// Момент первого подключения лежит в userTraffic одинаково на 2.8.x и 3.x;
+// null — пользователь ещё не подключался.
+func TestGetAllUsersParsesFirstConnectedAt(t *testing.T) {
+	for _, version := range []APIVersion{APIVersionV2, APIVersionV3} {
+		t.Run(version.String(), func(t *testing.T) {
+			client := newVersionedClient(t, version, func(r *http.Request) (*http.Response, error) {
+				payload := `{"response":{"total":2,"users":[
+					{"id":1,"telegramId":11,"userTraffic":{"usedTrafficBytes":0,"lifetimeUsedTrafficBytes":0,"onlineAt":null,"firstConnectedAt":"2026-09-01T10:00:00.000Z"}},
+					{"id":2,"telegramId":22,"userTraffic":{"usedTrafficBytes":0,"lifetimeUsedTrafficBytes":0,"onlineAt":null,"firstConnectedAt":null}}
+				]}}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(payload)),
+					Header:     make(http.Header),
+				}, nil
+			})
+
+			users, err := client.GetAllUsers()
+			require.NoError(t, err)
+			require.Len(t, users, 2)
+			require.NotNil(t, users[0].UserTraffic.FirstConnectedAt)
+			require.Equal(t, time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC), users[0].UserTraffic.FirstConnectedAt.UTC())
+			require.Nil(t, users[1].UserTraffic.FirstConnectedAt)
+		})
+	}
+}
+
 func TestGetUserHwidDevicesCount(t *testing.T) {
 	client := newVersionedClient(t, APIVersionV2, func(r *http.Request) (*http.Response, error) {
 		require.Equal(t, http.MethodGet, r.Method)

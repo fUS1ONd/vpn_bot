@@ -212,7 +212,7 @@ func (e *edgeEnv) pending(t *testing.T, provider string, age time.Duration) int6
 	id, err := e.db.CreatePayment(p)
 	require.NoError(t, err)
 	_, err = e.db.Conn().Exec(`UPDATE payments SET created_at = ? WHERE id = ?`,
-		time.Now().UTC().Add(-age).Format("2006-01-02 15:04:05"), id)
+		time.Now().UTC().Add(-age).Format(database.SQLiteSecondsLayout), id)
 	require.NoError(t, err)
 	return id
 }

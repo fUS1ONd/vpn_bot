@@ -277,7 +277,7 @@ func (db *DB) SetProviderPaidAt(id int64, paidAt time.Time) error {
 func (db *DB) PendingPaymentIDsCreatedBefore(cutoff time.Time) ([]int64, error) {
 	return db.paymentIDs(
 		`SELECT id FROM payments WHERE status = 'pending' AND datetime(created_at) <= datetime(?) ORDER BY id`,
-		cutoff.UTC().Format("2006-01-02 15:04:05"),
+		cutoff.UTC().Format(SQLiteSecondsLayout),
 	)
 }
 
@@ -286,7 +286,7 @@ func (db *DB) PendingPaymentIDsCreatedBefore(cutoff time.Time) ([]int64, error) 
 func (db *DB) ClosedPaymentIDsCreatedAfter(since time.Time) ([]int64, error) {
 	return db.paymentIDs(
 		`SELECT id FROM payments WHERE status IN ('expired', 'canceled') AND datetime(created_at) > datetime(?) ORDER BY id`,
-		since.UTC().Format("2006-01-02 15:04:05"),
+		since.UTC().Format(SQLiteSecondsLayout),
 	)
 }
 
