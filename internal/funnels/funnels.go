@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fus1ond/vpn_bot/internal/database"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -227,7 +226,10 @@ type Funnels struct {
 // но искажали бы маленькие числа воронок). panel — порт панели для Шага
 // первого подключения; nil допустим, Шаг тогда «нет данных».
 func New(eventsPath, mainDBPath string, excluded []int64, panel FirstConnections) (*Funnels, error) {
-	conn, err := sql.Open("sqlite3", database.DSN(eventsPath))
+	// Журнал — только на чтение: пишет в него один бот. Режим WAL у файла уже
+	// выставлен журналом, читателю его не выставлять, а без _txlock=immediate
+	// чтение не берёт блокировку записи.
+	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(eventsPath)+"?mode=ro&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open events journal: %w", err)
 	}

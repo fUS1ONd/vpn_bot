@@ -32,6 +32,9 @@ func newFixture(t *testing.T) fixture {
 	db, err := database.New(f.mainPath)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
+	// Модуль открывает журнал только на чтение и файл не создаёт: бот
+	// открывает журнал раньше модуля, так же поступает и фикстура.
+	f.record(t)
 	return f
 }
 

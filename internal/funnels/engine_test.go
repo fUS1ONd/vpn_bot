@@ -136,6 +136,28 @@ func TestAttachMain_IsReadOnly(t *testing.T) {
 	assert.Error(t, err, "основная база должна быть подключена только на чтение")
 }
 
+// Журнал модуль открывает только на чтение: пишет в него один бот. Расчёт при
+// этом идёт, пока бот держит журнал открытым в WAL.
+func TestEventsJournal_IsReadOnly(t *testing.T) {
+	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	j, err := journal.Open(f.eventsPath, journal.Options{})
+	require.NoError(t, err)
+	defer j.Close()
+	f.record(t, journal.Event{At: now.Add(-time.Hour), TelegramID: 1, Action: "a"})
+
+	funnels := withFunnel(t, f, funnel{id: "test", window: time.Hour, steps: []step{
+		{id: "a", source: journalAction("a")},
+	}})
+
+	report, err := funnels.Report(context.Background(), "test", now.Add(-24*time.Hour), now)
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Steps[0].People)
+
+	_, err = funnels.events.ExecContext(context.Background(), "DELETE FROM events")
+	assert.Error(t, err, "журнал должен быть открыт только на чтение")
+}
+
 // Неизвестная Воронка — ошибка, а не пустой отчёт.
 func TestReport_UnknownFunnel(t *testing.T) {
 	f := newFixture(t)
