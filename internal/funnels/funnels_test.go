@@ -291,6 +291,66 @@ func TestInviteFunnel_AutorenewIsNotFriendPayment(t *testing.T) {
 	assert.Equal(t, 0, stepPeople(report)[StepFriendPaid])
 }
 
+// Друг автора — тот, кого привело первое использованное им приглашение
+// (first-touch, как в статистике приглашений админки). Вернувшийся после
+// автокика по чужому приглашению — не новый друг второго автора: ни
+// регистрация, ни оплата ему не засчитываются, и одна оплата не делится на двоих.
+func TestInviteFunnel_FriendIsFirstTouch(t *testing.T) {
+	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	opened := now.Add(-5 * 24 * time.Hour)
+	later := opened.Add(time.Hour)
+
+	f := newFixture(t)
+	f.author(t, 1, opened)
+	f.author(t, 2, opened)
+	f.author(t, 3, opened)
+	// 101 пришёл к автору 1 и оплатил
+	f.invite(t, database.InviteKindReferral, 1, opened, 101, later)
+	// 102 когда-то пришёл к автору 1, был кикнут и вернулся к автору 2
+	f.invite(t, database.InviteKindReferral, 1, opened.Add(-90*24*time.Hour), 102, opened.Add(-89*24*time.Hour))
+	f.invite(t, database.InviteKindReferral, 2, opened, 102, later)
+	f.payment(t, 102, "confirmed", false, later.Add(time.Hour))
+	// 103 впервые пришёл по служебному приглашению, потом — по приглашению автора 3
+	f.invite(t, database.InviteKindAdmin, ownerID, opened.Add(-90*24*time.Hour), 103, opened.Add(-89*24*time.Hour))
+	f.invite(t, database.InviteKindReferral, 3, opened, 103, later)
+	f.payment(t, 103, "confirmed", false, later.Add(time.Hour))
+	f.payment(t, 101, "confirmed", false, later.Add(time.Hour))
+
+	report, err := f.open(t).Report(context.Background(), FunnelInvite, now.Add(-7*24*time.Hour), now)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, stepPeople(report)[StepFriendRegistered])
+	assert.Equal(t, 1, stepPeople(report)[StepFriendPaid])
+}
+
+// Время в основной базе лежит в разных форматах: с долями секунды и смещением
+// пояса (time.Time драйвера) и без них (CURRENT_TIMESTAMP). Граница Шага
+// сравнивается по моменту, а не по строке: 12:00:00.5 по Москве — это 09:00:00.5
+// UTC, и оно позже входа в 09:00:00.2 UTC, хоть строка «12:…» и «больше».
+func TestInviteFunnel_MixedTimeFormats(t *testing.T) {
+	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	opened := time.Date(2026, 9, 25, 9, 0, 0, 200_000_000, time.UTC)
+	moscow := time.FixedZone("MSK", 3*60*60)
+
+	f := newFixture(t)
+	f.record(t,
+		journal.Event{At: opened, TelegramID: 1, Action: ActionInvitesOpen},
+		journal.Event{At: opened, TelegramID: 2, Action: ActionInvitesOpen},
+	)
+	// 1 создал через 0.3 с после входа — время записано по Москве
+	f.exec(t, `INSERT INTO invites (code, created_by, kind, created_at) VALUES ('m1', 1, ?, ?)`,
+		database.InviteKindReferral, opened.Add(300*time.Millisecond).In(moscow))
+	// 2 создал за 0.1 с до входа — в ту же секунду, но раньше: не Шаг когорты
+	f.exec(t, `INSERT INTO invites (code, created_by, kind, created_at) VALUES ('m2', 2, ?, ?)`,
+		database.InviteKindReferral, opened.Add(-100*time.Millisecond).In(moscow))
+
+	report, err := f.open(t).Report(context.Background(), FunnelInvite, now.Add(-7*24*time.Hour), now)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, stepPeople(report)[StepInvitesOpened])
+	assert.Equal(t, 1, stepPeople(report)[StepInviteCreated])
+}
+
 // Друг, пришедший позже 14 дней от входа автора, в Воронку не попадает.
 func TestInviteFunnel_FriendAfterWindowIsNotCounted(t *testing.T) {
 	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)

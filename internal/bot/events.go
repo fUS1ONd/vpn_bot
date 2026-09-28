@@ -106,16 +106,6 @@ func userAction(c tele.Context) (string, bool) {
 	return "", false
 }
 
-// handleShareChosen принимает выбор inline-результата «Поделиться»: приглашение
-// ушло в чат. Делать с ним нечего, но без обработчика telebot не пропустит
-// апдейт через middleware, и Шаг «отправил» остался бы без Событий.
-//
-// Telegram присылает выбор, только если у @BotFather включён
-// /setinlinefeedback; без него Шаг «отправил» показывает «нет данных».
-func (b *Bot) handleShareChosen(tele.Context) error {
-	return nil
-}
-
 // messageAction — id Действия входящего сообщения. Reply-кнопка узнаётся по
 // точному совпадению подписи и проверяется первой: подпись не бывает командой.
 func messageAction(msg *tele.Message) (string, bool) {

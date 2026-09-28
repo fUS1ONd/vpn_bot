@@ -123,6 +123,16 @@ func (b *Bot) handleReferralShareQuery(c tele.Context) error {
 	})
 }
 
+// handleShareChosen принимает выбор inline-результата «Поделиться»: приглашение
+// ушло в чат. Делать с ним нечего, но без обработчика telebot не пропустит
+// апдейт через middleware, и Шаг «отправил» остался бы без Событий.
+//
+// Telegram присылает выбор, только если у @BotFather включён
+// /setinlinefeedback; без него Шаг «отправил» показывает «нет данных».
+func (b *Bot) handleShareChosen(tele.Context) error {
+	return nil
+}
+
 // emptyShareResponse — ответ, когда делиться нечем.
 //
 // SwitchPMParameter обязателен: с одним SwitchPMText Telegram отвечает
