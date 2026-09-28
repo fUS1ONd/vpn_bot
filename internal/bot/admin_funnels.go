@@ -204,7 +204,9 @@ func renderFunnelReport(report funnels.Report, periodDays int) string {
 		switch {
 		case step.NoData:
 			sb.WriteString("нет данных")
-			if hint, ok := funnelNoDataHints[step.ID]; ok {
+			// Подсказка — только у Шага с первичной причиной: у каскадного
+			// «нет данных» причина выше, и подсказка по его id соврала бы.
+			if hint, ok := funnelNoDataHints[step.ID]; ok && !step.Cascaded {
 				hints = append(hints, hint)
 			}
 		case index == 0:

@@ -94,6 +94,26 @@ func TestCompute_FailedSourceIsNoData(t *testing.T) {
 	assert.True(t, report.Steps[2].NoData)
 }
 
+// Первичная причина «нет данных» — только у Шага, чей источник упал; Шаги
+// после него помечены каскадом: подсказку о причине показывать у них нельзя.
+func TestCompute_NoDataAfterFailedSourceIsCascaded(t *testing.T) {
+	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.record(t, journal.Event{At: now.Add(-time.Hour), TelegramID: 1, Action: "a"})
+
+	funnels := withFunnel(t, f, funnel{id: "test", window: time.Hour, steps: []step{
+		{id: "a", source: journalAction("a")},
+		{id: "b", source: failingSource},
+		{id: "c", source: journalAction("c")},
+	}})
+
+	report, err := funnels.Report(context.Background(), "test", now.Add(-24*time.Hour), now)
+	require.NoError(t, err)
+
+	assert.Equal(t, StepReport{ID: "b", NoData: true}, report.Steps[1])
+	assert.Equal(t, StepReport{ID: "c", NoData: true, Cascaded: true}, report.Steps[2])
+}
+
 // Основная база подключена только на чтение: воронки не могут её изменить.
 func TestAttachMain_IsReadOnly(t *testing.T) {
 	f := newFixture(t)

@@ -184,6 +184,19 @@ func TestRenderFunnelReport_SentNoDataHint(t *testing.T) {
 	assert.Contains(t, text, "/setinlinefeedback")
 }
 
+// «Нет данных» у «Отправили» каскадом от упавшего раньше Шага — не повод
+// звать владельца в @BotFather: подсказка только у Шага с первичной причиной.
+func TestRenderFunnelReport_CascadedNoDataHasNoHint(t *testing.T) {
+	report := funnels.Report{FunnelID: funnels.FunnelInvite, Steps: []funnels.StepReport{
+		{ID: funnels.StepInvitesOpened, People: 3, FromPrevious: 1, FromFirst: 1},
+		{ID: funnels.StepInviteCreated, NoData: true},
+		{ID: funnels.StepInviteSent, NoData: true, Cascaded: true},
+	}}
+	text := renderFunnelReport(report, 7)
+	assert.Contains(t, text, "Отправили — нет данных")
+	assert.NotContains(t, text, "/setinlinefeedback")
+}
+
 // Следующие Шаги показывают конверсии к предыдущему и к первому; «нет данных»
 // — не ноль.
 func TestRenderFunnelReport_ConversionsAndNoData(t *testing.T) {

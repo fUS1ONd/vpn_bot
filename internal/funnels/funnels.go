@@ -127,13 +127,15 @@ type Report struct {
 
 // StepReport — один Шаг отчёта. Конверсии — доли от 0 до 1; у первого Шага
 // обе равны 1, если в когорте есть люди. NoData — источник Шага недоступен:
-// это не ноль, а «не знаем».
+// это не ноль, а «не знаем». Cascaded — «нет данных» унаследовано от упавшего
+// раньше Шага, а не от своего источника: причину нужно искать выше.
 type StepReport struct {
 	ID           string
 	People       int
 	FromPrevious float64
 	FromFirst    float64
 	NoData       bool
+	Cascaded     bool
 }
 
 // occurrence — момент, когда человек сделал Шаг.
@@ -326,6 +328,7 @@ func (f *Funnels) compute(ctx context.Context, conn *sql.Conn, fn funnel, from, 
 		result := StepReport{ID: s.id}
 		if noData {
 			result.NoData = true
+			result.Cascaded = true
 			report.Steps = append(report.Steps, result)
 			continue
 		}
