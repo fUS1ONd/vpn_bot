@@ -52,10 +52,7 @@ func (f fixture) record(t *testing.T, events ...journal.Event) {
 
 func (f fixture) open(t *testing.T) *Funnels {
 	t.Helper()
-	funnels, err := New(f.eventsPath, f.mainPath, []int64{ownerID})
-	require.NoError(t, err)
-	t.Cleanup(func() { funnels.Close() })
-	return funnels
+	return f.openWithPanel(t, nil)
 }
 
 // Воронка «Приглашение» считает людей, открывших раздел приглашений за период:

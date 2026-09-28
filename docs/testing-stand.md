@@ -104,6 +104,7 @@ MOCK_PANEL_PORT=8081 go run ./cmd/mockpanel
 | `status` | `ACTIVE`, `DISABLED`, `LIMITED`, `EXPIRED` |
 | `usedTrafficGB` | Потраченный трафик |
 | `devices` | Выдать N правдоподобных HWID-устройств (0 — убрать все) |
+| `firstConnectedHoursAgo` | `userTraffic.firstConnectedAt` — первое подключение N часов назад (Шаг «Подключили устройство» Воронки онбординга). Отрицательное — снова `null`, «не подключался». Без этого поля у нового пользователя `null`, как у настоящей панели |
 
 ```bash
 # Подписка кончается через 60 часов — окно уведомления «за 3 дня»
@@ -123,6 +124,9 @@ curl -X POST localhost:8081/mock/user -d '{"telegramId":123456,"usedTrafficGB":1
 
 # Три устройства — экран «Мои устройства» и счётчик в карточке
 curl -X POST localhost:8081/mock/user -d '{"telegramId":123456,"devices":3}'
+
+# Первое подключение 2 часа назад — Шаг «Подключили устройство» в Воронке «Онбординг»
+curl -X POST localhost:8081/mock/user -d '{"telegramId":123456,"firstConnectedHoursAgo":2}'
 ```
 
 Срок задаётся **относительно «сейчас»**, а не датой: все окна планировщика

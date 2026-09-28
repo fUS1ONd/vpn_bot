@@ -206,6 +206,40 @@ var referralFriendsPaid = tableOccurrences("p.confirmed_at",
 	database.InviteKindReferral,
 )
 
+// usersRegistered — вход онбординга: регистрация в боте, момент — created_at
+// пользователя. Секунда не округляется вверх, в отличие от платежей: начало
+// секунды не позже настоящего момента, и подключение в ту же секунду остаётся
+// «после регистрации».
+var usersRegistered = tableOccurrences("u.created_at",
+	`SELECT u.telegram_id, u.created_at FROM `+mainSchema+`.users u WHERE u.created_at IS NOT NULL`,
+)
+
+// errNoPanel — порт панели не подключён к модулю.
+var errNoPanel = errors.New("panel port is not configured")
+
+// firstConnected — Шаг «первое подключение устройства» по данным панели.
+// Соединение с базами не нужно: момент знает только панель, и спрашивается она
+// при каждом расчёте.
+func firstConnected(panel FirstConnections) source {
+	return func(ctx context.Context, _ *sql.Conn, from, to time.Time) ([]occurrence, error) {
+		if panel == nil {
+			return nil, errNoPanel
+		}
+		connected, err := panel.FirstConnections(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var occurrences []occurrence
+		for telegramID, at := range connected {
+			at = at.UTC()
+			if !at.Before(from) && at.Before(to) {
+				occurrences = append(occurrences, occurrence{TelegramID: telegramID, At: at})
+			}
+		}
+		return occurrences, nil
+	}
+}
+
 // tableOccurrences — Шаг из таблиц основной базы. query отбирает пары
 // (telegram_id, момент) и заканчивается условием WHERE; границы интервала по
 // столбцу момента at дописываются здесь, через datetime(): в основной базе

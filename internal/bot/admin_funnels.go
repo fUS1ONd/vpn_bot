@@ -37,8 +37,9 @@ var funnelPeriodsDays = []int{7, 30, 90}
 
 // funnelTitles — подписи Воронок на экране.
 var funnelTitles = map[string]string{
-	funnels.FunnelInvite:  "Приглашение",
-	funnels.FunnelPayment: "Оплата",
+	funnels.FunnelInvite:     "Приглашение",
+	funnels.FunnelPayment:    "Оплата",
+	funnels.FunnelOnboarding: "Онбординг",
 }
 
 // funnelStepLabels — подписи Шагов на экране.
@@ -53,6 +54,9 @@ var funnelStepLabels = map[string]string{
 	funnels.StepPaymentMethodChosen: "Выбрали способ",
 	funnels.StepPaymentCreated:      "Платёж создан",
 	funnels.StepPaymentConfirmed:    "Оплатили",
+
+	funnels.StepRegistered:      "Зарегистрировались",
+	funnels.StepDeviceConnected: "Подключили устройство",
 }
 
 // funnelNoDataHints — подсказка владельцу, почему у Шага «нет данных», если
@@ -60,6 +64,8 @@ var funnelStepLabels = map[string]string{
 var funnelNoDataHints = map[string]string{
 	funnels.StepInviteSent: "«Отправили» считается по выбору результата «Поделиться»: " +
 		"включите у @BotFather /setinlinefeedback (100%).",
+	funnels.StepDeviceConnected: "Панель не ответила: «Подключили устройство» не посчитан, " +
+		"следующий Шаг считается от регистрации.",
 }
 
 func funnelTitle(id string) string {
@@ -200,6 +206,10 @@ func renderFunnelReport(report funnels.Report, periodDays int) string {
 			}
 		case index == 0:
 			fmt.Fprintf(&sb, "%d", step.People)
+		case report.Steps[index-1].NoData:
+			// Предыдущий Шаг неизвестен, а этот посчитан (Шаг после
+			// необязательного): конверсии к неизвестному нет.
+			fmt.Fprintf(&sb, "%d (— · %d%%)", step.People, percent(step.FromFirst))
 		default:
 			fmt.Fprintf(&sb, "%d (%d%% · %d%%)", step.People, percent(step.FromPrevious), percent(step.FromFirst))
 		}

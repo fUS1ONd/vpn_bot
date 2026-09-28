@@ -201,6 +201,23 @@ func TestRenderFunnelReport_ConversionsAndNoData(t *testing.T) {
 	assert.Contains(t, text, "— нет данных")
 }
 
+// Панель не ответила: у Шага устройства «нет данных» с подсказкой, а «Оплатили»
+// посчитан от регистрации — конверсии к неизвестному Шагу нет, к первому есть.
+func TestRenderFunnelReport_StepAfterNoData(t *testing.T) {
+	text := renderFunnelReport(funnels.Report{
+		FunnelID: funnels.FunnelOnboarding,
+		Steps: []funnels.StepReport{
+			{ID: funnels.StepRegistered, People: 10, FromPrevious: 1, FromFirst: 1},
+			{ID: funnels.StepDeviceConnected, NoData: true},
+			{ID: funnels.StepPaymentConfirmed, People: 3, FromFirst: 0.3},
+		},
+	}, 7)
+
+	assert.Contains(t, text, "Подключили устройство — нет данных")
+	assert.Contains(t, text, "Оплатили — 3 (— · 30%)")
+	assert.Contains(t, text, "Панель не ответила")
+}
+
 // Ошибка расчёта не оставляет владельца с вечной крутилкой.
 func TestAdminFunnel_ReportError(t *testing.T) {
 	b := funnelsTestBot(&fakeFunnels{err: errors.New("disk")})
@@ -236,7 +253,7 @@ func TestAdminFunnelsMenu_WithoutModule(t *testing.T) {
 // новая Воронка без подписи показала бы владельцу сырой id.
 func TestFunnelLabels_CoverModule(t *testing.T) {
 	dir := t.TempDir()
-	module, err := funnels.New(filepath.Join(dir, "events.db"), filepath.Join(dir, "bot.db"), nil)
+	module, err := funnels.New(filepath.Join(dir, "events.db"), filepath.Join(dir, "bot.db"), nil, nil)
 	require.NoError(t, err)
 	defer module.Close()
 

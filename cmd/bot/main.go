@@ -153,7 +153,8 @@ func main() {
 		// Буфер сбрасывается в базу при штатной остановке: defer отработает
 		// после telegramBot.Run и ожидания ctx ниже.
 		defer eventsJournal.Close()
-		funnelsModule, err := funnels.New(eventsPath, cfg.DBPath, []int64{cfg.AdminID})
+		funnelsModule, err := funnels.New(eventsPath, cfg.DBPath, []int64{cfg.AdminID},
+			bot.NewPanelFirstConnections(remnawaveClient))
 		if err != nil {
 			slog.Error("Failed to open funnels module", "error", err)
 		} else {

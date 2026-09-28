@@ -154,6 +154,32 @@ func TestControlSetsStatusAndTraffic(t *testing.T) {
 	require.EqualValues(t, int64(1.5*1024*1024*1024), u["userTraffic"].(map[string]any)["usedTrafficBytes"])
 }
 
+// Первое подключение задаётся пультом и отдаётся в userTraffic, как у панели:
+// до подключения — null, отрицательное значение пульта возвращает null.
+func TestControlSetsFirstConnectedAt(t *testing.T) {
+	srv := httptest.NewServer(newServer())
+	defer srv.Close()
+
+	uuid, _ := createUser(t, srv, 333)
+
+	firstConnected := func() any {
+		_, parsed := get(t, srv, "/api/users/"+uuid)
+		traffic := parsed["response"].(map[string]any)["userTraffic"].(map[string]any)
+		value, present := traffic["firstConnectedAt"]
+		require.True(t, present, "поле обязано быть и до подключения")
+		return value
+	}
+	require.Nil(t, firstConnected())
+
+	_, _ = post(t, srv, "/mock/user", `{"telegramId":333,"firstConnectedHoursAgo":5}`)
+	at, err := time.Parse(time.RFC3339Nano, firstConnected().(string))
+	require.NoError(t, err)
+	require.WithinDuration(t, time.Now().UTC().Add(-5*time.Hour), at, time.Minute)
+
+	_, _ = post(t, srv, "/mock/user", `{"telegramId":333,"firstConnectedHoursAgo":-1}`)
+	require.Nil(t, firstConnected())
+}
+
 func TestControlRejectsBadRequests(t *testing.T) {
 	srv := httptest.NewServer(newServer())
 	defer srv.Close()

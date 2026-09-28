@@ -53,8 +53,9 @@ const (
 
 // Воронки.
 const (
-	FunnelInvite  = "invite"
-	FunnelPayment = "payment"
+	FunnelInvite     = "invite"
+	FunnelPayment    = "payment"
+	FunnelOnboarding = "onboarding"
 )
 
 // Шаги воронок.
@@ -72,7 +73,19 @@ const (
 	StepPaymentMethodChosen = "payment_method_chosen"
 	StepPaymentCreated      = "payment_created"
 	StepPaymentConfirmed    = "payment_confirmed"
+
+	// Шаги онбординга: регистрация в боте и первое подключение устройства по
+	// данным панели. Завершает Воронку тот же Шаг «платёж подтверждён».
+	StepRegistered      = "registered"
+	StepDeviceConnected = "device_connected"
 )
+
+// FirstConnections — порт панели для воронок: момент первого подключения
+// устройства по Telegram ID. Кто ни разу не подключался, в ответе отсутствует.
+// Ошибка — панель недоступна, и Шаг устройства получает «нет данных».
+type FirstConnections interface {
+	FirstConnections(ctx context.Context) (map[int64]time.Time, error)
+}
 
 // mainSchema — имя, под которым основная база подключена к соединению журнала.
 const mainSchema = "main_db"
@@ -120,6 +133,12 @@ type source func(ctx context.Context, conn *sql.Conn, from, to time.Time) ([]occ
 type step struct {
 	id     string
 	source source
+	// optional — отказ источника не обрывает цепочку: Шаг получает «нет
+	// данных», а следующий считается от последнего посчитанного Шага. Годится
+	// только для Шага, без которого следующий имеет смысл сам по себе (оплата
+	// без известного подключения — всё ещё оплата новичка); у остальных Шагов
+	// подмножество неизвестного не посчитать.
+	optional bool
 }
 
 // funnel — определение Воронки: Шаги по порядку и окно от входа, в пределах
@@ -130,8 +149,9 @@ type funnel struct {
 	steps  []step
 }
 
-// definitions — список Воронок в порядке показа.
-func definitions() []funnel {
+// definitions — список Воронок в порядке показа. panel — порт панели для Шага
+// устройства; nil — панель не подключена, и Шаг всегда «нет данных».
+func definitions(panel FirstConnections) []funnel {
 	return []funnel{
 		{
 			id:     FunnelInvite,
@@ -154,6 +174,15 @@ func definitions() []funnel {
 				{id: StepPaymentConfirmed, source: paymentConfirmed},
 			},
 		},
+		{
+			id:     FunnelOnboarding,
+			window: 14 * 24 * time.Hour,
+			steps: []step{
+				{id: StepRegistered, source: usersRegistered},
+				{id: StepDeviceConnected, source: firstConnected(panel), optional: true},
+				{id: StepPaymentConfirmed, source: paymentConfirmed},
+			},
+		},
 	}
 }
 
@@ -168,8 +197,9 @@ type Funnels struct {
 
 // New открывает журнал на чтение расчётов. excluded — Telegram ID, которые не
 // попадают ни в один Шаг (владелец: его нажатия пишутся в журнал для отладки,
-// но искажали бы маленькие числа воронок).
-func New(eventsPath, mainDBPath string, excluded []int64) (*Funnels, error) {
+// но искажали бы маленькие числа воронок). panel — порт панели для Шага
+// первого подключения; nil допустим, Шаг тогда «нет данных».
+func New(eventsPath, mainDBPath string, excluded []int64, panel FirstConnections) (*Funnels, error) {
 	conn, err := sql.Open("sqlite3", database.DSN(eventsPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open events journal: %w", err)
@@ -178,7 +208,7 @@ func New(eventsPath, mainDBPath string, excluded []int64) (*Funnels, error) {
 	for _, id := range excluded {
 		set[id] = struct{}{}
 	}
-	return &Funnels{events: conn, mainPath: mainDBPath, excluded: set, funnels: definitions(), now: time.Now}, nil
+	return &Funnels{events: conn, mainPath: mainDBPath, excluded: set, funnels: definitions(panel), now: time.Now}, nil
 }
 
 // Close закрывает соединения модуля.
@@ -258,6 +288,8 @@ func (f *Funnels) attachMain(ctx context.Context, conn *sql.Conn) func() {
 // периоде; каждый следующий Шаг — подмножество предыдущего, сделанный не
 // раньше предыдущего и не позже конца окна от входа. Источник Шага упал —
 // этот и все следующие Шаги «нет данных»: подмножество неизвестного не посчитать.
+// Исключение — необязательный Шаг (step.optional): «нет данных» только у него,
+// а следующий Шаг считается от последнего посчитанного.
 func (f *Funnels) compute(ctx context.Context, conn *sql.Conn, fn funnel, from, to time.Time) Report {
 	report := Report{FunnelID: fn.id, From: from, To: to}
 
@@ -284,7 +316,8 @@ func (f *Funnels) compute(ctx context.Context, conn *sql.Conn, fn funnel, from, 
 			} else {
 				slog.Warn("Funnel step source failed", "funnel", fn.id, "step", s.id, "error", err)
 			}
-			noData = true
+			// Первый Шаг необязательным не бывает: без входа нет когорты.
+			noData = index == 0 || !s.optional
 			result.NoData = true
 			report.Steps = append(report.Steps, result)
 			continue

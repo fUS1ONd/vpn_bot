@@ -81,6 +81,9 @@ type Traffic struct {
 	UsedTrafficBytes         int64      `json:"usedTrafficBytes"`
 	LifetimeUsedTrafficBytes int64      `json:"lifetimeUsedTrafficBytes"`
 	OnlineAt                 *time.Time `json:"onlineAt"`
+	// FirstConnectedAt — момент первого подключения устройства; nil — ни разу
+	// не подключался. Поле одинаково в 2.8.x и 3.x.
+	FirstConnectedAt *time.Time `json:"firstConnectedAt"`
 }
 
 // Node — данные ноды из Remnawave
