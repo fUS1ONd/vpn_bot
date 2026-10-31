@@ -2,49 +2,53 @@
 
 С 29.10.2026 `api.yookassa.ru` и `yoomoney.ru` не отвечают на TLS с IP сервера бота:
 TCP соединяется, рукопожатие висит, в логах бота — `TLS handshake timeout`. С домашнего
-сервера те же адреса отвечают сразу. Platega и `lknpd.nalog.ru` с сервера доступны.
+сервера те же адреса отвечают сразу.
 
 ## Устройство
 
 ```text
-контейнер бота → 172.18.0.1:1081 (ssh -D на сервере) → home:22022 → api.yookassa.ru:443
+контейнер бота → ipip-home → 10.255.30.1:1081 (dante на домашнем сервере) → api.yookassa.ru:443
 ```
 
-`127.0.0.1:22022` на сервере — обратный туннель, который держит сам домашний сервер
-(`reverse-ssh.service`), поэтому смена домашнего IP ничего не ломает. `socks-proxy.service`
-на домашнем сервере не подходит: он выводит домашний сервер в интернет через сервер бота.
+Отдельный SSH-туннель не нужен: контейнер достаёт `10.255.30.1` через существующий ipip.
+`socks-proxy.service` на домашнем сервере не подходит: он выводит домашний сервер в
+интернет через сервер бота, то есть в обратную сторону.
 
-Домашний сервер — единая точка отказа. Без него касса недоступна, отката на прямой путь
-нет, потому что прямой путь не работает. Платежи, начатые до падения, подхватит сверка.
+ipip не шифрует трафик, но внутри него идёт TLS до кассы: ключ магазина и данные платежей
+закрыты. Адрес назначения в SOCKS виден, это допустимо.
+
+Домашний сервер — единая точка отказа. Отката на прямой путь нет, потому что прямой путь
+не работает. В ipip домашний адрес прописан статически: при его смене пропадёт и прокси.
 
 ## Настройка
 
-1. На сервере бота создать ключ без пароля: `ssh-keygen -t ed25519 -N '' -f /root/.ssh/yookassa-proxy`.
-2. На домашнем сервере добавить его в `~/.ssh/authorized_keys` с ограничением только на кассу:
+На домашнем сервере:
 
-   ```text
-   restrict,port-forwarding,permitopen="api.yookassa.ru:443" ssh-ed25519 AAAA... yookassa-proxy
-   ```
+```bash
+sudo apt-get install -y dante-server
+sudo cp scripts/danted-yookassa.conf /etc/danted.conf
+sudo mkdir -p /etc/systemd/system/danted.service.d
+printf '[Service]\nRestart=always\nRestartSec=10\n' | sudo tee /etc/systemd/system/danted.service.d/restart.conf
+sudo systemctl daemon-reload
+sudo systemctl enable danted
+sudo systemctl restart danted
+```
 
-   Ограничение работает потому, что клиент передаёт прокси имя хоста, а не IP.
-3. На сервере бота: скопировать `scripts/yookassa-proxy.service` в `/etc/systemd/system/`,
-   выполнить `systemctl enable --now yookassa-proxy` и открыть порт только докер-сети:
-   `ufw allow from 172.18.0.0/16 to 172.18.0.1 port 1081 proto tcp`.
+`Restart=always` нужен потому, что dante не стартует, пока не поднят ipip-интерфейс.
+Фильтр `to: api.yookassa.ru` работает потому, что клиент передаёт прокси имя хоста, а не IP.
 
-   Адрес `172.18.0.1` — шлюз сети `remnawave-network`. Если сеть пересоздана с другой
-   подсетью, адрес меняется в юните, правиле ufw и `YOOKASSA_PROXY_URL`.
-4. В `.env` бота: `YOOKASSA_PROXY_URL=socks5://172.18.0.1:1081`, затем перезапустить бота.
+В `.env` бота: `YOOKASSA_PROXY_URL=socks5://10.255.30.1:1081`, затем пересоздать контейнер.
 
 ## Проверка
 
-Без ключа касса отвечает 401, и это успех: ответ получен, путь работает.
+С сервера бота. Без ключа касса отвечает 401, и это успех: ответ получен, путь работает.
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' --socks5-hostname 172.18.0.1:1081 https://api.yookassa.ru/v3/me
+curl -sS -o /dev/null -w '%{http_code}\n' --socks5-hostname 10.255.30.1:1081 https://api.yookassa.ru/v3/me
 ```
 
-Другой хост через туннель должен быть отклонён: так проверяется ограничение ключа.
+Другой хост должен быть отклонён: так проверяется ограничение.
 
 ```bash
-curl -sS -m 10 --socks5-hostname 172.18.0.1:1081 https://ya.ru
+curl -sS -m 10 --socks5-hostname 10.255.30.1:1081 https://ya.ru
 ```

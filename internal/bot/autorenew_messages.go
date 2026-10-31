@@ -70,7 +70,7 @@ func (b *Bot) reportAutorenewOutage(attempted, transportFailures int) {
 	}
 	b.sendAdminAlert(fmt.Sprintf(
 		"⚠️ Автосписания: ни одна попытка не прошла (%d из %d — сбой связи, 5xx, 401 или 403).\n\n"+
-			"Первым делом проверьте связь с кассой: блокировку сервера и туннель YOOKASSA_PROXY_URL. "+
+			"Первым делом проверьте связь с кассой: блокировку сервера и прокси YOOKASSA_PROXY_URL. "+
 			"Если связь есть, проверьте в кабинете кассы ключ и разрешение на автоплатежи.",
 		transportFailures, attempted))
 }
