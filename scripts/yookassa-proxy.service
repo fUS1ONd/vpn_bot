@@ -1,0 +1,17 @@
+# SOCKS5-выход к ЮKassa через домашний сервер. Ставится на сервер бота, см.
+# docs/yookassa-proxy.md. Порт слушает на шлюзе докер-сети: снаружи он не виден.
+[Unit]
+Description=SOCKS5-туннель до ЮKassa через домашний сервер
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh -NT -i /root/.ssh/yookassa-proxy -p 22022 \
+    -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    -o ConnectTimeout=10 -D 172.18.0.1:1081 fus1ond@127.0.0.1
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

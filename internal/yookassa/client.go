@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -65,6 +66,16 @@ func (c *Client) SetHTTPClient(client *http.Client) {
 		c.http = client
 	}
 }
+
+// SetProxy пускает все запросы к кассе через указанный прокси. Отката на прямое
+// соединение нет намеренно: прокси нужен там, где прямой путь не работает, и
+// откат съел бы бюджет повторов, отведённый под ответ вебхуку.
+func (c *Client) SetProxy(proxy *url.URL) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyURL(proxy)
+	c.http.Transport = transport
+}
+
 func (c *Client) Name() string   { return paymentprovider.YooKassa }
 func (c *Client) ShopID() string { return c.shopID }
 

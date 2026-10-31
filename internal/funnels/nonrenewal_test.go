@@ -102,7 +102,10 @@ func TestNonRenewalFunnel_WindowOpenForRecentReminder(t *testing.T) {
 	f := newFixture(t)
 	f.record(t, journal.Event{At: now.Add(-10 * 24 * time.Hour), TelegramID: 1, Action: ActionReminder3d, Source: journal.SourceBot})
 
-	report, err := f.open(t).Report(context.Background(), FunnelNonRenewal, now.Add(-30*24*time.Hour), now)
+	funnels := f.open(t)
+	funnels.now = func() time.Time { return now }
+
+	report, err := funnels.Report(context.Background(), FunnelNonRenewal, now.Add(-30*24*time.Hour), now)
 	require.NoError(t, err)
 
 	assert.True(t, report.WindowOpen)

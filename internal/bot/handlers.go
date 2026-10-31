@@ -190,7 +190,10 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	}
 	if cfg.YooKassaShopID != "" && cfg.YooKassaSecretKey != "" {
 		bot.yookassa = yookassa.NewClient(cfg.YooKassaShopID, cfg.YooKassaSecretKey)
-		slog.Info("YooKassa client initialized")
+		if cfg.YooKassaProxyURL != nil {
+			bot.yookassa.SetProxy(cfg.YooKassaProxyURL)
+		}
+		slog.Info("YooKassa client initialized", "proxy", cfg.YooKassaProxyURL != nil)
 	}
 
 	// Интеграция с «Мой налог» включается наличием ИНН и пароля.
