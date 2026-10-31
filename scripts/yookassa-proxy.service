@@ -1,0 +1,16 @@
+# SOCKS5-выход к ЮKassa через промежуточный сервер, см. docs/yookassa-proxy.md.
+[Unit]
+Description=SOCKS5-туннель до ЮKassa
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh -NT -i /root/.ssh/yookassa-proxy \
+    -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    -o ConnectTimeout=10 -D 172.18.0.1:1081 root@62.182.199.195
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
