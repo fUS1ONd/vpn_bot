@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -53,8 +54,9 @@ type Config struct {
 	YooKassaShopID           string
 	YooKassaSecretKey        string
 	YooKassaReturnURL        string
-	YooKassaFeeBasisPoints   int // Договорная комиссия ЮKassa в сотых долях процента: 3.5% = 350
-	CallbackPort             int // Порт для callback-сервера (по умолчанию 8080)
+	YooKassaFeeBasisPoints   int      // Договорная комиссия ЮKassa в сотых долях процента: 3.5% = 350
+	YooKassaProxyURL         *url.URL // SOCKS5-прокси до кассы, nil — прямое соединение
+	CallbackPort             int      // Порт для callback-сервера (по умолчанию 8080)
 
 	// «Мой налог» — автопробитие чеков по платежам ЮKassa (опционально).
 	// Интеграция включается наличием ИНН и пароля, как Platega и YooKassa.
@@ -168,7 +170,30 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	// Опечатка в адресе прокси не должна выглядеть как «прокси не нужен»: бот
+	// пошёл бы к кассе напрямую, а этот путь и заставил завести прокси.
+	proxy, err := parseYooKassaProxyURL(os.Getenv("YOOKASSA_PROXY_URL"))
+	if err != nil {
+		return nil, err
+	}
+	cfg.YooKassaProxyURL = proxy
+
 	return cfg, nil
+}
+
+// parseYooKassaProxyURL разбирает адрес прокси до кассы. Пустое значение —
+// прямое соединение. В текст ошибки значение не попадает: в нём может быть пароль.
+func parseYooKassaProxyURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	proxy, err := url.Parse(raw)
+	if err != nil || proxy.Hostname() == "" || proxy.Port() == "" ||
+		!slices.Contains([]string{"socks5", "socks5h"}, proxy.Scheme) {
+		return nil, fmt.Errorf("invalid YOOKASSA_PROXY_URL: expected socks5://host:port")
+	}
+	return proxy, nil
 }
 
 // getEnvBool: всё, кроме явного «включено», выключает функцию.

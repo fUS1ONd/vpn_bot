@@ -212,3 +212,37 @@ func TestCommunityEnabledRequiresBothVariables(t *testing.T) {
 	assert.False(t, (&Config{CommunityChatID: -100}).CommunityEnabled())
 	assert.False(t, (&Config{CommunityInviteLink: "https://t.me/+x"}).CommunityEnabled())
 }
+
+func TestLoadYooKassaProxyURL(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("YOOKASSA_PROXY_URL", "socks5://172.18.0.1:1081")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, "172.18.0.1:1081", cfg.YooKassaProxyURL.Host)
+}
+
+func TestLoadWithoutYooKassaProxyGoesDirect(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("YOOKASSA_PROXY_URL", "")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Nil(t, cfg.YooKassaProxyURL)
+}
+
+func TestLoadRejectsInvalidYooKassaProxyURL(t *testing.T) {
+	for _, raw := range []string{"172.18.0.1:1081", "http://172.18.0.1:1081", "socks5://172.18.0.1", "socks5://user:hunter2@:1081"} {
+		t.Run(raw, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("YOOKASSA_PROXY_URL", raw)
+
+			_, err := Load()
+
+			require.ErrorContains(t, err, "YOOKASSA_PROXY_URL")
+			require.NotContains(t, err.Error(), "hunter2")
+		})
+	}
+}
