@@ -8,7 +8,7 @@ Wants=network-online.target
 ExecStart=/usr/bin/ssh -NT -i /root/.ssh/yookassa-proxy \
     -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
     -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-    -o ConnectTimeout=10 -D 172.18.0.1:1081 root@62.182.199.195
+    -o ConnectTimeout=10 -o HostKeyAlias=81.163.22.195 -D 172.18.0.1:1081 root@10.255.22.2
 Restart=always
 RestartSec=10
 
