@@ -62,7 +62,8 @@ type Config struct {
 	// Интеграция включается наличием ИНН и пароля, как Platega и YooKassa.
 	MoynalogINN         string
 	MoynalogPassword    string
-	MoynalogServiceName string // Базовая часть наименования услуги, к ней приписывается метка
+	MoynalogServiceName string   // Базовая часть наименования услуги, к ней приписывается метка
+	MoynalogProxyURL    *url.URL // SOCKS5-прокси до ФНС, nil — прямое соединение
 
 	// Канал — форум-супергруппа сообщества (опционально). Фича включается
 	// только когда заданы обе переменные: без ID бот не знает, чьи заявки
@@ -172,26 +173,27 @@ func Load() (*Config, error) {
 
 	// Опечатка в адресе прокси не должна выглядеть как «прокси не нужен»: бот
 	// пошёл бы к кассе напрямую, а этот путь и заставил завести прокси.
-	proxy, err := parseYooKassaProxyURL(os.Getenv("YOOKASSA_PROXY_URL"))
-	if err != nil {
+	if cfg.YooKassaProxyURL, err = parseProxyURL("YOOKASSA_PROXY_URL"); err != nil {
 		return nil, err
 	}
-	cfg.YooKassaProxyURL = proxy
+	if cfg.MoynalogProxyURL, err = parseProxyURL("MOYNALOG_PROXY_URL"); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
 }
 
-// parseYooKassaProxyURL разбирает адрес прокси до кассы. Пустое значение —
-// прямое соединение. В текст ошибки значение не попадает: в нём может быть пароль.
-func parseYooKassaProxyURL(raw string) (*url.URL, error) {
-	raw = strings.TrimSpace(raw)
+// parseProxyURL разбирает адрес SOCKS5-прокси из переменной окружения. Пустое
+// значение — прямое соединение. В текст ошибки значение не попадает: в нём может быть пароль.
+func parseProxyURL(key string) (*url.URL, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
 		return nil, nil
 	}
 	proxy, err := url.Parse(raw)
 	if err != nil || proxy.Hostname() == "" || proxy.Port() == "" ||
 		!slices.Contains([]string{"socks5", "socks5h"}, proxy.Scheme) {
-		return nil, fmt.Errorf("invalid YOOKASSA_PROXY_URL: expected socks5://host:port")
+		return nil, fmt.Errorf("invalid %s: expected socks5://host:port", key)
 	}
 	return proxy, nil
 }

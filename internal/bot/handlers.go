@@ -199,7 +199,10 @@ func New(cfg *config.Config, db *database.DB, remnawaveClient *remnawave.Client)
 	// Интеграция с «Мой налог» включается наличием ИНН и пароля.
 	if cfg.MoynalogEnabled() {
 		bot.moynalog = moynalog.NewClient(cfg.MoynalogINN, cfg.MoynalogPassword)
-		slog.Info("Moynalog client initialized", "service_name", cfg.MoynalogServiceName)
+		if cfg.MoynalogProxyURL != nil {
+			bot.moynalog.SetProxy(cfg.MoynalogProxyURL)
+		}
+		slog.Info("Moynalog client initialized", "service_name", cfg.MoynalogServiceName, "proxy", cfg.MoynalogProxyURL != nil)
 	}
 
 	// Канал подключается двумя переменными окружения. Без них обработчик заявок

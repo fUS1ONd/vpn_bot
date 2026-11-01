@@ -233,6 +233,25 @@ func TestLoadWithoutYooKassaProxyGoesDirect(t *testing.T) {
 	require.Nil(t, cfg.YooKassaProxyURL)
 }
 
+func TestLoadMoynalogProxyURL(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("MOYNALOG_PROXY_URL", "socks5://172.18.0.1:1081")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, "172.18.0.1:1081", cfg.MoynalogProxyURL.Host)
+}
+
+func TestLoadRejectsInvalidMoynalogProxyURL(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("MOYNALOG_PROXY_URL", "http://172.18.0.1:1081")
+
+	_, err := Load()
+
+	require.ErrorContains(t, err, "MOYNALOG_PROXY_URL")
+}
+
 func TestLoadRejectsInvalidYooKassaProxyURL(t *testing.T) {
 	for _, raw := range []string{"172.18.0.1:1081", "http://172.18.0.1:1081", "socks5://172.18.0.1", "socks5://user:hunter2@:1081"} {
 		t.Run(raw, func(t *testing.T) {
