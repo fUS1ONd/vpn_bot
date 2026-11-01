@@ -4,6 +4,10 @@
 TCP соединяется, рукопожатие висит, в логах бота — `TLS handshake timeout`. С других
 серверов, в том числе зарубежных, касса отвечает.
 
+С 01.11.2026 так же недоступен `lknpd.nalog.ru` («Мой налог»): с IP сервера бота не
+устанавливается даже TCP, в логах — `context deadline exceeded` при пробитии чека. Клиент ФНС
+ходит через тот же туннель (`MOYNALOG_PROXY_URL`).
+
 ## Устройство
 
 ```text
@@ -25,17 +29,19 @@ TCP. Этому предшествовал запрос к кассе по го�
 2. На сервере-выходе добавить его в `~/.ssh/authorized_keys` с ограничением только на кассу:
 
    ```text
-   restrict,port-forwarding,permitopen="api.yookassa.ru:443" ssh-ed25519 AAAA... yookassa-proxy
+   restrict,port-forwarding,permitopen="api.yookassa.ru:443",permitopen="lknpd.nalog.ru:443" ssh-ed25519 AAAA... yookassa-proxy
    ```
 
-   Ограничение работает потому, что клиент передаёт прокси имя хоста, а не IP.
+   Ограничение работает потому, что клиент передаёт прокси имя хоста, а не IP. Без второго
+   `permitopen` туннель отвергает запросы к ФНС сразу, с кодом 000 у curl.
 3. На сервере бота: скопировать `scripts/yookassa-proxy.service` в `/etc/systemd/system/`,
    выполнить `systemctl enable --now yookassa-proxy` и открыть порт только докер-сети:
    `ufw allow from 172.18.0.0/16 to 172.18.0.1 port 1081 proto tcp`.
 
    Адрес `172.18.0.1` — шлюз сети `remnawave-network`. Если сеть пересоздана с другой
    подсетью, адрес меняется в юните, правиле ufw и `YOOKASSA_PROXY_URL`.
-4. В `.env` бота: `YOOKASSA_PROXY_URL=socks5://172.18.0.1:1081`, затем пересоздать контейнер.
+4. В `.env` бота: `YOOKASSA_PROXY_URL=socks5://172.18.0.1:1081` и
+   `MOYNALOG_PROXY_URL=socks5://172.18.0.1:1081`, затем пересоздать контейнер.
 
 Смена сервера-выхода: повторить шаг 2 на новом сервере, поменять адрес в юните, перезапустить
 `yookassa-proxy`. Бота перезапускать не нужно. Если сервер адресуется через ipip, в юните нужен
@@ -47,6 +53,12 @@ TCP. Этому предшествовал запрос к кассе по го�
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' --socks5-hostname 172.18.0.1:1081 https://api.yookassa.ru/v3/me
+```
+
+ФНС без авторизации тоже отвечает 401:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' --socks5-hostname 172.18.0.1:1081 https://lknpd.nalog.ru/api/v1/
 ```
 
 Другой хост должен быть отклонён: так проверяется ограничение ключа.

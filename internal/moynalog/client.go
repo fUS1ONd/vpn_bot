@@ -163,6 +163,15 @@ func (c *Client) SetHTTPClient(client *http.Client) {
 	}
 }
 
+// SetProxy пускает все запросы к ФНС через указанный прокси. Отката на прямое
+// соединение нет намеренно: прокси нужен там, где прямой путь не работает, а
+// неудачный поход к ФНС и так добьёт плановый проход.
+func (c *Client) SetProxy(proxy *url.URL) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyURL(proxy)
+	c.http.Transport = transport
+}
+
 // deviceID вычисляется детерминированно из ИНН и нигде не хранится: случайный
 // идентификатор при каждом входе плодил бы в кабинете ФНС по устройству на запуск.
 func (c *Client) deviceID() string {
